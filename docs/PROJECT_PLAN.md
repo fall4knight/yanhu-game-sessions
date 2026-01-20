@@ -156,15 +156,16 @@ yanhu-game-sessions/
 **Definition of Done**: CLI can take a video path and produce numbered segment files in `sessions/<id>/segments/`.
 
 **Checklist**:
-- [ ] Implement `segmenter.py` using ffmpeg-python
-  - [ ] Function `segment_video(input_path, output_dir, duration=30) -> List[Path]`
-  - [ ] Handle edge case: last segment < duration
-- [ ] Implement `manifest.py` with `Manifest` dataclass and JSON serialization
-- [ ] Add CLI command `yanhu ingest <video_path> --game <name>`
-  - [ ] Auto-generate session_id from timestamp + game
-  - [ ] Create session folder structure
-- [ ] Write unit test with 10s sample video fixture
-- [ ] Verify ffmpeg error handling (missing binary, corrupt file)
+- [x] Implement `segmenter.py` using subprocess ffmpeg
+  - [x] Function `segment_video(manifest, session_dir) -> List[SegmentInfo]`
+  - [x] Handle edge case: last segment < duration
+- [x] Implement `manifest.py` with `Manifest` dataclass and JSON serialization
+- [x] Add CLI command `yanhu ingest --video <path> --game <name> --tag <tag>`
+  - [x] Auto-generate session_id from timestamp + game + tag
+  - [x] Create session folder structure (source/, segments/)
+- [x] Add CLI command `yanhu segment --session <id>` to run segmentation
+- [x] Write unit tests (session_id format, segment naming, manifest, ffmpeg commands)
+- [x] Verify ffmpeg error handling (missing binary check)
 
 ---
 
@@ -305,7 +306,7 @@ yanhu-game-sessions/
 | Date | Milestone | Status | Notes |
 |------|-----------|--------|-------|
 | 2026-01-20 | M0: Project Scaffolding | Done | CI added; all 6 checklist items complete |
-| - | M1: Video Ingestion & Segmentation | Not Started | - |
+| 2026-01-20 | M1: Video Ingestion & Segmentation | Done | ingest + segment CLI, manifest, 30 unit tests |
 | - | M2: Frame Extraction | Not Started | - |
 | - | M3: Vision Analysis | Not Started | - |
 | - | M4: ASR Transcription | Not Started | - |

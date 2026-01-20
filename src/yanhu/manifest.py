@@ -1,0 +1,114 @@
+"""Manifest data structure and JSON serialization."""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+
+
+@dataclass
+class SegmentInfo:
+    """Information about a single video segment."""
+
+    id: str  # e.g., "part_0001"
+    start_time: float  # seconds from video start
+    end_time: float  # seconds from video start
+    video_path: str  # relative to session directory
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "start_time": self.start_time,
+            "end_time": self.end_time,
+            "video_path": self.video_path,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> SegmentInfo:
+        return cls(
+            id=data["id"],
+            start_time=data["start_time"],
+            end_time=data["end_time"],
+            video_path=data["video_path"],
+        )
+
+
+@dataclass
+class Manifest:
+    """Session manifest tracking all artifacts."""
+
+    session_id: str
+    created_at: str  # ISO format
+    source_video: str  # original path
+    source_video_local: str  # path within session (relative)
+    segment_duration_seconds: int
+    segments: list[SegmentInfo] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {
+            "session_id": self.session_id,
+            "created_at": self.created_at,
+            "source_video": self.source_video,
+            "source_video_local": self.source_video_local,
+            "segment_duration_seconds": self.segment_duration_seconds,
+            "segments": [s.to_dict() for s in self.segments],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> Manifest:
+        return cls(
+            session_id=data["session_id"],
+            created_at=data["created_at"],
+            source_video=data["source_video"],
+            source_video_local=data["source_video_local"],
+            segment_duration_seconds=data["segment_duration_seconds"],
+            segments=[SegmentInfo.from_dict(s) for s in data.get("segments", [])],
+        )
+
+    def save(self, session_dir: Path) -> Path:
+        """Save manifest to session directory.
+
+        Returns:
+            Path to the saved manifest.json
+        """
+        manifest_path = session_dir / "manifest.json"
+        with open(manifest_path, "w", encoding="utf-8") as f:
+            json.dump(self.to_dict(), f, indent=2, ensure_ascii=False)
+        return manifest_path
+
+    @classmethod
+    def load(cls, session_dir: Path) -> Manifest:
+        """Load manifest from session directory."""
+        manifest_path = session_dir / "manifest.json"
+        with open(manifest_path, encoding="utf-8") as f:
+            data = json.load(f)
+        return cls.from_dict(data)
+
+
+def create_manifest(
+    session_id: str,
+    source_video: Path,
+    source_video_local: str,
+    segment_duration: int,
+) -> Manifest:
+    """Create a new manifest for a session.
+
+    Args:
+        session_id: The session identifier
+        source_video: Original video path (absolute)
+        source_video_local: Path within session directory (relative)
+        segment_duration: Target segment duration in seconds
+
+    Returns:
+        New Manifest instance
+    """
+    return Manifest(
+        session_id=session_id,
+        created_at=datetime.now().isoformat(),
+        source_video=str(source_video.resolve()),
+        source_video_local=source_video_local,
+        segment_duration_seconds=segment_duration,
+        segments=[],
+    )
