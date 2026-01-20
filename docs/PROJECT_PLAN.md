@@ -140,12 +140,12 @@ yanhu-game-sessions/
 **Definition of Done**: Repository has working Python package structure, CI runs, and sample config.
 
 **Checklist**:
-- [ ] Initialize `pyproject.toml` with dependencies (ffmpeg-python, anthropic, openai, etc.)
-- [ ] Create `src/yanhu/__init__.py` and `cli.py` skeleton
-- [ ] Add `config.example.yaml` with all required fields documented
-- [ ] Set up `.gitignore` (sessions/, *.mp4, .env)
-- [ ] Add GitHub Actions workflow for linting (ruff) and tests (pytest)
-- [ ] Write `tests/test_placeholder.py` that passes
+- [x] Initialize `pyproject.toml` with dependencies (ffmpeg-python, anthropic, openai, etc.)
+- [x] Create `src/yanhu/__init__.py` and `cli.py` skeleton
+- [x] Add `config.example.yaml` with all required fields documented
+- [x] Set up `.gitignore` (sessions/, *.mp4, .env)
+- [x] Add GitHub Actions workflow for linting (ruff) and tests (pytest)
+- [x] Write `tests/test_placeholder.py` that passes
 
 ---
 
@@ -304,7 +304,7 @@ yanhu-game-sessions/
 
 | Date | Milestone | Status | Notes |
 |------|-----------|--------|-------|
-| 2026-01-20 | M0: Project Scaffolding | Not Started | Plan verified against README |
+| 2026-01-20 | M0: Project Scaffolding | Done | CI added; all 6 checklist items complete |
 | - | M1: Video Ingestion & Segmentation | Not Started | - |
 | - | M2: Frame Extraction | Not Started | - |
 | - | M3: Vision Analysis | Not Started | - |

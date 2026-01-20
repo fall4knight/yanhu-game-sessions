@@ -1,0 +1,41 @@
+# Yanhu Game Sessions - Example Configuration
+# Copy this file to config.yaml and fill in your values.
+
+# Session settings
+session:
+  output_dir: "./sessions"  # Where session outputs are stored
+  segment_duration: 30       # Segment length in seconds (30-60 recommended)
+
+# Video processing
+video:
+  supported_formats:
+    - ".mp4"
+    - ".mkv"
+    - ".avi"
+    - ".mov"
+
+# Frame extraction
+extraction:
+  format: "jpg"              # Output format for frames
+  quality: 85                # JPEG quality (1-100)
+  max_frames_per_segment: 5  # Maximum frames to extract per segment
+
+# Vision analysis (Milestone 3+)
+# Uncomment and configure when ready for cloud API integration
+# vision:
+#   provider: "claude"       # Options: claude, openai
+#   model: "claude-3-sonnet-20240229"
+#   api_key_env: "ANTHROPIC_API_KEY"  # Environment variable name
+
+# ASR transcription (Milestone 4+)
+# Uncomment and configure when ready for cloud API integration
+# asr:
+#   provider: "whisper"      # Options: whisper, whisper_local
+#   model: "whisper-1"
+#   api_key_env: "OPENAI_API_KEY"     # Environment variable name
+#   language: "zh"           # Primary language hint
+
+# Safety settings
+safety:
+  require_confirmation_for_cloud: true  # Prompt before cloud API calls
+  local_only: false                     # If true, skip all cloud APIs
