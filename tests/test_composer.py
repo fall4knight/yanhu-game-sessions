@@ -1,0 +1,282 @@
+"""Tests for session composition."""
+
+from yanhu.composer import (
+    compose_overview,
+    compose_timeline,
+    format_frames_list,
+    format_time_range,
+    format_timestamp,
+)
+from yanhu.manifest import Manifest, SegmentInfo
+
+
+class TestFormatTimestamp:
+    """Test timestamp formatting."""
+
+    def test_zero_seconds(self):
+        """Zero should format as 00:00:00."""
+        assert format_timestamp(0) == "00:00:00"
+
+    def test_seconds_only(self):
+        """Seconds under 60 should show in seconds position."""
+        assert format_timestamp(45) == "00:00:45"
+
+    def test_minutes_and_seconds(self):
+        """Should correctly format minutes and seconds."""
+        assert format_timestamp(90) == "00:01:30"
+        assert format_timestamp(125) == "00:02:05"
+
+    def test_hours_minutes_seconds(self):
+        """Should correctly format hours, minutes, and seconds."""
+        assert format_timestamp(3661) == "01:01:01"
+        assert format_timestamp(7200) == "02:00:00"
+
+    def test_large_hours(self):
+        """Should handle large hour values."""
+        assert format_timestamp(36000) == "10:00:00"
+
+    def test_float_truncates(self):
+        """Float values should truncate to integers."""
+        assert format_timestamp(90.7) == "00:01:30"
+        assert format_timestamp(90.999) == "00:01:30"
+
+
+class TestFormatTimeRange:
+    """Test time range formatting."""
+
+    def test_simple_range(self):
+        """Should format start and end times."""
+        result = format_time_range(0, 60)
+        assert result == "00:00:00 - 00:01:00"
+
+    def test_non_zero_start(self):
+        """Should handle non-zero start times."""
+        result = format_time_range(60, 120)
+        assert result == "00:01:00 - 00:02:00"
+
+
+class TestFormatFramesList:
+    """Test frames list formatting."""
+
+    def test_empty_frames(self):
+        """Empty list should show placeholder."""
+        result = format_frames_list([])
+        assert "No frames" in result
+
+    def test_single_frame(self):
+        """Single frame should be formatted as link."""
+        result = format_frames_list(["frames/part_0001/frame_0001.jpg"])
+        assert "[frame_0001.jpg]" in result
+        assert "(frames/part_0001/frame_0001.jpg)" in result
+
+    def test_three_frames_shown(self):
+        """Should show up to 3 frames by default."""
+        frames = [
+            "frames/part_0001/frame_0001.jpg",
+            "frames/part_0001/frame_0002.jpg",
+            "frames/part_0001/frame_0003.jpg",
+        ]
+        result = format_frames_list(frames)
+        assert "frame_0001.jpg" in result
+        assert "frame_0002.jpg" in result
+        assert "frame_0003.jpg" in result
+        assert "more" not in result
+
+    def test_truncation_with_more_count(self):
+        """Should truncate and show remaining count."""
+        frames = [
+            "frames/part_0001/frame_0001.jpg",
+            "frames/part_0001/frame_0002.jpg",
+            "frames/part_0001/frame_0003.jpg",
+            "frames/part_0001/frame_0004.jpg",
+            "frames/part_0001/frame_0005.jpg",
+        ]
+        result = format_frames_list(frames, max_display=3)
+        assert "frame_0001.jpg" in result
+        assert "frame_0002.jpg" in result
+        assert "frame_0003.jpg" in result
+        assert "frame_0004.jpg" not in result
+        assert "(2 more)" in result
+
+    def test_custom_max_display(self):
+        """Should respect custom max_display parameter."""
+        frames = [f"frames/part_0001/frame_{i:04d}.jpg" for i in range(1, 10)]
+        result = format_frames_list(frames, max_display=5)
+        assert "frame_0005.jpg" in result
+        assert "frame_0006.jpg" not in result
+        assert "(4 more)" in result
+
+    def test_markdown_link_format(self):
+        """Links should be valid markdown format."""
+        frames = ["frames/part_0001/frame_0001.jpg"]
+        result = format_frames_list(frames)
+        # Should be [filename](path) format
+        assert "[frame_0001.jpg](frames/part_0001/frame_0001.jpg)" in result
+
+
+class TestComposeTimeline:
+    """Test timeline composition."""
+
+    def test_timeline_contains_session_id(self):
+        """Timeline should include session ID in title."""
+        manifest = Manifest(
+            session_id="2026-01-20_12-00-00_gnosia_run01",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[],
+        )
+        result = compose_timeline(manifest)
+        assert "2026-01-20_12-00-00_gnosia_run01" in result
+
+    def test_timeline_contains_segment_headers(self):
+        """Timeline should have headers for each segment."""
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo("part_0001", 0.0, 60.0, "segments/s_part_0001.mp4"),
+                SegmentInfo("part_0002", 60.0, 120.0, "segments/s_part_0002.mp4"),
+            ],
+        )
+        result = compose_timeline(manifest)
+        assert "part_0001" in result
+        assert "part_0002" in result
+
+    def test_timeline_contains_time_ranges(self):
+        """Timeline should show time ranges in HH:MM:SS format."""
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo("part_0001", 0.0, 60.0, "segments/s_part_0001.mp4"),
+            ],
+        )
+        result = compose_timeline(manifest)
+        assert "00:00:00" in result
+        assert "00:01:00" in result
+
+    def test_timeline_contains_frames_links(self):
+        """Timeline should include frame links from manifest."""
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    "part_0001", 0.0, 60.0, "segments/s_part_0001.mp4",
+                    frames=["frames/part_0001/frame_0001.jpg", "frames/part_0001/frame_0002.jpg"],
+                ),
+            ],
+        )
+        result = compose_timeline(manifest)
+        assert "frames/part_0001/frame_0001.jpg" in result
+        assert "frame_0001.jpg" in result
+
+    def test_timeline_contains_todo_placeholder(self):
+        """Timeline should have TODO placeholder for descriptions."""
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo("part_0001", 0.0, 60.0, "segments/s_part_0001.mp4"),
+            ],
+        )
+        result = compose_timeline(manifest)
+        assert "TODO: describe what happened" in result
+
+
+class TestComposeOverview:
+    """Test overview composition."""
+
+    def test_overview_contains_session_id(self):
+        """Overview should include session ID."""
+        manifest = Manifest(
+            session_id="2026-01-20_12-00-00_gnosia_run01",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[],
+        )
+        result = compose_overview(manifest)
+        assert "2026-01-20_12-00-00_gnosia_run01" in result
+
+    def test_overview_extracts_game_name(self):
+        """Overview should extract game name from session ID."""
+        manifest = Manifest(
+            session_id="2026-01-20_12-00-00_gnosia_run01",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[],
+        )
+        result = compose_overview(manifest)
+        assert "gnosia" in result
+
+    def test_overview_shows_duration(self):
+        """Overview should show total duration."""
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo("part_0001", 0.0, 60.0, "segments/s_part_0001.mp4"),
+                SegmentInfo("part_0002", 60.0, 120.0, "segments/s_part_0002.mp4"),
+            ],
+        )
+        result = compose_overview(manifest)
+        assert "00:02:00" in result  # 120 seconds
+
+    def test_overview_shows_segment_count(self):
+        """Overview should show segment count."""
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo("part_0001", 0.0, 60.0, "segments/s_part_0001.mp4"),
+                SegmentInfo("part_0002", 60.0, 120.0, "segments/s_part_0002.mp4"),
+            ],
+        )
+        result = compose_overview(manifest)
+        assert "2" in result  # 2 segments
+
+    def test_overview_shows_frame_count(self):
+        """Overview should show total frame count."""
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    "part_0001", 0.0, 60.0, "segments/s_part_0001.mp4",
+                    frames=["f1.jpg", "f2.jpg"],
+                ),
+                SegmentInfo(
+                    "part_0002", 60.0, 120.0, "segments/s_part_0002.mp4",
+                    frames=["f3.jpg", "f4.jpg", "f5.jpg"],
+                ),
+            ],
+        )
+        result = compose_overview(manifest)
+        assert "5" in result  # 5 total frames

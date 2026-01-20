@@ -5,6 +5,7 @@ from pathlib import Path
 import click
 
 from yanhu import __version__
+from yanhu.composer import write_overview, write_timeline
 from yanhu.extractor import extract_frames
 from yanhu.ffmpeg_utils import FFmpegError, FFmpegNotFoundError, check_ffmpeg_available
 from yanhu.manifest import Manifest, create_manifest
@@ -177,8 +178,39 @@ def extract(session: str, output_dir: str, frames_per_segment: int):
 @click.option("--session", "-s", required=True, help="Session ID")
 @click.option("--output-dir", "-o", default="sessions", help="Output directory (default: sessions)")
 def compose(session: str, output_dir: str):
-    """Compose final timeline and highlights from session data."""
-    click.echo(f"[compose] Not implemented yet. session={session}")
+    """Compose timeline and overview from session data.
+
+    Generates timeline.md and overview.md with placeholders for AI analysis.
+    """
+    session_dir = Path(output_dir) / session
+
+    # Check session exists
+    if not session_dir.exists():
+        raise click.ClickException(f"Session not found: {session_dir}")
+
+    # Load manifest
+    try:
+        manifest = Manifest.load(session_dir)
+    except FileNotFoundError:
+        raise click.ClickException(f"Manifest not found in {session_dir}")
+
+    # Check segments exist
+    if not manifest.segments:
+        raise click.ClickException("No segments found. Run 'yanhu segment' first.")
+
+    click.echo(f"Composing session: {manifest.session_id}")
+    click.echo(f"  Segments: {len(manifest.segments)}")
+
+    # Write timeline
+    timeline_path = write_timeline(manifest, session_dir)
+    click.echo(f"  Written: {timeline_path.name}")
+
+    # Write overview
+    overview_path = write_overview(manifest, session_dir)
+    click.echo(f"  Written: {overview_path.name}")
+
+    click.echo("\nComposition complete!")
+    click.echo("  Note: Descriptions are placeholders. Run Vision/ASR analysis to fill them.")
 
 
 if __name__ == "__main__":
