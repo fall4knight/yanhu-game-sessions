@@ -177,12 +177,36 @@ def extract(session: str, output_dir: str, frames_per_segment: int):
 
 @main.command()
 @click.option("--session", "-s", required=True, help="Session ID")
-@click.option("--output-dir", "-o", default="sessions", help="Output directory (default: sessions)")
-@click.option("--backend", "-b", default="mock", help="Analysis backend (default: mock)")
-def analyze(session: str, output_dir: str, backend: str):
+@click.option("--output-dir", "-o", default="sessions", help="Output directory")
+@click.option("--backend", "-b", default="mock", type=click.Choice(["mock", "claude"]))
+@click.option("--max-frames", "-n", default=3, help="Max frames per segment (default: 3)")
+@click.option("--force", "-f", is_flag=True, help="Re-analyze even if analysis exists")
+@click.option("--dry-run", is_flag=True, help="Show stats without running analysis")
+@click.option("--limit", "-l", type=int, help="Only process first N segments")
+@click.option("--segments", help="Comma-separated segment IDs to process")
+def analyze(
+    session: str,
+    output_dir: str,
+    backend: str,
+    max_frames: int,
+    force: bool,
+    dry_run: bool,
+    limit: int | None,
+    segments: str | None,
+):
     """Analyze segments using vision/ASR models.
 
     Generates analysis JSON files for each segment with scene classification and captions.
+
+    Examples:
+
+      yanhu analyze -s demo --backend mock
+
+      yanhu analyze -s demo --backend claude --dry-run
+
+      yanhu analyze -s demo --backend claude --limit 1
+
+      yanhu analyze -s demo --backend claude --segments part_0001,part_0002
     """
     session_dir = Path(output_dir) / session
 
@@ -200,22 +224,68 @@ def analyze(session: str, output_dir: str, backend: str):
     if not manifest.segments:
         raise click.ClickException("No segments found. Run 'yanhu segment' first.")
 
+    # Parse segment filter
+    segment_list = None
+    if segments:
+        segment_list = [s.strip() for s in segments.split(",")]
+
     click.echo(f"Analyzing session: {manifest.session_id}")
     click.echo(f"  Backend: {backend}")
-    click.echo(f"  Segments: {len(manifest.segments)}")
+    click.echo(f"  Max frames: {max_frames}")
+    click.echo(f"  Total segments: {len(manifest.segments)}")
+    if force:
+        click.echo("  Force: enabled (ignoring cache)")
+    if limit:
+        click.echo(f"  Limit: {limit} segments")
+    if segment_list:
+        click.echo(f"  Filter: {segment_list}")
+
+    # Progress callback
+    def on_progress(segment_id: str, status: str, result):
+        if status == "cached":
+            click.echo(f"  {segment_id}: cached (skipped)")
+        elif status == "done":
+            if result.error:
+                click.echo(f"  {segment_id}: error - {result.error}")
+            else:
+                click.echo(f"  {segment_id}: {result.scene_type}")
+        elif status == "error":
+            click.echo(f"  {segment_id}: error - {result.error}")
 
     # Run analysis
     try:
-        analyze_session(manifest, session_dir, backend)
+        stats = analyze_session(
+            manifest,
+            session_dir,
+            backend,
+            max_frames=max_frames,
+            force=force,
+            dry_run=dry_run,
+            limit=limit,
+            segments=segment_list,
+            on_progress=on_progress,
+        )
     except ValueError as e:
         raise click.ClickException(str(e))
 
-    # Save updated manifest
-    manifest.save(session_dir)
+    # Save updated manifest (skip if dry-run)
+    if not dry_run:
+        manifest.save(session_dir)
 
-    click.echo("\nAnalysis complete!")
-    for seg in manifest.segments:
-        click.echo(f"  {seg.id}: {seg.analysis_path}")
+    # Summary
+    click.echo("")
+    if dry_run:
+        click.echo("Dry-run summary:")
+        click.echo(f"  Would process: {stats.api_calls} segments")
+        click.echo(f"  Would skip (cached): {stats.skipped_cache}")
+        click.echo(f"  Would skip (filtered): {stats.skipped_filter}")
+    else:
+        click.echo("Analysis complete!")
+        click.echo(f"  Processed: {stats.processed}")
+        click.echo(f"  Skipped (cached): {stats.skipped_cache}")
+        click.echo(f"  Skipped (filtered): {stats.skipped_filter}")
+        if stats.errors:
+            click.echo(f"  Errors: {stats.errors}")
 
 
 @main.command()
