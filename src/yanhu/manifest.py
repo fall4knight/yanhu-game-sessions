@@ -17,6 +17,7 @@ class SegmentInfo:
     end_time: float  # seconds from video start
     video_path: str  # relative to session directory
     frames: list[str] = field(default_factory=list)  # relative paths to extracted frames
+    analysis_path: str | None = None  # relative path to analysis JSON
 
     def to_dict(self) -> dict:
         result = {
@@ -27,6 +28,8 @@ class SegmentInfo:
         }
         if self.frames:
             result["frames"] = self.frames
+        if self.analysis_path:
+            result["analysis_path"] = self.analysis_path
         return result
 
     @classmethod
@@ -37,6 +40,7 @@ class SegmentInfo:
             end_time=data["end_time"],
             video_path=data["video_path"],
             frames=data.get("frames", []),
+            analysis_path=data.get("analysis_path"),
         )
 
 

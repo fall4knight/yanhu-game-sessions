@@ -2,7 +2,8 @@
 
 from pathlib import Path
 
-from yanhu.manifest import Manifest
+from yanhu.analyzer import AnalysisResult
+from yanhu.manifest import Manifest, SegmentInfo
 
 
 def format_timestamp(seconds: float) -> str:
@@ -58,11 +59,38 @@ def format_frames_list(frames: list[str], max_display: int = 3) -> str:
     return result
 
 
-def compose_timeline(manifest: Manifest) -> str:
+def get_segment_description(
+    segment: SegmentInfo,
+    session_dir: Path | None = None,
+) -> str:
+    """Get description for a segment from analysis or return placeholder.
+
+    Args:
+        segment: Segment info from manifest
+        session_dir: Path to session directory (needed to load analysis)
+
+    Returns:
+        Analysis caption if available, otherwise TODO placeholder
+    """
+    if segment.analysis_path and session_dir:
+        analysis_file = session_dir / segment.analysis_path
+        if analysis_file.exists():
+            try:
+                analysis = AnalysisResult.load(analysis_file)
+                if analysis.caption:
+                    return analysis.caption
+            except (OSError, KeyError):
+                pass  # Fall through to TODO
+
+    return "TODO: describe what happened"
+
+
+def compose_timeline(manifest: Manifest, session_dir: Path | None = None) -> str:
     """Generate timeline markdown from manifest.
 
     Args:
         manifest: Session manifest with segments
+        session_dir: Path to session directory (for loading analysis files)
 
     Returns:
         Markdown content for timeline.md
@@ -82,13 +110,14 @@ def compose_timeline(manifest: Manifest) -> str:
     for seg in manifest.segments:
         time_range = format_time_range(seg.start_time, seg.end_time)
         frames_str = format_frames_list(seg.frames)
+        description = get_segment_description(seg, session_dir)
 
         lines.extend([
             f"### {seg.id} ({time_range})",
             "",
             f"**Frames**: {frames_str}",
             "",
-            "> TODO: describe what happened",
+            f"> {description}",
             "",
         ])
 
@@ -152,7 +181,7 @@ def write_timeline(manifest: Manifest, session_dir: Path) -> Path:
     Returns:
         Path to written timeline.md
     """
-    content = compose_timeline(manifest)
+    content = compose_timeline(manifest, session_dir)
     output_path = session_dir / "timeline.md"
     output_path.write_text(content, encoding="utf-8")
     return output_path

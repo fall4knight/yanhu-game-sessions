@@ -198,11 +198,13 @@ yanhu-game-sessions/
 - [ ] Implement `models/claude_vision.py` using Anthropic API
   - [ ] Prompt template for scene classification + OCR
   - [ ] Handle rate limits and retries
-- [ ] Implement `vision_analyzer.py`
-  - [ ] Function `analyze_frames(frame_paths, model) -> AnalysisResult`
-- [ ] Add mock model for testing without API calls
-- [ ] Add CLI command `yanhu analyze <session_id> --model claude`
-- [ ] Write integration test with mock model
+- [x] Implement `analyzer.py` with AnalysisResult dataclass
+  - [x] Mock backend: generates placeholder captions
+  - [x] Output: `analysis/<segment_id>.json`
+- [x] Add CLI command `yanhu analyze --session <id> --backend mock`
+- [x] Update manifest with `analysis_path` field
+- [x] Update composer to use analysis captions (replaces TODO)
+- [x] Write unit tests for mock analyzer and analysis integration
 
 ---
 
@@ -313,7 +315,8 @@ yanhu-game-sessions/
 | 2026-01-20 | M1: Video Ingestion & Segmentation | Done | ingest + segment CLI, manifest, 30 unit tests |
 | 2026-01-20 | M2: Frame Extraction | Done | extract CLI, 54 unit tests total |
 | 2026-01-20 | M6: Compose Skeleton | Done | timeline.md + overview.md (no AI), 78 tests |
-| - | M3: Vision Analysis | Not Started | - |
+| 2026-01-20 | M3: Mock Vision Analysis | Done | analyze CLI, mock backend, 109 tests |
+| - | M3: Vision Analysis | Partial | Mock done; Claude/OpenAI backends pending |
 | - | M4: ASR Transcription | Not Started | - |
 | - | M5: Segment Summarization | Not Started | - |
 | - | M6: Session Composition | Partial | Skeleton done; AI descriptions pending M3-M5 |

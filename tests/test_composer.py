@@ -280,3 +280,159 @@ class TestComposeOverview:
         )
         result = compose_overview(manifest)
         assert "5" in result  # 5 total frames
+
+
+class TestGetSegmentDescription:
+    """Test segment description retrieval with analysis."""
+
+    def test_returns_todo_when_no_analysis_path(self):
+        """Should return TODO when segment has no analysis_path."""
+        from yanhu.composer import get_segment_description
+
+        segment = SegmentInfo(
+            id="part_0001",
+            start_time=0.0,
+            end_time=60.0,
+            video_path="segments/test.mp4",
+        )
+        result = get_segment_description(segment, None)
+        assert "TODO" in result
+
+    def test_returns_todo_when_no_session_dir(self):
+        """Should return TODO when session_dir is None."""
+        from yanhu.composer import get_segment_description
+
+        segment = SegmentInfo(
+            id="part_0001",
+            start_time=0.0,
+            end_time=60.0,
+            video_path="segments/test.mp4",
+            analysis_path="analysis/part_0001.json",
+        )
+        result = get_segment_description(segment, None)
+        assert "TODO" in result
+
+    def test_returns_caption_when_analysis_exists(self, tmp_path):
+        """Should return caption when analysis file exists."""
+        from yanhu.analyzer import AnalysisResult
+        from yanhu.composer import get_segment_description
+
+        # Create analysis file
+        analysis = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            ocr_text=[],
+            caption="测试描述：角色对话",
+        )
+        analysis_path = tmp_path / "analysis" / "part_0001.json"
+        analysis.save(analysis_path)
+
+        segment = SegmentInfo(
+            id="part_0001",
+            start_time=0.0,
+            end_time=60.0,
+            video_path="segments/test.mp4",
+            analysis_path="analysis/part_0001.json",
+        )
+        result = get_segment_description(segment, tmp_path)
+        assert result == "测试描述：角色对话"
+
+    def test_returns_todo_when_analysis_file_missing(self, tmp_path):
+        """Should return TODO when analysis file doesn't exist."""
+        from yanhu.composer import get_segment_description
+
+        segment = SegmentInfo(
+            id="part_0001",
+            start_time=0.0,
+            end_time=60.0,
+            video_path="segments/test.mp4",
+            analysis_path="analysis/part_0001.json",
+        )
+        result = get_segment_description(segment, tmp_path)
+        assert "TODO" in result
+
+
+class TestComposeTimelineWithAnalysis:
+    """Test timeline composition with analysis results."""
+
+    def test_timeline_uses_analysis_caption(self, tmp_path):
+        """Timeline should use analysis caption when available."""
+        from yanhu.analyzer import AnalysisResult
+
+        # Create analysis file
+        analysis = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            ocr_text=[],
+            caption="【占位】part_0001：已抽取3帧，等待视觉/字幕解析",
+        )
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+        analysis.save(analysis_dir / "part_0001.json")
+
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    "part_0001", 0.0, 60.0, "segments/s_part_0001.mp4",
+                    analysis_path="analysis/part_0001.json",
+                ),
+            ],
+        )
+        result = compose_timeline(manifest, tmp_path)
+        assert "【占位】part_0001：已抽取3帧，等待视觉/字幕解析" in result
+        assert "TODO: describe what happened" not in result
+
+    def test_timeline_falls_back_to_todo_when_no_analysis(self):
+        """Timeline should use TODO when no analysis available."""
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo("part_0001", 0.0, 60.0, "segments/s_part_0001.mp4"),
+            ],
+        )
+        result = compose_timeline(manifest, None)
+        assert "TODO: describe what happened" in result
+
+    def test_timeline_mixed_analysis_and_todo(self, tmp_path):
+        """Timeline should handle mix of analyzed and non-analyzed segments."""
+        from yanhu.analyzer import AnalysisResult
+
+        # Create analysis file for only first segment
+        analysis = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            ocr_text=[],
+            caption="已分析的segment",
+        )
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+        analysis.save(analysis_dir / "part_0001.json")
+
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    "part_0001", 0.0, 60.0, "segments/s_part_0001.mp4",
+                    analysis_path="analysis/part_0001.json",
+                ),
+                SegmentInfo(
+                    "part_0002", 60.0, 120.0, "segments/s_part_0002.mp4",
+                ),
+            ],
+        )
+        result = compose_timeline(manifest, tmp_path)
+        assert "已分析的segment" in result
+        assert "TODO: describe what happened" in result

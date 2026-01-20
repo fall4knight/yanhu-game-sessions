@@ -5,6 +5,7 @@ from pathlib import Path
 import click
 
 from yanhu import __version__
+from yanhu.analyzer import analyze_session
 from yanhu.composer import write_overview, write_timeline
 from yanhu.extractor import extract_frames
 from yanhu.ffmpeg_utils import FFmpegError, FFmpegNotFoundError, check_ffmpeg_available
@@ -177,10 +178,53 @@ def extract(session: str, output_dir: str, frames_per_segment: int):
 @main.command()
 @click.option("--session", "-s", required=True, help="Session ID")
 @click.option("--output-dir", "-o", default="sessions", help="Output directory (default: sessions)")
+@click.option("--backend", "-b", default="mock", help="Analysis backend (default: mock)")
+def analyze(session: str, output_dir: str, backend: str):
+    """Analyze segments using vision/ASR models.
+
+    Generates analysis JSON files for each segment with scene classification and captions.
+    """
+    session_dir = Path(output_dir) / session
+
+    # Check session exists
+    if not session_dir.exists():
+        raise click.ClickException(f"Session not found: {session_dir}")
+
+    # Load manifest
+    try:
+        manifest = Manifest.load(session_dir)
+    except FileNotFoundError:
+        raise click.ClickException(f"Manifest not found in {session_dir}")
+
+    # Check segments exist
+    if not manifest.segments:
+        raise click.ClickException("No segments found. Run 'yanhu segment' first.")
+
+    click.echo(f"Analyzing session: {manifest.session_id}")
+    click.echo(f"  Backend: {backend}")
+    click.echo(f"  Segments: {len(manifest.segments)}")
+
+    # Run analysis
+    try:
+        analyze_session(manifest, session_dir, backend)
+    except ValueError as e:
+        raise click.ClickException(str(e))
+
+    # Save updated manifest
+    manifest.save(session_dir)
+
+    click.echo("\nAnalysis complete!")
+    for seg in manifest.segments:
+        click.echo(f"  {seg.id}: {seg.analysis_path}")
+
+
+@main.command()
+@click.option("--session", "-s", required=True, help="Session ID")
+@click.option("--output-dir", "-o", default="sessions", help="Output directory (default: sessions)")
 def compose(session: str, output_dir: str):
     """Compose timeline and overview from session data.
 
-    Generates timeline.md and overview.md with placeholders for AI analysis.
+    Generates timeline.md and overview.md, using analysis captions if available.
     """
     session_dir = Path(output_dir) / session
 
