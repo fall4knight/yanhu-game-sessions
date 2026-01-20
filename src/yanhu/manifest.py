@@ -16,14 +16,18 @@ class SegmentInfo:
     start_time: float  # seconds from video start
     end_time: float  # seconds from video start
     video_path: str  # relative to session directory
+    frames: list[str] = field(default_factory=list)  # relative paths to extracted frames
 
     def to_dict(self) -> dict:
-        return {
+        result = {
             "id": self.id,
             "start_time": self.start_time,
             "end_time": self.end_time,
             "video_path": self.video_path,
         }
+        if self.frames:
+            result["frames"] = self.frames
+        return result
 
     @classmethod
     def from_dict(cls, data: dict) -> SegmentInfo:
@@ -32,6 +36,7 @@ class SegmentInfo:
             start_time=data["start_time"],
             end_time=data["end_time"],
             video_path=data["video_path"],
+            frames=data.get("frames", []),
         )
 
 

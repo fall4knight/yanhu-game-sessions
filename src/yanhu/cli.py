@@ -5,6 +5,7 @@ from pathlib import Path
 import click
 
 from yanhu import __version__
+from yanhu.extractor import extract_frames
 from yanhu.ffmpeg_utils import FFmpegError, FFmpegNotFoundError, check_ffmpeg_available
 from yanhu.manifest import Manifest, create_manifest
 from yanhu.segmenter import segment_video
@@ -121,9 +122,55 @@ def segment(session: str, output_dir: str, segment_duration: int | None):
 @main.command()
 @click.option("--session", "-s", required=True, help="Session ID")
 @click.option("--output-dir", "-o", default="sessions", help="Output directory (default: sessions)")
-def extract(session: str, output_dir: str):
-    """Extract key frames from each segment."""
-    click.echo(f"[extract] Not implemented yet. session={session}")
+@click.option("--frames-per-segment", "-n", default=8, help="Frames to extract per segment")
+def extract(session: str, output_dir: str, frames_per_segment: int):
+    """Extract key frames from each segment.
+
+    Extracts frames from segment videos and updates manifest with frame paths.
+    """
+    session_dir = Path(output_dir) / session
+
+    # Check session exists
+    if not session_dir.exists():
+        raise click.ClickException(f"Session not found: {session_dir}")
+
+    # Check ffmpeg
+    try:
+        ffmpeg_path = check_ffmpeg_available()
+        click.echo(f"Using ffmpeg: {ffmpeg_path}")
+    except FFmpegNotFoundError as e:
+        raise click.ClickException(str(e))
+
+    # Load manifest
+    try:
+        manifest = Manifest.load(session_dir)
+    except FileNotFoundError:
+        raise click.ClickException(f"Manifest not found in {session_dir}")
+
+    # Check segments exist
+    if not manifest.segments:
+        raise click.ClickException("No segments found. Run 'yanhu segment' first.")
+
+    click.echo(f"Extracting {frames_per_segment} frames per segment...")
+    click.echo(f"  Segments to process: {len(manifest.segments)}")
+
+    # Run extraction
+    try:
+        extract_frames(manifest, session_dir, frames_per_segment)
+    except FFmpegError as e:
+        raise click.ClickException(f"Frame extraction failed: {e}")
+    except FileNotFoundError as e:
+        raise click.ClickException(str(e))
+
+    # Save updated manifest
+    manifest.save(session_dir)
+
+    # Summary
+    total_frames = sum(len(seg.frames) for seg in manifest.segments)
+    click.echo("\nExtraction complete!")
+    click.echo(f"  Total frames extracted: {total_frames}")
+    for seg in manifest.segments:
+        click.echo(f"    {seg.id}: {len(seg.frames)} frames")
 
 
 @main.command()

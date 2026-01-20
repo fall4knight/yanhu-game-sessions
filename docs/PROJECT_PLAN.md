@@ -176,13 +176,14 @@ yanhu-game-sessions/
 **Definition of Done**: Each segment has a `frames/` folder with key frames extracted.
 
 **Checklist**:
-- [ ] Implement `extractor.py`
-  - [ ] Function `extract_keyframes(segment_path, output_dir) -> List[Path]`
-  - [ ] Extract middle frame (mandatory)
+- [x] Implement `extractor.py`
+  - [x] Function `extract_frames(manifest, session_dir, frames_per_segment)`
+  - [x] Calculate evenly distributed sample timestamps including middle frame
+  - [x] JPEG output via ffmpeg subprocess
   - [ ] (Stretch) Scene-change detection using frame diff threshold
-- [ ] Update manifest to track frame paths
-- [ ] Add CLI command `yanhu extract <session_id>`
-- [ ] Write unit test checking frame count and format (JPEG)
+- [x] Update manifest to track frame paths (SegmentInfo.frames field)
+- [x] Add CLI command `yanhu extract --session <id> --frames-per-segment N`
+- [x] Write unit tests (sampling logic, path naming, command building, manifest integration)
 
 ---
 
@@ -307,7 +308,7 @@ yanhu-game-sessions/
 |------|-----------|--------|-------|
 | 2026-01-20 | M0: Project Scaffolding | Done | CI added; all 6 checklist items complete |
 | 2026-01-20 | M1: Video Ingestion & Segmentation | Done | ingest + segment CLI, manifest, 30 unit tests |
-| - | M2: Frame Extraction | Not Started | - |
+| 2026-01-20 | M2: Frame Extraction | Done | extract CLI, 54 unit tests total |
 | - | M3: Vision Analysis | Not Started | - |
 | - | M4: ASR Transcription | Not Started | - |
 | - | M5: Segment Summarization | Not Started | - |
