@@ -65,3 +65,4 @@ htmlcov/
 
 # Ruff
 .ruff_cache/
+uv.lock
