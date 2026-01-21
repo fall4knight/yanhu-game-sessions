@@ -152,9 +152,10 @@ class ClaudeClient:
 
 只输出JSON，不要任何其他内容。"""
 
-    def _get_l1_prompt(self, max_facts: int = 3) -> str:  # noqa: E501
+    def _get_l1_prompt(self, max_facts: int = 3) -> str:
         """Return L1 prompt (enhanced with scene_label, what_changed, etc.)."""
-        return f"""分析这些游戏画面截图，输出客观信息包。严格JSON格式，不要markdown，不要解释。禁止拟人/情绪/复盘口吻，只写客观事实。
+        return f"""分析这些游戏画面截图，输出客观信息包。严格JSON格式，不要markdown，不要解释。
+禁止拟人/情绪/复盘口吻，只写客观事实。
 
 输出格式：
 {{
