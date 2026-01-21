@@ -112,6 +112,39 @@ def get_segment_l1_fields(
     return (None, [])
 
 
+def has_valid_claude_analysis(manifest: Manifest, session_dir: Path) -> bool:
+    """Check if any segment has valid Claude analysis.
+
+    Valid analysis means:
+    - model starts with "claude-"
+    - AND (facts is non-empty OR caption is non-empty)
+
+    Args:
+        manifest: Session manifest with segments
+        session_dir: Path to session directory
+
+    Returns:
+        True if any segment has valid Claude analysis
+    """
+    for segment in manifest.segments:
+        if not segment.analysis_path:
+            continue
+        analysis_file = session_dir / segment.analysis_path
+        if not analysis_file.exists():
+            continue
+        try:
+            analysis = AnalysisResult.load(analysis_file)
+            # Check if model starts with "claude-"
+            if not (analysis.model and analysis.model.startswith("claude-")):
+                continue
+            # Check if facts or caption is non-empty
+            if analysis.facts or analysis.caption:
+                return True
+        except (OSError, KeyError):
+            pass
+    return False
+
+
 def compose_timeline(manifest: Manifest, session_dir: Path | None = None) -> str:
     """Generate timeline markdown from manifest.
 

@@ -6,7 +6,7 @@ import click
 
 from yanhu import __version__
 from yanhu.analyzer import analyze_session
-from yanhu.composer import write_overview, write_timeline
+from yanhu.composer import has_valid_claude_analysis, write_overview, write_timeline
 from yanhu.extractor import extract_frames
 from yanhu.ffmpeg_utils import FFmpegError, FFmpegNotFoundError, check_ffmpeg_available
 from yanhu.manifest import Manifest, create_manifest
@@ -354,8 +354,13 @@ def compose(session: str, output_dir: str):
     overview_path = write_overview(manifest, session_dir)
     click.echo(f"  Written: {overview_path.name}")
 
-    click.echo("\nComposition complete!")
-    click.echo("  Note: Descriptions are placeholders. Run Vision/ASR analysis to fill them.")
+    # Check if valid Claude analysis exists and show appropriate message
+    if has_valid_claude_analysis(manifest, session_dir):
+        click.echo("\nComposition complete! Using analysis results.")
+        click.echo("  Use `yanhu analyze ... --force` to refresh.")
+    else:
+        click.echo("\nComposition complete!")
+        click.echo("  Note: Descriptions are placeholders. Run Vision/ASR analysis to fill them.")
 
 
 if __name__ == "__main__":

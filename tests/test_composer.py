@@ -6,6 +6,7 @@ from yanhu.composer import (
     format_frames_list,
     format_time_range,
     format_timestamp,
+    has_valid_claude_analysis,
 )
 from yanhu.manifest import Manifest, SegmentInfo
 
@@ -590,3 +591,202 @@ class TestComposeTimelineL1Fields:
         result = compose_timeline(manifest, tmp_path)
         assert "- change:" not in result
         assert "- ui:" not in result
+
+
+class TestHasValidClaudeAnalysis:
+    """Test detection of valid Claude analysis."""
+
+    def test_returns_true_with_claude_model_and_facts(self, tmp_path):
+        """Should return True when Claude model with facts exists."""
+        from yanhu.analyzer import AnalysisResult
+
+        analysis = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="unknown",
+            ocr_text=[],
+            facts=["彩色测试卡图案"],
+            caption="测试画面",
+            model="claude-sonnet-4-20250514",
+        )
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+        analysis.save(analysis_dir / "part_0001.json")
+
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    "part_0001", 0.0, 60.0, "segments/s_part_0001.mp4",
+                    analysis_path="analysis/part_0001.json",
+                ),
+            ],
+        )
+        assert has_valid_claude_analysis(manifest, tmp_path) is True
+
+    def test_returns_true_with_claude_model_and_caption_only(self, tmp_path):
+        """Should return True when Claude model with only caption exists."""
+        from yanhu.analyzer import AnalysisResult
+
+        analysis = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="unknown",
+            ocr_text=[],
+            facts=[],  # No facts
+            caption="有效的caption描述",
+            model="claude-sonnet-4-20250514",
+        )
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+        analysis.save(analysis_dir / "part_0001.json")
+
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    "part_0001", 0.0, 60.0, "segments/s_part_0001.mp4",
+                    analysis_path="analysis/part_0001.json",
+                ),
+            ],
+        )
+        assert has_valid_claude_analysis(manifest, tmp_path) is True
+
+    def test_returns_false_with_mock_model(self, tmp_path):
+        """Should return False when model is mock (not claude-)."""
+        from yanhu.analyzer import AnalysisResult
+
+        analysis = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="unknown",
+            ocr_text=[],
+            facts=["Mock数据"],
+            caption="Mock caption",
+            model="mock-model",  # Not claude-
+        )
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+        analysis.save(analysis_dir / "part_0001.json")
+
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    "part_0001", 0.0, 60.0, "segments/s_part_0001.mp4",
+                    analysis_path="analysis/part_0001.json",
+                ),
+            ],
+        )
+        assert has_valid_claude_analysis(manifest, tmp_path) is False
+
+    def test_returns_false_with_empty_facts_and_caption(self, tmp_path):
+        """Should return False when Claude model has empty facts AND caption."""
+        from yanhu.analyzer import AnalysisResult
+
+        analysis = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="unknown",
+            ocr_text=[],
+            facts=[],  # Empty
+            caption="",  # Empty
+            model="claude-sonnet-4-20250514",
+        )
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+        analysis.save(analysis_dir / "part_0001.json")
+
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    "part_0001", 0.0, 60.0, "segments/s_part_0001.mp4",
+                    analysis_path="analysis/part_0001.json",
+                ),
+            ],
+        )
+        assert has_valid_claude_analysis(manifest, tmp_path) is False
+
+    def test_returns_false_when_no_analysis_path(self, tmp_path):
+        """Should return False when segments have no analysis_path."""
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    "part_0001", 0.0, 60.0, "segments/s_part_0001.mp4",
+                    # No analysis_path
+                ),
+            ],
+        )
+        assert has_valid_claude_analysis(manifest, tmp_path) is False
+
+    def test_returns_false_when_analysis_file_missing(self, tmp_path):
+        """Should return False when analysis file doesn't exist."""
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    "part_0001", 0.0, 60.0, "segments/s_part_0001.mp4",
+                    analysis_path="analysis/part_0001.json",  # File doesn't exist
+                ),
+            ],
+        )
+        assert has_valid_claude_analysis(manifest, tmp_path) is False
+
+    def test_returns_true_if_any_segment_has_valid_analysis(self, tmp_path):
+        """Should return True if at least one segment has valid Claude analysis."""
+        from yanhu.analyzer import AnalysisResult
+
+        # Create only valid analysis for part_0002
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+
+        analysis = AnalysisResult(
+            segment_id="part_0002",
+            scene_type="dialogue",
+            ocr_text=[],
+            facts=["有效的分析结果"],
+            caption="",
+            model="claude-sonnet-4-20250514",
+        )
+        analysis.save(analysis_dir / "part_0002.json")
+
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    "part_0001", 0.0, 60.0, "segments/s_part_0001.mp4",
+                    # No analysis_path
+                ),
+                SegmentInfo(
+                    "part_0002", 60.0, 120.0, "segments/s_part_0002.mp4",
+                    analysis_path="analysis/part_0002.json",
+                ),
+            ],
+        )
+        assert has_valid_claude_analysis(manifest, tmp_path) is True
