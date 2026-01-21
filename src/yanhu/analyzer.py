@@ -22,6 +22,7 @@ class AnalysisResult:
     confidence: str | None = None  # "low", "med", "high"
     model: str | None = None
     error: str | None = None
+    raw_text: str | None = None  # Raw API response when JSON parse fails
     # L1 fields (optional, for detail_level=L1)
     scene_label: str | None = None  # Loading|Menu|Cutscene|Combat|Dialogue|Error|TVTest|Unknown
     what_changed: str | None = None  # Short description of changes
@@ -44,6 +45,8 @@ class AnalysisResult:
             result["model"] = self.model
         if self.error:
             result["error"] = self.error
+        if self.raw_text:
+            result["raw_text"] = self.raw_text
         # L1 fields (only include if present)
         if self.scene_label:
             result["scene_label"] = self.scene_label
@@ -68,6 +71,7 @@ class AnalysisResult:
             confidence=data.get("confidence"),
             model=data.get("model"),
             error=data.get("error"),
+            raw_text=data.get("raw_text"),
             # L1 fields (backward compatible)
             scene_label=data.get("scene_label"),
             what_changed=data.get("what_changed"),
@@ -283,6 +287,7 @@ class ClaudeAnalyzer:
                 confidence=response.confidence,
                 model=response.model,
                 error=response.error,
+                raw_text=response.raw_text,
                 # L1 fields
                 scene_label=response.scene_label,
                 what_changed=response.what_changed,

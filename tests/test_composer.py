@@ -790,3 +790,197 @@ class TestHasValidClaudeAnalysis:
             ],
         )
         assert has_valid_claude_analysis(manifest, tmp_path) is True
+
+
+class TestErrorHandlingInTimeline:
+    """Test error handling when analysis has JSON parse errors."""
+
+    def test_description_shows_error_message_when_error_field_exists(self, tmp_path):
+        """Should show TODO with analysis path when error field is present."""
+        from yanhu.analyzer import AnalysisResult
+        from yanhu.composer import get_segment_description
+
+        # Create analysis file with error
+        analysis = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="unknown",
+            ocr_text=[],
+            facts=[],
+            caption="",
+            model="claude-sonnet-4-20250514",
+            error="JSON parse error: Expecting value: line 1 column 1",
+            raw_text="This is not valid JSON...",
+        )
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+        analysis.save(analysis_dir / "part_0001.json")
+
+        segment = SegmentInfo(
+            id="part_0001",
+            start_time=0.0,
+            end_time=60.0,
+            video_path="segments/test.mp4",
+            analysis_path="analysis/part_0001.json",
+        )
+        result = get_segment_description(segment, tmp_path)
+        assert "TODO: analysis failed" in result
+        assert "analysis/part_0001.json" in result
+
+    def test_description_does_not_output_raw_text(self, tmp_path):
+        """Should not output raw_text in timeline description."""
+        from yanhu.analyzer import AnalysisResult
+        from yanhu.composer import get_segment_description
+
+        raw_response = "Some long invalid response that Claude returned..."
+
+        analysis = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="unknown",
+            ocr_text=[],
+            facts=[],
+            caption="",
+            model="claude-sonnet-4-20250514",
+            error="JSON parse error",
+            raw_text=raw_response,
+        )
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+        analysis.save(analysis_dir / "part_0001.json")
+
+        segment = SegmentInfo(
+            id="part_0001",
+            start_time=0.0,
+            end_time=60.0,
+            video_path="segments/test.mp4",
+            analysis_path="analysis/part_0001.json",
+        )
+        result = get_segment_description(segment, tmp_path)
+        # Should NOT contain raw_text
+        assert raw_response not in result
+
+    def test_timeline_shows_error_for_failed_analysis(self, tmp_path):
+        """Timeline should show TODO for segments with analysis errors."""
+        from yanhu.analyzer import AnalysisResult
+
+        analysis = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="unknown",
+            ocr_text=[],
+            facts=[],
+            caption="",
+            model="claude-sonnet-4-20250514",
+            error="JSON parse error: something went wrong",
+            raw_text="invalid json response",
+        )
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+        analysis.save(analysis_dir / "part_0001.json")
+
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    "part_0001", 0.0, 60.0, "segments/s_part_0001.mp4",
+                    analysis_path="analysis/part_0001.json",
+                ),
+            ],
+        )
+        result = compose_timeline(manifest, tmp_path)
+        assert "TODO: analysis failed" in result
+        assert "analysis/part_0001.json" in result
+        # Should NOT contain raw_text
+        assert "invalid json response" not in result
+
+    def test_l1_fields_not_shown_when_error_exists(self, tmp_path):
+        """L1 fields should not be shown when analysis has error."""
+        from yanhu.analyzer import AnalysisResult
+        from yanhu.composer import get_segment_l1_fields
+
+        analysis = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="unknown",
+            ocr_text=[],
+            facts=[],
+            caption="",
+            model="claude-sonnet-4-20250514",
+            error="JSON parse error",
+            what_changed="This should not appear",
+            ui_key_text=["This should not appear"],
+        )
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+        analysis.save(analysis_dir / "part_0001.json")
+
+        segment = SegmentInfo(
+            id="part_0001",
+            start_time=0.0,
+            end_time=60.0,
+            video_path="segments/test.mp4",
+            analysis_path="analysis/part_0001.json",
+        )
+        what_changed, ui_key_text = get_segment_l1_fields(segment, tmp_path)
+        assert what_changed is None
+        assert ui_key_text == []
+
+    def test_raw_text_saved_in_analysis_json(self, tmp_path):
+        """raw_text should be saved in analysis JSON file for debugging."""
+        from yanhu.analyzer import AnalysisResult
+
+        raw_response = "Claude返回的无效JSON内容..."
+
+        analysis = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="unknown",
+            ocr_text=[],
+            facts=[],
+            caption="",
+            model="claude-sonnet-4-20250514",
+            error="JSON parse error",
+            raw_text=raw_response,
+        )
+        analysis_path = tmp_path / "analysis" / "part_0001.json"
+        analysis.save(analysis_path)
+
+        # Reload and verify raw_text is saved
+        loaded = AnalysisResult.load(analysis_path)
+        assert loaded.error == "JSON parse error"
+        assert loaded.raw_text == raw_response
+
+    def test_timeline_no_change_line_when_error(self, tmp_path):
+        """Timeline should not show change/ui lines when analysis has error."""
+        from yanhu.analyzer import AnalysisResult
+
+        analysis = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="unknown",
+            ocr_text=[],
+            facts=[],
+            caption="",
+            model="claude-sonnet-4-20250514",
+            error="JSON parse error",
+        )
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+        analysis.save(analysis_dir / "part_0001.json")
+
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    "part_0001", 0.0, 60.0, "segments/s_part_0001.mp4",
+                    analysis_path="analysis/part_0001.json",
+                ),
+            ],
+        )
+        result = compose_timeline(manifest, tmp_path)
+        # Should not have L1 lines
+        assert "- change:" not in result
+        assert "- ui:" not in result

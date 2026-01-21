@@ -64,6 +64,21 @@ A) L1 Claude Vision analysis correctness:
   ```
 - Assert timeline contains facts[0] and includes "- change:" line for that segment.
 
+B) Timeline pollution check (always run after compose):
+- Check that timeline.md does NOT contain JSON fragments:
+  ```bash
+  grep -E '^\s*>\s*\{' sessions/<sid>/timeline.md && echo "POLLUTED" || echo "CLEAN"
+  ```
+- If output is "POLLUTED", immediately **FAIL** and print:
+  ```
+  ## FAIL: Timeline contains JSON fragments
+
+  The timeline is polluted with raw JSON output from a failed analysis.
+  Fix: rerun the analysis with --force flag:
+    yanhu analyze --session <sid> --backend claude --force
+    yanhu compose --session <sid>
+  ```
+
 ## Output
 
 - PASS/FAIL with reasons

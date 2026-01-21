@@ -65,20 +65,24 @@ def get_segment_description(
 ) -> str:
     """Get description for a segment from analysis or return placeholder.
 
-    Priority: facts (first) > caption > TODO
+    Priority: error check > facts (first) > caption > TODO
 
     Args:
         segment: Segment info from manifest
         session_dir: Path to session directory (needed to load analysis)
 
     Returns:
-        Description from analysis (facts or caption) if available, otherwise TODO
+        Description from analysis (facts or caption) if available,
+        error message if analysis failed, otherwise TODO
     """
     if segment.analysis_path and session_dir:
         analysis_file = session_dir / segment.analysis_path
         if analysis_file.exists():
             try:
                 analysis = AnalysisResult.load(analysis_file)
+                # Check for error first - do not output raw_text
+                if analysis.error:
+                    return f"TODO: analysis failed (see {segment.analysis_path})"
                 description = analysis.get_description()
                 if description:
                     return description
@@ -100,12 +104,16 @@ def get_segment_l1_fields(
 
     Returns:
         Tuple of (what_changed, ui_key_text) - both may be None/empty
+        Returns empty values if analysis has error
     """
     if segment.analysis_path and session_dir:
         analysis_file = session_dir / segment.analysis_path
         if analysis_file.exists():
             try:
                 analysis = AnalysisResult.load(analysis_file)
+                # Don't return L1 fields if there's an error
+                if analysis.error:
+                    return (None, [])
                 return (analysis.what_changed, analysis.ui_key_text or [])
             except (OSError, KeyError):
                 pass
