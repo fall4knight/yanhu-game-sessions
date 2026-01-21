@@ -276,9 +276,31 @@ def analyze(
     click.echo("")
     if dry_run:
         click.echo("Dry-run summary:")
-        click.echo(f"  Would process: {stats.api_calls} segments")
-        click.echo(f"  Would skip (cached): {stats.skipped_cache}")
-        click.echo(f"  Would skip (filtered): {stats.skipped_filter}")
+        click.echo("")
+
+        # Segment lists
+        if stats.will_process:
+            click.echo(f"  Will process:   [{', '.join(stats.will_process)}]")
+        else:
+            click.echo("  Will process:   []")
+
+        if stats.cached_skip:
+            click.echo(f"  Cached skip:    [{', '.join(stats.cached_skip)}]")
+        else:
+            click.echo("  Cached skip:    []")
+
+        if stats.filtered_skip:
+            click.echo(f"  Filtered skip:  [{', '.join(stats.filtered_skip)}]")
+        else:
+            click.echo("  Filtered skip:  []")
+
+        click.echo("")
+
+        # Cost estimation
+        click.echo("Cost estimation:")
+        click.echo(f"  API calls:      {stats.api_calls}")
+        click.echo(f"  Images/call:    {stats.max_frames}")
+        click.echo(f"  Total images:   {stats.total_images}")
     else:
         click.echo("Analysis complete!")
         click.echo(f"  Processed: {stats.processed}")

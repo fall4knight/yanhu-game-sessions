@@ -891,3 +891,195 @@ class TestAnalyzeStats:
         assert stats.skipped_filter == 0
         assert stats.errors == 0
         assert stats.api_calls == 0
+        assert stats.max_frames == 3
+        assert stats.will_process == []
+        assert stats.cached_skip == []
+        assert stats.filtered_skip == []
+
+    def test_total_images_property(self):
+        """total_images should be api_calls * max_frames."""
+        stats = AnalyzeStats(api_calls=5, max_frames=3)
+        assert stats.total_images == 15
+
+        stats2 = AnalyzeStats(api_calls=2, max_frames=6)
+        assert stats2.total_images == 12
+
+
+class TestAnalyzeSessionSegmentLists:
+    """Test segment list tracking in analyze_session."""
+
+    def _create_test_manifest(self, tmp_path, num_segments=3):
+        """Helper to create test manifest with segments."""
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00Z",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=30,
+        )
+
+        for i in range(num_segments):
+            seg_id = f"part_{i+1:04d}"
+            frames_dir = tmp_path / "frames" / seg_id
+            frames_dir.mkdir(parents=True)
+            frame_paths = []
+            for j in range(3):
+                frame_path = frames_dir / f"frame_{j+1:04d}.jpg"
+                frame_path.write_bytes(b"fake jpg")
+                frame_paths.append(f"frames/{seg_id}/frame_{j+1:04d}.jpg")
+
+            segment = SegmentInfo(
+                id=seg_id,
+                start_time=i * 30.0,
+                end_time=(i + 1) * 30.0,
+                video_path=f"segments/test_{seg_id}.mp4",
+                frames=frame_paths,
+            )
+            manifest.segments.append(segment)
+
+        return manifest
+
+    def test_dry_run_populates_will_process_list(self, tmp_path):
+        """Dry run should populate will_process list."""
+        manifest = self._create_test_manifest(tmp_path, num_segments=3)
+
+        stats = analyze_session(manifest, tmp_path, "mock", dry_run=True)
+
+        assert stats.will_process == ["part_0001", "part_0002", "part_0003"]
+        assert stats.cached_skip == []
+        assert stats.filtered_skip == []
+
+    def test_limit_populates_filtered_skip_list(self, tmp_path):
+        """Limit should populate filtered_skip list."""
+        manifest = self._create_test_manifest(tmp_path, num_segments=5)
+
+        stats = analyze_session(manifest, tmp_path, "mock", dry_run=True, limit=2)
+
+        assert stats.will_process == ["part_0001", "part_0002"]
+        assert stats.cached_skip == []
+        assert stats.filtered_skip == ["part_0003", "part_0004", "part_0005"]
+
+    def test_segments_filter_populates_filtered_skip_list(self, tmp_path):
+        """Segments filter should populate filtered_skip list."""
+        manifest = self._create_test_manifest(tmp_path, num_segments=5)
+
+        stats = analyze_session(
+            manifest, tmp_path, "mock", dry_run=True,
+            segments=["part_0002", "part_0004"]
+        )
+
+        assert stats.will_process == ["part_0002", "part_0004"]
+        assert stats.cached_skip == []
+        assert stats.filtered_skip == ["part_0001", "part_0003", "part_0005"]
+
+    def test_cache_populates_cached_skip_list(self, tmp_path):
+        """Cache hits should populate cached_skip list."""
+        manifest = self._create_test_manifest(tmp_path, num_segments=3)
+
+        # Create cached analysis for part_0002
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+        cached = AnalysisResult(
+            segment_id="part_0002",
+            scene_type="dialogue",
+            caption="Cached",
+            model="mock",
+        )
+        cached.save(analysis_dir / "part_0002.json")
+        manifest.segments[1].analysis_path = "analysis/part_0002.json"
+
+        stats = analyze_session(manifest, tmp_path, "mock", dry_run=True)
+
+        assert stats.will_process == ["part_0001", "part_0003"]
+        assert stats.cached_skip == ["part_0002"]
+        assert stats.filtered_skip == []
+
+    def test_filter_then_cache_order(self, tmp_path):
+        """Filter should be applied before cache check."""
+        manifest = self._create_test_manifest(tmp_path, num_segments=5)
+
+        # Create cached analysis for part_0003 and part_0005
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+        for seg_id in ["part_0003", "part_0005"]:
+            cached = AnalysisResult(
+                segment_id=seg_id,
+                scene_type="dialogue",
+                caption="Cached",
+                model="mock",
+            )
+            cached.save(analysis_dir / f"{seg_id}.json")
+
+        manifest.segments[2].analysis_path = "analysis/part_0003.json"
+        manifest.segments[4].analysis_path = "analysis/part_0005.json"
+
+        # Limit to first 3 segments: part_0001, part_0002, part_0003
+        # part_0003 is cached, but part_0004 and part_0005 should be filtered (not cached)
+        stats = analyze_session(manifest, tmp_path, "mock", dry_run=True, limit=3)
+
+        assert stats.will_process == ["part_0001", "part_0002"]
+        assert stats.cached_skip == ["part_0003"]
+        # part_0004 and part_0005 should be filtered, NOT counted as cached
+        assert stats.filtered_skip == ["part_0004", "part_0005"]
+        assert stats.skipped_filter == 2
+        assert stats.skipped_cache == 1
+
+    def test_combined_segments_and_cache(self, tmp_path):
+        """Combined segments filter and cache should work correctly."""
+        manifest = self._create_test_manifest(tmp_path, num_segments=5)
+
+        # Create cached analysis for part_0002
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+        cached = AnalysisResult(
+            segment_id="part_0002",
+            scene_type="dialogue",
+            caption="Cached",
+            model="mock",
+        )
+        cached.save(analysis_dir / "part_0002.json")
+        manifest.segments[1].analysis_path = "analysis/part_0002.json"
+
+        # Select only part_0002 and part_0004
+        stats = analyze_session(
+            manifest, tmp_path, "mock", dry_run=True,
+            segments=["part_0002", "part_0004"]
+        )
+
+        # part_0002 is selected but cached, part_0004 is selected and will process
+        assert stats.will_process == ["part_0004"]
+        assert stats.cached_skip == ["part_0002"]
+        assert stats.filtered_skip == ["part_0001", "part_0003", "part_0005"]
+
+    def test_max_frames_in_stats(self, tmp_path):
+        """Stats should track max_frames setting."""
+        manifest = self._create_test_manifest(tmp_path, num_segments=2)
+
+        stats = analyze_session(manifest, tmp_path, "mock", dry_run=True, max_frames=5)
+
+        assert stats.max_frames == 5
+        assert stats.api_calls == 2
+        assert stats.total_images == 10
+
+    def test_backend_aware_cache_with_segment_lists(self, tmp_path):
+        """Backend-aware cache should work with segment lists."""
+        manifest = self._create_test_manifest(tmp_path, num_segments=3)
+
+        # Create mock cache for part_0001
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+        cached = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="unknown",
+            caption="Mock caption",
+            model="mock",
+        )
+        cached.save(analysis_dir / "part_0001.json")
+        manifest.segments[0].analysis_path = "analysis/part_0001.json"
+
+        # Run with claude backend - mock cache should NOT be valid
+        stats = analyze_session(manifest, tmp_path, "claude", dry_run=True)
+
+        # part_0001 should be in will_process (not cached for claude)
+        assert stats.will_process == ["part_0001", "part_0002", "part_0003"]
+        assert stats.cached_skip == []

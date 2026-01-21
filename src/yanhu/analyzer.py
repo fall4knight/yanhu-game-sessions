@@ -299,6 +299,17 @@ class AnalyzeStats:
     skipped_filter: int = 0
     errors: int = 0
     api_calls: int = 0
+    max_frames: int = 3
+
+    # Segment ID lists for dry-run reporting
+    will_process: list[str] = field(default_factory=list)
+    cached_skip: list[str] = field(default_factory=list)
+    filtered_skip: list[str] = field(default_factory=list)
+
+    @property
+    def total_images(self) -> int:
+        """Estimated total images (api_calls * max_frames)."""
+        return self.api_calls * self.max_frames
 
 
 def analyze_session(
@@ -331,31 +342,39 @@ def analyze_session(
     Returns:
         AnalyzeStats with processing statistics
     """
-    stats = AnalyzeStats(total_segments=len(manifest.segments))
+    stats = AnalyzeStats(total_segments=len(manifest.segments), max_frames=max_frames)
 
-    # Filter segments
-    segments_to_process = []
+    # Step 1: Apply filters (--segments, --limit) to get "final set"
+    filtered_segments = []
     for seg in manifest.segments:
-        # Check segment filter
+        # Check segment filter (--segments)
         if segments and seg.id not in segments:
             stats.skipped_filter += 1
+            stats.filtered_skip.append(seg.id)
             continue
 
-        # Check limit
-        if limit is not None and len(segments_to_process) >= limit:
+        # Check limit (--limit)
+        if limit is not None and len(filtered_segments) >= limit:
             stats.skipped_filter += 1
+            stats.filtered_skip.append(seg.id)
             continue
 
-        # Check cache (unless force)
+        filtered_segments.append(seg)
+
+    # Step 2: Check cache for each segment in "final set"
+    segments_to_process = []
+    for seg in filtered_segments:
         if not force:
             cached = check_cache(seg, session_dir, backend)
             if cached:
                 stats.skipped_cache += 1
+                stats.cached_skip.append(seg.id)
                 if on_progress:
                     on_progress(seg.id, "cached", cached)
                 continue
 
         segments_to_process.append(seg)
+        stats.will_process.append(seg.id)
 
     stats.api_calls = len(segments_to_process)
 
