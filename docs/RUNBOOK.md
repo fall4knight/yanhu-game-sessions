@@ -69,6 +69,8 @@ yanhu analyze --session <session_id> --backend claude --segments "part_0001,part
 cat sessions/<session_id>/analysis/part_0001.json
 ```
 
+**注意**：`caption` 字段是"陪玩复盘口吻"，用玩家视角描述发生了什么（角色、事件、选择），而不是纯视觉描述。
+
 #### Step 3: 全量处理
 
 确认效果后，运行全量分析：

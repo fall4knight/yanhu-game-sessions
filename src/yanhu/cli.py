@@ -180,6 +180,9 @@ def extract(session: str, output_dir: str, frames_per_segment: int):
 @click.option("--output-dir", "-o", default="sessions", help="Output directory")
 @click.option("--backend", "-b", default="mock", type=click.Choice(["mock", "claude"]))
 @click.option("--max-frames", "-n", default=3, help="Max frames per segment (default: 3)")
+@click.option("--max-facts", default=3, help="Max facts per segment (default: 3)")
+@click.option("--detail-level", default="L1", type=click.Choice(["L0", "L1"]),
+              help="Detail level: L0=basic, L1=enhanced with scene_label/what_changed (default: L1)")
 @click.option("--force", "-f", is_flag=True, help="Re-analyze even if analysis exists")
 @click.option("--dry-run", is_flag=True, help="Show stats without running analysis")
 @click.option("--limit", "-l", type=int, help="Only process first N segments")
@@ -189,6 +192,8 @@ def analyze(
     output_dir: str,
     backend: str,
     max_frames: int,
+    max_facts: int,
+    detail_level: str,
     force: bool,
     dry_run: bool,
     limit: int | None,
@@ -232,6 +237,8 @@ def analyze(
     click.echo(f"Analyzing session: {manifest.session_id}")
     click.echo(f"  Backend: {backend}")
     click.echo(f"  Max frames: {max_frames}")
+    click.echo(f"  Max facts: {max_facts}")
+    click.echo(f"  Detail level: {detail_level}")
     click.echo(f"  Total segments: {len(manifest.segments)}")
     if force:
         click.echo("  Force: enabled (ignoring cache)")
@@ -259,6 +266,8 @@ def analyze(
             session_dir,
             backend,
             max_frames=max_frames,
+            max_facts=max_facts,
+            detail_level=detail_level,
             force=force,
             dry_run=dry_run,
             limit=limit,

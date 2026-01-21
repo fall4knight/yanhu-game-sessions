@@ -17,21 +17,44 @@ class AnalysisResult:
     segment_id: str
     scene_type: str  # e.g., "dialogue", "combat", "menu", "unknown"
     ocr_text: list[str] = field(default_factory=list)
+    facts: list[str] = field(default_factory=list)  # 1-3 objective facts
     caption: str = ""
+    confidence: str | None = None  # "low", "med", "high"
     model: str | None = None
     error: str | None = None
+    # L1 fields (optional, for detail_level=L1)
+    scene_label: str | None = None  # Loading|Menu|Cutscene|Combat|Dialogue|Error|TVTest|Unknown
+    what_changed: str | None = None  # Short description of changes
+    ui_key_text: list[str] = field(default_factory=list)  # 0-2 key UI text items
+    player_action_guess: str | None = None  # Optional guess with uncertainty markers
+    hook_detail: str | None = None  # Optional detail worth noting
 
     def to_dict(self) -> dict:
         result = {
             "segment_id": self.segment_id,
             "scene_type": self.scene_type,
             "ocr_text": self.ocr_text,
-            "caption": self.caption,
         }
+        if self.facts:
+            result["facts"] = self.facts
+        result["caption"] = self.caption
+        if self.confidence:
+            result["confidence"] = self.confidence
         if self.model:
             result["model"] = self.model
         if self.error:
             result["error"] = self.error
+        # L1 fields (only include if present)
+        if self.scene_label:
+            result["scene_label"] = self.scene_label
+        if self.what_changed:
+            result["what_changed"] = self.what_changed
+        if self.ui_key_text:
+            result["ui_key_text"] = self.ui_key_text
+        if self.player_action_guess:
+            result["player_action_guess"] = self.player_action_guess
+        if self.hook_detail:
+            result["hook_detail"] = self.hook_detail
         return result
 
     @classmethod
@@ -40,9 +63,17 @@ class AnalysisResult:
             segment_id=data["segment_id"],
             scene_type=data["scene_type"],
             ocr_text=data.get("ocr_text", []),
+            facts=data.get("facts", []),
             caption=data.get("caption", ""),
+            confidence=data.get("confidence"),
             model=data.get("model"),
             error=data.get("error"),
+            # L1 fields (backward compatible)
+            scene_label=data.get("scene_label"),
+            what_changed=data.get("what_changed"),
+            ui_key_text=data.get("ui_key_text", []),
+            player_action_guess=data.get("player_action_guess"),
+            hook_detail=data.get("hook_detail"),
         )
 
     def save(self, output_path: Path) -> None:
@@ -58,9 +89,21 @@ class AnalysisResult:
             data = json.load(f)
         return cls.from_dict(data)
 
+    def has_valid_content(self) -> bool:
+        """Check if this result has valid content (facts or caption, no error)."""
+        return (bool(self.facts) or bool(self.caption)) and not self.error
+
     def has_valid_caption(self) -> bool:
-        """Check if this result has a valid caption (not error)."""
-        return bool(self.caption) and not self.error
+        """Check if this result has a valid caption (not error). For backward compat."""
+        return self.has_valid_content()
+
+    def get_description(self) -> str | None:
+        """Get best description: facts (first) > caption > None."""
+        if self.facts:
+            return self.facts[0]
+        if self.caption:
+            return self.caption
+        return None
 
     def is_cache_valid_for(self, backend: str) -> bool:
         """Check if this cached result is valid for a specific backend.
@@ -110,6 +153,8 @@ class Analyzer(Protocol):
         segment: SegmentInfo,
         session_dir: Path,
         max_frames: int,
+        max_facts: int = 3,
+        detail_level: str = "L1",
     ) -> AnalysisResult:
         """Analyze a segment and return results."""
         ...
@@ -123,6 +168,8 @@ class MockAnalyzer:
         segment: SegmentInfo,
         session_dir: Path,
         max_frames: int = 3,
+        max_facts: int = 3,
+        detail_level: str = "L1",
     ) -> AnalysisResult:
         """Generate mock analysis for a segment.
 
@@ -130,20 +177,34 @@ class MockAnalyzer:
             segment: Segment info from manifest
             session_dir: Path to session directory (unused for mock)
             max_frames: Maximum frames to use (for caption)
+            max_facts: Maximum facts to generate (unused for mock)
+            detail_level: "L0" for basic, "L1" for enhanced fields
 
         Returns:
             AnalysisResult with placeholder data
         """
         frame_count = min(len(segment.frames), max_frames)
+        facts = [f"共{frame_count}帧画面", f"segment_id={segment.id}"][:max_facts]
         caption = f"【占位】{segment.id}：已抽取{frame_count}帧，等待视觉/字幕解析"
 
-        return AnalysisResult(
+        result = AnalysisResult(
             segment_id=segment.id,
             scene_type="unknown",
             ocr_text=[],
+            facts=facts,
             caption=caption,
             model="mock",
         )
+
+        # Add L1 fields if detail_level is L1
+        if detail_level == "L1":
+            result.scene_label = "Unknown"
+            result.what_changed = "mock数据，等待实际分析"
+            result.ui_key_text = []
+            result.player_action_guess = ""
+            result.hook_detail = ""
+
+        return result
 
 
 class ClaudeAnalyzer:
@@ -169,6 +230,8 @@ class ClaudeAnalyzer:
         segment: SegmentInfo,
         session_dir: Path,
         max_frames: int = 3,
+        max_facts: int = 3,
+        detail_level: str = "L1",
     ) -> AnalysisResult:
         """Analyze a segment using Claude Vision.
 
@@ -176,6 +239,8 @@ class ClaudeAnalyzer:
             segment: Segment info from manifest
             session_dir: Path to session directory
             max_frames: Maximum frames to analyze
+            max_facts: Maximum facts to return
+            detail_level: "L0" for basic, "L1" for enhanced fields
 
         Returns:
             AnalysisResult with Claude's analysis
@@ -205,15 +270,25 @@ class ClaudeAnalyzer:
 
         try:
             client = self._get_client()
-            response = client.analyze_frames(frame_paths)
+            response = client.analyze_frames(
+                frame_paths, max_facts=max_facts, detail_level=detail_level
+            )
 
             return AnalysisResult(
                 segment_id=segment.id,
                 scene_type=response.scene_type,
                 ocr_text=response.ocr_text,
+                facts=response.facts,
                 caption=response.caption,
+                confidence=response.confidence,
                 model=response.model,
                 error=response.error,
+                # L1 fields
+                scene_label=response.scene_label,
+                what_changed=response.what_changed,
+                ui_key_text=response.ui_key_text or [],
+                player_action_guess=response.player_action_guess,
+                hook_detail=response.hook_detail,
             )
         except Exception as e:
             return AnalysisResult(
@@ -318,6 +393,8 @@ def analyze_session(
     backend: str = "mock",
     *,
     max_frames: int = 3,
+    max_facts: int = 3,
+    detail_level: str = "L1",
     force: bool = False,
     dry_run: bool = False,
     limit: int | None = None,
@@ -332,6 +409,8 @@ def analyze_session(
         session_dir: Path to session directory
         backend: Analyzer backend to use
         max_frames: Maximum frames per segment to analyze
+        max_facts: Maximum facts per segment to generate
+        detail_level: "L0" for basic, "L1" for enhanced fields
         force: Re-analyze even if cache exists
         dry_run: Only calculate stats, don't run analysis
         limit: Only process first N segments
@@ -390,7 +469,9 @@ def analyze_session(
     # Process segments
     for segment in segments_to_process:
         try:
-            result = analyzer.analyze_segment(segment, session_dir, max_frames)
+            result = analyzer.analyze_segment(
+                segment, session_dir, max_frames, max_facts, detail_level
+            )
 
             if result.error:
                 stats.errors += 1

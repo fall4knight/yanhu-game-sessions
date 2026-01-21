@@ -351,6 +351,59 @@ class TestGetSegmentDescription:
         result = get_segment_description(segment, tmp_path)
         assert "TODO" in result
 
+    def test_facts_priority_over_caption(self, tmp_path):
+        """Should prefer facts over caption when both exist."""
+        from yanhu.analyzer import AnalysisResult
+        from yanhu.composer import get_segment_description
+
+        # Create analysis file with both facts and caption
+        analysis = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            ocr_text=[],
+            facts=["角色A与B对话", "对话框显示"],
+            caption="旧的caption描述",
+        )
+        analysis_path = tmp_path / "analysis" / "part_0001.json"
+        analysis.save(analysis_path)
+
+        segment = SegmentInfo(
+            id="part_0001",
+            start_time=0.0,
+            end_time=60.0,
+            video_path="segments/test.mp4",
+            analysis_path="analysis/part_0001.json",
+        )
+        result = get_segment_description(segment, tmp_path)
+        # Should use first fact, not caption
+        assert result == "角色A与B对话"
+
+    def test_caption_fallback_when_no_facts(self, tmp_path):
+        """Should use caption when no facts available."""
+        from yanhu.analyzer import AnalysisResult
+        from yanhu.composer import get_segment_description
+
+        # Create analysis file with caption only
+        analysis = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            ocr_text=[],
+            facts=[],  # No facts
+            caption="对话场景描述",
+        )
+        analysis_path = tmp_path / "analysis" / "part_0001.json"
+        analysis.save(analysis_path)
+
+        segment = SegmentInfo(
+            id="part_0001",
+            start_time=0.0,
+            end_time=60.0,
+            video_path="segments/test.mp4",
+            analysis_path="analysis/part_0001.json",
+        )
+        result = get_segment_description(segment, tmp_path)
+        assert result == "对话场景描述"
+
 
 class TestComposeTimelineWithAnalysis:
     """Test timeline composition with analysis results."""
@@ -436,3 +489,104 @@ class TestComposeTimelineWithAnalysis:
         result = compose_timeline(manifest, tmp_path)
         assert "已分析的segment" in result
         assert "TODO: describe what happened" in result
+
+
+class TestComposeTimelineL1Fields:
+    """Test timeline composition with L1 fields."""
+
+    def test_timeline_shows_what_changed(self, tmp_path):
+        """Timeline should show what_changed when present."""
+        from yanhu.analyzer import AnalysisResult
+
+        analysis = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            ocr_text=[],
+            facts=["角色对话"],
+            caption="对话场景",
+            what_changed="从菜单切换到对话",
+        )
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+        analysis.save(analysis_dir / "part_0001.json")
+
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    "part_0001", 0.0, 60.0, "segments/s_part_0001.mp4",
+                    analysis_path="analysis/part_0001.json",
+                ),
+            ],
+        )
+        result = compose_timeline(manifest, tmp_path)
+        assert "- change: 从菜单切换到对话" in result
+
+    def test_timeline_shows_ui_key_text(self, tmp_path):
+        """Timeline should show ui_key_text when present."""
+        from yanhu.analyzer import AnalysisResult
+
+        analysis = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="menu",
+            ocr_text=[],
+            facts=["菜单界面"],
+            caption="系统菜单",
+            ui_key_text=["继续游戏", "设置"],
+        )
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+        analysis.save(analysis_dir / "part_0001.json")
+
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    "part_0001", 0.0, 60.0, "segments/s_part_0001.mp4",
+                    analysis_path="analysis/part_0001.json",
+                ),
+            ],
+        )
+        result = compose_timeline(manifest, tmp_path)
+        assert "- ui: 继续游戏, 设置" in result
+
+    def test_timeline_no_l1_lines_when_empty(self, tmp_path):
+        """Timeline should not show L1 lines when fields are empty."""
+        from yanhu.analyzer import AnalysisResult
+
+        analysis = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            ocr_text=[],
+            facts=["角色对话"],
+            caption="对话场景",
+            # No L1 fields set
+        )
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+        analysis.save(analysis_dir / "part_0001.json")
+
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    "part_0001", 0.0, 60.0, "segments/s_part_0001.mp4",
+                    analysis_path="analysis/part_0001.json",
+                ),
+            ],
+        )
+        result = compose_timeline(manifest, tmp_path)
+        assert "- change:" not in result
+        assert "- ui:" not in result

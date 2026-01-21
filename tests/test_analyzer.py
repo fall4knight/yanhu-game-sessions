@@ -420,6 +420,268 @@ class TestHasValidCaption:
         assert result.has_valid_caption() is False
 
 
+class TestFactsAndConfidence:
+    """Test facts and confidence fields."""
+
+    def test_facts_default_empty_list(self):
+        """Should default facts to empty list."""
+        result = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+        )
+        assert result.facts == []
+
+    def test_facts_serialization(self):
+        """Should serialize facts to dict correctly."""
+        result = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            facts=["角色A说话", "对话框可见"],
+        )
+        d = result.to_dict()
+        assert d["facts"] == ["角色A说话", "对话框可见"]
+
+    def test_facts_deserialization(self):
+        """Should deserialize facts from dict correctly."""
+        d = {
+            "segment_id": "part_0001",
+            "scene_type": "dialogue",
+            "facts": ["角色A说话"],
+        }
+        result = AnalysisResult.from_dict(d)
+        assert result.facts == ["角色A说话"]
+
+    def test_facts_backward_compat(self):
+        """Should handle old JSON without facts field."""
+        d = {
+            "segment_id": "part_0001",
+            "scene_type": "dialogue",
+            "ocr_text": [],
+            "caption": "测试",
+        }
+        result = AnalysisResult.from_dict(d)
+        assert result.facts == []
+
+    def test_confidence_default_none(self):
+        """Should default confidence to None."""
+        result = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+        )
+        assert result.confidence is None
+
+    def test_confidence_serialization(self):
+        """Should serialize confidence to dict correctly."""
+        result = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            confidence="high",
+        )
+        d = result.to_dict()
+        assert d["confidence"] == "high"
+
+    def test_confidence_deserialization(self):
+        """Should deserialize confidence from dict correctly."""
+        d = {
+            "segment_id": "part_0001",
+            "scene_type": "dialogue",
+            "confidence": "med",
+        }
+        result = AnalysisResult.from_dict(d)
+        assert result.confidence == "med"
+
+
+class TestGetDescription:
+    """Test get_description method priority: facts > caption > None."""
+
+    def test_facts_preferred_over_caption(self):
+        """Should return first fact when facts exist."""
+        result = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            facts=["角色A与B对话", "对话框显示"],
+            caption="对话场景",
+        )
+        assert result.get_description() == "角色A与B对话"
+
+    def test_caption_fallback_when_no_facts(self):
+        """Should return caption when no facts."""
+        result = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            facts=[],
+            caption="对话场景",
+        )
+        assert result.get_description() == "对话场景"
+
+    def test_none_when_nothing_available(self):
+        """Should return None when no facts and no caption."""
+        result = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="unknown",
+            facts=[],
+            caption="",
+        )
+        assert result.get_description() is None
+
+
+class TestHasValidContent:
+    """Test has_valid_content method."""
+
+    def test_facts_only_is_valid(self):
+        """Should return True when facts exist but no caption."""
+        result = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            facts=["客观事实"],
+            caption="",
+        )
+        assert result.has_valid_content() is True
+
+    def test_caption_only_is_valid(self):
+        """Should return True when caption exists but no facts."""
+        result = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            facts=[],
+            caption="对话场景",
+        )
+        assert result.has_valid_content() is True
+
+    def test_both_facts_and_caption_is_valid(self):
+        """Should return True when both facts and caption exist."""
+        result = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            facts=["事实"],
+            caption="描述",
+        )
+        assert result.has_valid_content() is True
+
+    def test_error_invalidates(self):
+        """Should return False when error is set."""
+        result = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="unknown",
+            facts=["事实"],
+            error="API error",
+        )
+        assert result.has_valid_content() is False
+
+
+class TestL1Fields:
+    """Test L1 fields (scene_label, what_changed, ui_key_text, etc.)."""
+
+    def test_l1_fields_default_values(self):
+        """L1 fields should default to None/empty."""
+        result = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+        )
+        assert result.scene_label is None
+        assert result.what_changed is None
+        assert result.ui_key_text == []
+        assert result.player_action_guess is None
+        assert result.hook_detail is None
+
+    def test_l1_fields_serialization(self):
+        """L1 fields should serialize to dict correctly."""
+        result = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            scene_label="Dialogue",
+            what_changed="对话开始",
+            ui_key_text=["确认", "取消"],
+            player_action_guess="可能选择了确认",
+            hook_detail="角色表情变化",
+        )
+        d = result.to_dict()
+        assert d["scene_label"] == "Dialogue"
+        assert d["what_changed"] == "对话开始"
+        assert d["ui_key_text"] == ["确认", "取消"]
+        assert d["player_action_guess"] == "可能选择了确认"
+        assert d["hook_detail"] == "角色表情变化"
+
+    def test_l1_fields_deserialization(self):
+        """L1 fields should deserialize from dict correctly."""
+        d = {
+            "segment_id": "part_0001",
+            "scene_type": "dialogue",
+            "scene_label": "Combat",
+            "what_changed": "战斗开始",
+            "ui_key_text": ["攻击"],
+            "player_action_guess": "疑似使用技能",
+            "hook_detail": "血量下降",
+        }
+        result = AnalysisResult.from_dict(d)
+        assert result.scene_label == "Combat"
+        assert result.what_changed == "战斗开始"
+        assert result.ui_key_text == ["攻击"]
+        assert result.player_action_guess == "疑似使用技能"
+        assert result.hook_detail == "血量下降"
+
+    def test_l1_fields_backward_compat(self):
+        """Should handle old JSON without L1 fields."""
+        d = {
+            "segment_id": "part_0001",
+            "scene_type": "dialogue",
+            "ocr_text": [],
+            "caption": "测试",
+        }
+        result = AnalysisResult.from_dict(d)
+        assert result.scene_label is None
+        assert result.what_changed is None
+        assert result.ui_key_text == []
+        assert result.player_action_guess is None
+        assert result.hook_detail is None
+
+    def test_l1_fields_omitted_when_empty(self):
+        """L1 fields should be omitted from dict when empty/None."""
+        result = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            caption="test",
+        )
+        d = result.to_dict()
+        assert "scene_label" not in d
+        assert "what_changed" not in d
+        assert "ui_key_text" not in d
+        assert "player_action_guess" not in d
+        assert "hook_detail" not in d
+
+
+class TestMockAnalyzerDetailLevel:
+    """Test MockAnalyzer with detail_level parameter."""
+
+    def test_l0_detail_level_no_l1_fields(self):
+        """L0 should not include L1 fields."""
+        analyzer = MockAnalyzer()
+        segment = SegmentInfo(
+            id="part_0001",
+            start_time=0.0,
+            end_time=60.0,
+            video_path="segments/test.mp4",
+            frames=["frame1.jpg", "frame2.jpg"],
+        )
+        result = analyzer.analyze_segment(segment, Path("/tmp"), 3, 3, "L0")
+        assert result.scene_label is None
+        assert result.what_changed is None
+
+    def test_l1_detail_level_includes_l1_fields(self):
+        """L1 should include L1 fields."""
+        analyzer = MockAnalyzer()
+        segment = SegmentInfo(
+            id="part_0001",
+            start_time=0.0,
+            end_time=60.0,
+            video_path="segments/test.mp4",
+            frames=["frame1.jpg", "frame2.jpg"],
+        )
+        result = analyzer.analyze_segment(segment, Path("/tmp"), 3, 3, "L1")
+        assert result.scene_label is not None
+        assert result.what_changed is not None
+
+
 class TestClaudeAnalyzer:
     """Test ClaudeAnalyzer with mock client."""
 

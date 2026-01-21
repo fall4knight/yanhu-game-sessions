@@ -65,24 +65,51 @@ def get_segment_description(
 ) -> str:
     """Get description for a segment from analysis or return placeholder.
 
+    Priority: facts (first) > caption > TODO
+
     Args:
         segment: Segment info from manifest
         session_dir: Path to session directory (needed to load analysis)
 
     Returns:
-        Analysis caption if available, otherwise TODO placeholder
+        Description from analysis (facts or caption) if available, otherwise TODO
     """
     if segment.analysis_path and session_dir:
         analysis_file = session_dir / segment.analysis_path
         if analysis_file.exists():
             try:
                 analysis = AnalysisResult.load(analysis_file)
-                if analysis.caption:
-                    return analysis.caption
+                description = analysis.get_description()
+                if description:
+                    return description
             except (OSError, KeyError):
                 pass  # Fall through to TODO
 
     return "TODO: describe what happened"
+
+
+def get_segment_l1_fields(
+    segment: SegmentInfo,
+    session_dir: Path | None = None,
+) -> tuple[str | None, list[str]]:
+    """Get L1 fields (what_changed, ui_key_text) from analysis.
+
+    Args:
+        segment: Segment info from manifest
+        session_dir: Path to session directory (needed to load analysis)
+
+    Returns:
+        Tuple of (what_changed, ui_key_text) - both may be None/empty
+    """
+    if segment.analysis_path and session_dir:
+        analysis_file = session_dir / segment.analysis_path
+        if analysis_file.exists():
+            try:
+                analysis = AnalysisResult.load(analysis_file)
+                return (analysis.what_changed, analysis.ui_key_text or [])
+            except (OSError, KeyError):
+                pass
+    return (None, [])
 
 
 def compose_timeline(manifest: Manifest, session_dir: Path | None = None) -> str:
@@ -111,6 +138,7 @@ def compose_timeline(manifest: Manifest, session_dir: Path | None = None) -> str
         time_range = format_time_range(seg.start_time, seg.end_time)
         frames_str = format_frames_list(seg.frames)
         description = get_segment_description(seg, session_dir)
+        what_changed, ui_key_text = get_segment_l1_fields(seg, session_dir)
 
         lines.extend([
             f"### {seg.id} ({time_range})",
@@ -118,8 +146,15 @@ def compose_timeline(manifest: Manifest, session_dir: Path | None = None) -> str
             f"**Frames**: {frames_str}",
             "",
             f"> {description}",
-            "",
         ])
+
+        # Add L1 fields if present
+        if what_changed:
+            lines.append(f"- change: {what_changed}")
+        if ui_key_text:
+            lines.append(f"- ui: {', '.join(ui_key_text)}")
+
+        lines.append("")
 
     return "\n".join(lines)
 
