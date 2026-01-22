@@ -11,6 +11,15 @@ from pathlib import Path
 
 
 @dataclass
+class OcrItem:
+    """A single OCR text item with source tracking."""
+
+    text: str
+    t_rel: float  # Relative time in seconds (estimated)
+    source_frame: str  # Frame filename (e.g., "frame_0005.jpg")
+
+
+@dataclass
 class ClaudeResponse:
     """Response from Claude API."""
 
@@ -26,8 +35,11 @@ class ClaudeResponse:
     scene_label: str | None = None
     what_changed: str | None = None
     ui_key_text: list[str] | None = None
+    ui_symbols: list[str] | None = None  # Emoji/symbols like ❤️
     player_action_guess: str | None = None
     hook_detail: str | None = None
+    # OCR items with source tracking (for ASR alignment)
+    ocr_items: list[OcrItem] | None = None
 
 
 class ClaudeClientError(Exception):
@@ -59,11 +71,13 @@ Schema:
   "scene_type": "dialogue|choice|combat|menu|cutscene|unknown",
   "scene_label": "Loading|Menu|Cutscene|Combat|Dialogue|Error|TVTest|Unknown",
   "ocr_text": ["string array"],
+  "ocr_items": [{{"text": "string", "frame_idx": 1}}],
   "facts": ["string array"],
   "caption": "string",
   "confidence": "low|med|high",
   "what_changed": "string",
   "ui_key_text": ["string array"],
+  "ui_symbols": ["string array"],
   "player_action_guess": "string",
   "hook_detail": "string"
 }}
@@ -215,17 +229,22 @@ Output ONLY valid JSON:"""
   "scene_type": "枚举值",
   "scene_label": "Loading|Menu|Cutscene|Combat|Dialogue|Error|TVTest|Unknown",
   "ocr_text": ["文字1", "文字2"],
+  "ocr_items": [
+    {{"text": "字幕句子1", "frame_idx": 1}},
+    {{"text": "字幕句子2", "frame_idx": 3}}
+  ],
   "facts": ["客观事实1", "客观事实2"],
   "caption": "一句话客观总结",
   "confidence": "low|med|high",
   "what_changed": "描述变化或状态",
-  "ui_key_text": ["关键UI文字1"],
+  "ui_key_text": ["关键台词1", "关键台词2"],
+  "ui_symbols": ["❤️"],
   "player_action_guess": "可能...|疑似...",
   "hook_detail": "一条可咀嚼细节"
 }}
 
 【重要】文本提取规则——排除平台水印/用户名/Logo：
-【必须排除的文本类型】（绝对不要写入 ocr_text 或 ui_key_text）：
+【必须排除的文本类型】（绝对不要写入 ocr_text/ocr_items/ui_key_text）：
   - 平台水印：小红书、抖音、B站、快手、YouTube、Twitch
   - 用户相关：@用户名、作者名、账号ID、头像旁文字、粉丝数
   - 交互按钮：关注、点赞、收藏、分享、评论、转发、下载
@@ -257,16 +276,32 @@ Output ONLY valid JSON:"""
    - "TVTest"：测试画面、彩条、非游戏内容
    - "Unknown"：无法判断
 
-3. ocr_text（最多8条，只收集剧情相关文本）：
+3. ocr_text（最多8条，完整覆盖本段字幕——召回优先）：
+   【核心要求——完整覆盖】：
+   - 尽可能完整收集本段画面中出现的所有字幕/台词句子
+   - 优先收集"变化的句子"（不同帧间出现的不同字幕）
+   - 每条字幕必须完整一句（允许有错字，但禁止截断半句）
+   - 不要只取第一条——要覆盖本段内所有可见的字幕句
+   【逐字保真——禁止纠错】：
+   - 字幕原文必须逐字保留，完全按画面显示输出
+   - 禁止纠错、润色、替换量词（如"只/支""副/幅"等）
+   - 即使识别出错字也原样保留（如"一只步摇"不要改成"一支步摇"）
    【识别技巧】字幕/对白通常为：
      - 成行文本、对话框区域、带描边/阴影/半透明背景
      - 靠近人物或画面中央/下方，但位置不限（可能在中间/上方/对话框内）
      - 与画面内容相关的叙事性文字
-   - 每条文本尽量完整（不要断成单字/碎片）
    - 若画面有多块文本：先判断哪块是剧情字幕/台词，只提取那部分
    - 无法识别或全是水印/平台UI则返回空数组 []
 
-4. facts（1到{max_facts}条"硬事实"短句）：
+4. ocr_items（带帧索引的字幕列表——用于时间对齐）：
+   - 将 ocr_text 中的每条字幕关联到首次出现的帧索引
+   - frame_idx 从 1 开始（第1张图=1，第2张=2...）
+   - 用于后续 ASR 时间戳对齐
+   - 格式: [{{"text": "字幕句子", "frame_idx": 1}}, ...]
+   - text 必须与 ocr_text 一致（逐字保真，禁止纠错）
+   - 若无字幕则返回空数组 []
+
+5. facts（1到{max_facts}条"硬事实"短句）：
    【只允许写画面可直接观察到的内容】：
    - 镜头类型：特写/中景/远景/切镜/多画面
    - 字幕存在：是否有字幕/配字，大致位置（底部/中央/上方），颜色/描边
@@ -294,14 +329,14 @@ Output ONLY valid JSON:"""
    - 错误："嫦娥飞天"（身份推断）
    - 错误："战斗场面"（无血条/技能栏证据时禁止使用）
 
-5. caption：一句话客观总结（作为 fallback）
+6. caption：一句话客观总结（作为 fallback）
 
-6. confidence：对分析结果的置信度
+7. confidence：对分析结果的置信度
    - "high"：画面清晰、信息明确
    - "med"：部分模糊或不确定
    - "low"：画面不清或无法判断
 
-7. what_changed（必填，基于可观测变化）：
+8. what_changed（必填，基于可观测变化）：
    - 引用可观测的变化：字幕内容变化/镜头切换/特效出现/UI变化
    - 避免剧情脑补（如"剧情推进""故事发展"）
    【禁止使用主观姿态/情绪词】：
@@ -317,20 +352,35 @@ Output ONLY valid JSON:"""
      - "出现技能释放特效"
      - "对话框消失，进入过场画面"
 
-8. ui_key_text（0-2条，优先字幕/台词）：
-   - 若画面存在明显字幕/台词，必须优先取其中一句完整句子
-   - 其次为：系统提示/选项文本/游戏内关键UI
-   - 【禁止】平台水印/用户名/点赞收藏等（同上排除规则）
+9. ui_key_text（0-2条，从 ocr_text 中选最关键的）：
+   【选择优先级——关键句优先】：
+   - 【人物/事件名】含公主/太和/王位/玉簪/步摇/遗物/封号等名词的句子
+   - 【转折词句】含 但/却/只/只留/不见/最后/其实/原来 的句子
+   - 【强情绪问句】含 ?/？/!/！ 的反问句或感叹句
+   - 【梗点关键词】含 daddy/爸/都做过/拍拖/那我算什么/男人/女人 的句子
+   【示例应优先入选】：
+   - "其实就是太和公主"
+   - "公主不见踪影"
+   - "只留一支素雅的步摇"
+   - "却再也没有回来"
+   【禁止】平台水印/用户名/点赞收藏等（同上排除规则）
    - 可为空数组 []
 
-9. player_action_guess（推断放这里）：
-   - 所有"身份判断/剧情推断/情绪推断"都放这里，而非 facts
-   - 必须带不确定性措辞："可能..."、"疑似..."、"看起来..."
-   - 保持一句话短句
-   - 示例："可能是角色释放大招"、"疑似剧情回忆片段"
-   - 如无法猜测可为空字符串 ""
+10. ui_symbols（0-3条，画面中的明显符号/emoji）：
+   - 检测画面中是否出现明显的【心形/emoji/特殊符号/图标】
+   - 优先写 emoji 本身（如 "❤️"、"💔"、"😢"、"🔥"）
+   - 若无法确定具体 emoji，写标签（如 "heart"、"broken_heart"、"fire"）
+   - 只记录画面中实际显示的符号，不要推断
+   - 可为空数组 []
 
-10. hook_detail（可选）：
+11. player_action_guess（推断放这里）：
+    - 所有"身份判断/剧情推断/情绪推断"都放这里，而非 facts
+    - 必须带不确定性措辞："可能..."、"疑似..."、"看起来..."
+    - 保持一句话短句
+    - 示例："可能是角色释放大招"、"疑似剧情回忆片段"
+    - 如无法猜测可为空字符串 ""
+
+12. hook_detail（可选）：
     - 一条值得注意的细节（画面细节、数值、特殊元素等）
     - 可为空字符串 ""
 
@@ -516,6 +566,22 @@ Output ONLY valid JSON:"""
             if scene_type not in self.SCENE_TYPES:
                 scene_type = "unknown"
 
+            # Parse ocr_items with frame_idx
+            raw_ocr_items = data.get("ocr_items", [])
+            ocr_items = None
+            if raw_ocr_items:
+                ocr_items = []
+                for item in raw_ocr_items:
+                    if isinstance(item, dict) and "text" in item:
+                        frame_idx = item.get("frame_idx", 1)
+                        # Create OcrItem with placeholder values
+                        # (t_rel and source_frame will be set by analyzer)
+                        ocr_items.append(OcrItem(
+                            text=item["text"],
+                            t_rel=0.0,  # Will be calculated by analyzer
+                            source_frame=f"frame_{frame_idx:04d}.jpg",
+                        ))
+
             return ClaudeResponse(
                 scene_type=scene_type,
                 ocr_text=data.get("ocr_text", []),
@@ -527,8 +593,10 @@ Output ONLY valid JSON:"""
                 scene_label=data.get("scene_label"),
                 what_changed=data.get("what_changed"),
                 ui_key_text=data.get("ui_key_text"),
+                ui_symbols=data.get("ui_symbols"),
                 player_action_guess=data.get("player_action_guess"),
                 hook_detail=data.get("hook_detail"),
+                ocr_items=ocr_items,
             )
         except json.JSONDecodeError as e:
             # Truncate raw_text to 500 chars to avoid bloating analysis files
@@ -666,6 +734,20 @@ class FakeClaudeClient:
             if scene_type not in ClaudeClient.SCENE_TYPES:
                 scene_type = "unknown"
 
+            # Parse ocr_items with frame_idx
+            raw_ocr_items = data.get("ocr_items", [])
+            ocr_items = None
+            if raw_ocr_items:
+                ocr_items = []
+                for item in raw_ocr_items:
+                    if isinstance(item, dict) and "text" in item:
+                        frame_idx = item.get("frame_idx", 1)
+                        ocr_items.append(OcrItem(
+                            text=item["text"],
+                            t_rel=0.0,
+                            source_frame=f"frame_{frame_idx:04d}.jpg",
+                        ))
+
             return ClaudeResponse(
                 scene_type=scene_type,
                 ocr_text=data.get("ocr_text", []),
@@ -676,8 +758,10 @@ class FakeClaudeClient:
                 scene_label=data.get("scene_label"),
                 what_changed=data.get("what_changed"),
                 ui_key_text=data.get("ui_key_text"),
+                ui_symbols=data.get("ui_symbols"),
                 player_action_guess=data.get("player_action_guess"),
                 hook_detail=data.get("hook_detail"),
+                ocr_items=ocr_items,
             )
         except json.JSONDecodeError as e:
             return ClaudeResponse(

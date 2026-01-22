@@ -643,3 +643,122 @@ class TestClaudeClientHasRetryConstants:
         assert hasattr(ClaudeClient, "JSON_REPAIR_PROMPT")
         assert "Schema" in ClaudeClient.JSON_REPAIR_PROMPT
         assert "{raw_text}" in ClaudeClient.JSON_REPAIR_PROMPT
+
+
+class TestOcrEnhancedPrompt:
+    """Test OCR enhancement features in prompt."""
+
+    def test_prompt_has_ocr_items_field(self):
+        """L1 prompt should include ocr_items output format."""
+        client = ClaudeClient.__new__(ClaudeClient)
+        prompt = client._get_prompt_text(detail_level="L1")
+
+        assert "ocr_items" in prompt
+        assert "frame_idx" in prompt
+
+    def test_prompt_emphasizes_complete_coverage(self):
+        """L1 prompt should emphasize complete OCR coverage."""
+        client = ClaudeClient.__new__(ClaudeClient)
+        prompt = client._get_prompt_text(detail_level="L1")
+
+        # Key phrases for complete coverage
+        assert "完整覆盖" in prompt or "完整收集" in prompt
+        assert "禁止截断" in prompt or "完整一句" in prompt
+
+    def test_prompt_has_key_sentence_priority(self):
+        """L1 prompt should have key sentence priority rules for ui_key_text."""
+        client = ClaudeClient.__new__(ClaudeClient)
+        prompt = client._get_prompt_text(detail_level="L1")
+
+        # Priority keywords
+        assert "公主" in prompt
+        assert "转折词" in prompt or ("但" in prompt and "却" in prompt)
+        assert "不见" in prompt or "只留" in prompt
+        assert "问句" in prompt or "反问" in prompt
+
+    def test_prompt_has_ocr_recall_priority(self):
+        """L1 prompt should prioritize recall for ocr_text."""
+        client = ClaudeClient.__new__(ClaudeClient)
+        prompt = client._get_prompt_text(detail_level="L1")
+
+        # Recall-oriented language
+        assert "召回" in prompt or "变化的句子" in prompt
+
+    def test_prompt_excludes_platform_watermarks(self):
+        """L1 prompt should exclude platform watermarks."""
+        client = ClaudeClient.__new__(ClaudeClient)
+        prompt = client._get_prompt_text(detail_level="L1")
+
+        # Platform watermark exclusion
+        assert "小红书" in prompt
+        assert "抖音" in prompt
+        assert "用户名" in prompt
+
+
+class TestOcrItemsParsing:
+    """Test ocr_items parsing from JSON response."""
+
+    def test_fake_client_parses_ocr_items(self):
+        """FakeClaudeClient should parse ocr_items correctly."""
+        from yanhu.claude_client import FakeClaudeClient
+
+        json_response = '''{
+            "scene_type": "dialogue",
+            "ocr_text": ["公主不见踪影", "只留一支素雅的步摇"],
+            "ocr_items": [
+                {"text": "公主不见踪影", "frame_idx": 1},
+                {"text": "只留一支素雅的步摇", "frame_idx": 3}
+            ],
+            "facts": ["有字幕"],
+            "caption": "公主场景",
+            "confidence": "high"
+        }'''
+
+        fake_client = FakeClaudeClient([json_response])
+        from pathlib import Path
+        response = fake_client.analyze_frames([Path("/fake/frame.jpg")])
+
+        assert response.ocr_items is not None
+        assert len(response.ocr_items) == 2
+        assert response.ocr_items[0].text == "公主不见踪影"
+        assert response.ocr_items[0].source_frame == "frame_0001.jpg"
+        assert response.ocr_items[1].text == "只留一支素雅的步摇"
+        assert response.ocr_items[1].source_frame == "frame_0003.jpg"
+
+    def test_fake_client_handles_empty_ocr_items(self):
+        """FakeClaudeClient should handle empty ocr_items."""
+        from yanhu.claude_client import FakeClaudeClient
+
+        json_response = '''{
+            "scene_type": "cutscene",
+            "ocr_text": [],
+            "ocr_items": [],
+            "facts": ["无字幕"],
+            "caption": "过场动画",
+            "confidence": "high"
+        }'''
+
+        fake_client = FakeClaudeClient([json_response])
+        from pathlib import Path
+        response = fake_client.analyze_frames([Path("/fake/frame.jpg")])
+
+        assert response.ocr_items is None or response.ocr_items == []
+
+    def test_fake_client_handles_missing_ocr_items(self):
+        """FakeClaudeClient should handle missing ocr_items (backward compat)."""
+        from yanhu.claude_client import FakeClaudeClient
+
+        json_response = '''{
+            "scene_type": "dialogue",
+            "ocr_text": ["some text"],
+            "facts": ["有字幕"],
+            "caption": "场景",
+            "confidence": "high"
+        }'''
+
+        fake_client = FakeClaudeClient([json_response])
+        from pathlib import Path
+        response = fake_client.analyze_frames([Path("/fake/frame.jpg")])
+
+        # Should not error, ocr_items should be None or empty
+        assert response.ocr_items is None or response.ocr_items == []

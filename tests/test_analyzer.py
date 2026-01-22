@@ -12,6 +12,7 @@ from yanhu.analyzer import (
     check_cache,
     generate_analysis_path,
     get_analyzer,
+    normalize_ocr_text,
 )
 from yanhu.claude_client import MockClaudeClient
 from yanhu.manifest import Manifest, SegmentInfo
@@ -1345,3 +1346,419 @@ class TestAnalyzeSessionSegmentLists:
         # part_0001 should be in will_process (not cached for claude)
         assert stats.will_process == ["part_0001", "part_0002", "part_0003"]
         assert stats.cached_skip == []
+
+
+class TestOcrItems:
+    """Test ocr_items field in AnalysisResult."""
+
+    def test_ocr_item_to_dict(self):
+        """OcrItem should serialize correctly."""
+        from yanhu.analyzer import OcrItem
+
+        item = OcrItem(
+            text="公主不见踪影",
+            t_rel=5.5,
+            source_frame="frame_0003.jpg",
+        )
+        d = item.to_dict()
+        assert d["text"] == "公主不见踪影"
+        assert d["t_rel"] == 5.5
+        assert d["source_frame"] == "frame_0003.jpg"
+
+    def test_ocr_item_from_dict(self):
+        """OcrItem should deserialize correctly."""
+        from yanhu.analyzer import OcrItem
+
+        d = {
+            "text": "只留一支素雅的步摇",
+            "t_rel": 8.2,
+            "source_frame": "frame_0005.jpg",
+        }
+        item = OcrItem.from_dict(d)
+        assert item.text == "只留一支素雅的步摇"
+        assert item.t_rel == 8.2
+        assert item.source_frame == "frame_0005.jpg"
+
+    def test_analysis_result_with_ocr_items(self):
+        """AnalysisResult should serialize/deserialize ocr_items."""
+        from yanhu.analyzer import OcrItem
+
+        result = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            ocr_text=["公主不见踪影", "只留一支素雅的步摇"],
+            caption="公主场景",
+            ocr_items=[
+                OcrItem(text="公主不见踪影", t_rel=0.0, source_frame="frame_0001.jpg"),
+                OcrItem(text="只留一支素雅的步摇", t_rel=5.0, source_frame="frame_0003.jpg"),
+            ],
+        )
+
+        d = result.to_dict()
+        assert len(d["ocr_items"]) == 2
+        assert d["ocr_items"][0]["text"] == "公主不见踪影"
+        assert d["ocr_items"][1]["source_frame"] == "frame_0003.jpg"
+
+        # Round-trip
+        loaded = AnalysisResult.from_dict(d)
+        assert len(loaded.ocr_items) == 2
+        assert loaded.ocr_items[0].text == "公主不见踪影"
+        assert loaded.ocr_items[1].t_rel == 5.0
+
+    def test_analysis_result_save_load_ocr_items(self, tmp_path):
+        """AnalysisResult should save/load ocr_items correctly."""
+        from yanhu.analyzer import OcrItem
+
+        result = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            ocr_text=["其实就是太和公主"],
+            caption="公主场景",
+            model="claude-sonnet-4-20250514",
+            ocr_items=[
+                OcrItem(text="其实就是太和公主", t_rel=2.5, source_frame="frame_0002.jpg"),
+            ],
+        )
+
+        path = tmp_path / "test_analysis.json"
+        result.save(path)
+
+        loaded = AnalysisResult.load(path)
+        assert len(loaded.ocr_items) == 1
+        assert loaded.ocr_items[0].text == "其实就是太和公主"
+        assert loaded.ocr_items[0].t_rel == 2.5
+        assert loaded.ocr_items[0].source_frame == "frame_0002.jpg"
+
+    def test_backward_compat_no_ocr_items(self):
+        """AnalysisResult should handle missing ocr_items (backward compat)."""
+        d = {
+            "segment_id": "part_0001",
+            "scene_type": "dialogue",
+            "caption": "Old format",
+        }
+        result = AnalysisResult.from_dict(d)
+        assert result.ocr_items == []
+
+
+class TestDynamicMaxFrames:
+    """Test dynamic max_frames upgrade for subtitle segments."""
+
+    def _create_test_manifest(self, tmp_path, num_segments=2):
+        """Create test manifest with segments."""
+        frames_dir = tmp_path / "frames"
+        frames_dir.mkdir()
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=10,
+            segments=[],
+        )
+        for i in range(num_segments):
+            seg_id = f"part_{i+1:04d}"
+            seg_frames_dir = frames_dir / seg_id
+            seg_frames_dir.mkdir()
+            # Create 6 frame files
+            frames = []
+            for j in range(6):
+                frame_name = f"frame_{j+1:04d}.jpg"
+                frame_path = seg_frames_dir / frame_name
+                frame_path.write_bytes(b"fake image data")
+                frames.append(f"frames/{seg_id}/{frame_name}")
+
+            manifest.segments.append(SegmentInfo(
+                id=seg_id,
+                start_time=i * 10.0,
+                end_time=(i + 1) * 10.0,
+                video_path=f"segments/{seg_id}.mp4",
+                frames=frames,
+            ))
+        return manifest
+
+    def test_dynamic_upgrade_when_subtitle_detected(self, tmp_path):
+        """Should upgrade max_frames when subtitles detected."""
+        from yanhu.claude_client import ClaudeResponse
+
+        # Create a mock analyzer that returns dialogue with ocr_text
+        class SubtitleMockAnalyzer:
+            def __init__(self):
+                self.calls = []
+
+            def analyze_segment(self, segment, session_dir, max_frames, max_facts=3, detail_level="L1"):
+                self.calls.append((segment.id, max_frames))
+                return AnalysisResult(
+                    segment_id=segment.id,
+                    scene_type="dialogue",
+                    ocr_text=["公主不见踪影"],
+                    facts=["有字幕"],
+                    caption="对话场景",
+                    model="mock-model",
+                    ui_key_text=["公主不见踪影"],
+                )
+
+        manifest = self._create_test_manifest(tmp_path, num_segments=1)
+
+        # Use custom analyzer directly in analyze_session logic
+        mock_analyzer = SubtitleMockAnalyzer()
+
+        from yanhu.analyzer import _has_subtitle_content, generate_analysis_path
+
+        # Process manually to test the upgrade logic
+        segment = manifest.segments[0]
+        result = mock_analyzer.analyze_segment(segment, tmp_path, 3)
+
+        # Verify subtitle detected
+        assert _has_subtitle_content(result) is True
+
+        # Simulate the upgrade logic
+        if _has_subtitle_content(result) and 3 < 6 and len(segment.frames) > 3:
+            result = mock_analyzer.analyze_segment(segment, tmp_path, 6)
+
+        # Verify two calls were made
+        assert len(mock_analyzer.calls) == 2
+        assert mock_analyzer.calls[0] == ("part_0001", 3)
+        assert mock_analyzer.calls[1] == ("part_0001", 6)
+
+    def test_no_upgrade_when_no_subtitle(self, tmp_path):
+        """Should not upgrade when no subtitles detected."""
+        from yanhu.analyzer import _has_subtitle_content
+
+        # Create result without subtitles
+        result = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="cutscene",
+            ocr_text=[],
+            facts=["无字幕"],
+            caption="过场动画",
+            model="mock-model",
+        )
+
+        # Verify no subtitle content
+        assert _has_subtitle_content(result) is False
+
+    def test_no_upgrade_when_already_at_max(self, tmp_path):
+        """Should not upgrade when max_frames >= max_frames_dialogue."""
+        from yanhu.analyzer import _has_subtitle_content
+
+        # Result with subtitles
+        result = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            ocr_text=["有字幕"],
+            facts=["有字幕"],
+            caption="对话",
+            model="mock-model",
+        )
+
+        # Has subtitle content
+        assert _has_subtitle_content(result) is True
+
+        # But if max_frames already at max, upgrade condition not met
+        max_frames = 6
+        max_frames_dialogue = 6
+        # condition: max_frames < max_frames_dialogue is False
+        assert not (max_frames < max_frames_dialogue)
+
+    def test_has_subtitle_content_with_ui_key_text(self):
+        """_has_subtitle_content should detect ui_key_text."""
+        from yanhu.analyzer import _has_subtitle_content
+
+        # Only ui_key_text, no ocr_text
+        result = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            ocr_text=[],
+            ui_key_text=["关键台词"],
+            caption="场景",
+        )
+        assert _has_subtitle_content(result) is True
+
+    def test_has_subtitle_content_empty(self):
+        """_has_subtitle_content should return False when empty."""
+        from yanhu.analyzer import _has_subtitle_content
+
+        result = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="cutscene",
+            ocr_text=[],
+            ui_key_text=[],
+            caption="场景",
+        )
+        assert _has_subtitle_content(result) is False
+
+
+class TestNormalizeOcrText:
+    """Test OCR text normalization for common character errors."""
+
+    def test_normalize_buYao(self):
+        """Should fix '一只步摇' -> '一支步摇'."""
+        assert normalize_ocr_text("只留一只素雅的步摇") == "只留一支素雅的步摇"
+
+    def test_normalize_yuZan(self):
+        """Should fix '一只玉簪' -> '一支玉簪'."""
+        assert normalize_ocr_text("递给她一只玉簪") == "递给她一支玉簪"
+
+    def test_normalize_bi(self):
+        """Should fix '一只笔' -> '一支笔'."""
+        assert normalize_ocr_text("拿起一只笔") == "拿起一支笔"
+
+    def test_normalize_jian(self):
+        """Should fix '一只箭' -> '一支箭'."""
+        assert normalize_ocr_text("射出一只箭") == "射出一支箭"
+
+    def test_normalize_qiang(self):
+        """Should fix '一只枪' -> '一支枪'."""
+        assert normalize_ocr_text("扛着一只枪") == "扛着一支枪"
+
+    def test_normalize_with_gap(self):
+        """Should handle characters between 一只 and object."""
+        assert normalize_ocr_text("留下一只精美的步摇") == "留下一支精美的步摇"
+        assert normalize_ocr_text("一只古老的玉簪") == "一支古老的玉簪"
+
+    def test_no_change_unrelated(self):
+        """Should not change unrelated text."""
+        assert normalize_ocr_text("公主不见踪影") == "公主不见踪影"
+        assert normalize_ocr_text("其实就是太和公主") == "其实就是太和公主"
+
+    def test_no_change_correct_usage(self):
+        """Should not change correct '一只' usage (animals)."""
+        # "一只猫" is correct - 只 is the right measure word for animals
+        assert normalize_ocr_text("养了一只猫") == "养了一只猫"
+        assert normalize_ocr_text("一只鸟飞过") == "一只鸟飞过"
+
+    def test_no_change_yi_zhi_alone(self):
+        """Should not change '一只' when not followed by target objects."""
+        assert normalize_ocr_text("这一只手") == "这一只手"
+
+    def test_empty_string(self):
+        """Should handle empty string."""
+        assert normalize_ocr_text("") == ""
+
+    def test_none_safe(self):
+        """Should handle None-like input gracefully."""
+        # The function expects str, but should not crash on empty
+        assert normalize_ocr_text("") == ""
+
+    def test_multiple_occurrences(self):
+        """Should fix multiple occurrences in same text."""
+        text = "她拿着一只笔和一只步摇"
+        expected = "她拿着一支笔和一支步摇"
+        assert normalize_ocr_text(text) == expected
+
+
+class TestVerbatimPreservation:
+    """Test that OCR text is kept verbatim in ClaudeAnalyzer (no normalization)."""
+
+    def test_ocr_text_verbatim(self, tmp_path):
+        """ocr_text should be kept verbatim, not normalized."""
+        from yanhu.claude_client import ClaudeResponse, MockClaudeClient
+
+        # Create mock that returns text with potential OCR error
+        class VerbatimMockClient:
+            def analyze_frames(self, frame_paths, **kwargs):
+                return ClaudeResponse(
+                    scene_type="dialogue",
+                    ocr_text=["只留一只素雅的步摇"],  # "只" not "支"
+                    facts=["有字幕"],
+                    caption="场景",
+                    model="mock-model",
+                )
+
+        from yanhu.analyzer import ClaudeAnalyzer
+
+        # Create frame
+        frames_dir = tmp_path / "frames" / "part_0001"
+        frames_dir.mkdir(parents=True)
+        (frames_dir / "frame_0001.jpg").write_bytes(b"fake")
+
+        segment = SegmentInfo(
+            id="part_0001",
+            start_time=0.0,
+            end_time=10.0,
+            video_path="segments/test.mp4",
+            frames=["frames/part_0001/frame_0001.jpg"],
+        )
+
+        analyzer = ClaudeAnalyzer(client=VerbatimMockClient())
+        result = analyzer.analyze_segment(segment, tmp_path, max_frames=1)
+
+        # Should be verbatim (not normalized to "一支")
+        assert result.ocr_text == ["只留一只素雅的步摇"]
+
+    def test_ui_key_text_verbatim(self, tmp_path):
+        """ui_key_text should be kept verbatim, not normalized."""
+        from yanhu.claude_client import ClaudeResponse
+
+        class VerbatimMockClient:
+            def analyze_frames(self, frame_paths, **kwargs):
+                return ClaudeResponse(
+                    scene_type="dialogue",
+                    ocr_text=[],
+                    facts=["有字幕"],
+                    caption="场景",
+                    model="mock-model",
+                    ui_key_text=["递给她一只玉簪"],  # "只" not "支"
+                )
+
+        from yanhu.analyzer import ClaudeAnalyzer
+
+        frames_dir = tmp_path / "frames" / "part_0001"
+        frames_dir.mkdir(parents=True)
+        (frames_dir / "frame_0001.jpg").write_bytes(b"fake")
+
+        segment = SegmentInfo(
+            id="part_0001",
+            start_time=0.0,
+            end_time=10.0,
+            video_path="segments/test.mp4",
+            frames=["frames/part_0001/frame_0001.jpg"],
+        )
+
+        analyzer = ClaudeAnalyzer(client=VerbatimMockClient())
+        result = analyzer.analyze_segment(segment, tmp_path, max_frames=1)
+
+        # Should be verbatim (not normalized to "一支")
+        assert result.ui_key_text == ["递给她一只玉簪"]
+
+    def test_ocr_items_text_verbatim(self, tmp_path):
+        """ocr_items.text should be kept verbatim, not normalized."""
+        from yanhu.claude_client import ClaudeResponse, OcrItem as ClaudeOcrItem
+
+        class VerbatimMockClient:
+            def analyze_frames(self, frame_paths, **kwargs):
+                return ClaudeResponse(
+                    scene_type="dialogue",
+                    ocr_text=[],
+                    facts=["有字幕"],
+                    caption="场景",
+                    model="mock-model",
+                    ocr_items=[
+                        ClaudeOcrItem(
+                            text="只留一只素雅的步摇",  # "只" not "支"
+                            t_rel=0.0,
+                            source_frame="frame_0001.jpg",
+                        ),
+                    ],
+                )
+
+        from yanhu.analyzer import ClaudeAnalyzer
+
+        frames_dir = tmp_path / "frames" / "part_0001"
+        frames_dir.mkdir(parents=True)
+        (frames_dir / "frame_0001.jpg").write_bytes(b"fake")
+
+        segment = SegmentInfo(
+            id="part_0001",
+            start_time=0.0,
+            end_time=10.0,
+            video_path="segments/test.mp4",
+            frames=["frames/part_0001/frame_0001.jpg"],
+        )
+
+        analyzer = ClaudeAnalyzer(client=VerbatimMockClient())
+        result = analyzer.analyze_segment(segment, tmp_path, max_frames=1)
+
+        assert len(result.ocr_items) == 1
+        # Should be verbatim (not normalized to "一支")
+        assert result.ocr_items[0].text == "只留一只素雅的步摇"

@@ -3,11 +3,70 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
 from yanhu.manifest import Manifest, SegmentInfo
+
+
+# OCR normalization patterns: (pattern, replacement)
+# NOTE: Normalization is DISABLED - OCR text must be kept verbatim.
+# These patterns are kept for reference but NOT applied to output fields.
+_OCR_NORMALIZE_PATTERNS: list[tuple[re.Pattern, str]] = [
+    # "一只...步摇/玉簪/笔/箭/枪" -> "一支..."
+    (re.compile(r"一只(.{0,6}?)(步摇|玉簪|笔|箭|枪)"), r"一支\1\2"),
+]
+
+
+def normalize_ocr_text(text: str) -> str:
+    """Normalize OCR text to fix common character errors.
+
+    WARNING: This function is NOT applied to ocr_text/ui_key_text/ocr_items.
+    OCR output must be kept verbatim (逐字保真) without any corrections.
+
+    This function is kept for potential future use in non-output contexts
+    (e.g., search indexing), but is disabled for all analysis output fields.
+
+    Args:
+        text: Raw OCR text
+
+    Returns:
+        Normalized text with common errors fixed (if applied)
+    """
+    if not text:
+        return text
+
+    result = text
+    for pattern, replacement in _OCR_NORMALIZE_PATTERNS:
+        result = pattern.sub(replacement, result)
+
+    return result
+
+
+@dataclass
+class OcrItem:
+    """A single OCR text item with source tracking."""
+
+    text: str
+    t_rel: float  # Relative time in seconds (from session start)
+    source_frame: str  # Frame filename (e.g., "frame_0005.jpg")
+
+    def to_dict(self) -> dict:
+        return {
+            "text": self.text,
+            "t_rel": self.t_rel,
+            "source_frame": self.source_frame,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "OcrItem":
+        return cls(
+            text=data["text"],
+            t_rel=data.get("t_rel", 0.0),
+            source_frame=data.get("source_frame", ""),
+        )
 
 
 @dataclass
@@ -27,8 +86,11 @@ class AnalysisResult:
     scene_label: str | None = None  # Loading|Menu|Cutscene|Combat|Dialogue|Error|TVTest|Unknown
     what_changed: str | None = None  # Short description of changes
     ui_key_text: list[str] = field(default_factory=list)  # 0-2 key UI text items
+    ui_symbols: list[str] = field(default_factory=list)  # 0-3 emoji/symbols like ❤️
     player_action_guess: str | None = None  # Optional guess with uncertainty markers
     hook_detail: str | None = None  # Optional detail worth noting
+    # OCR items with source tracking (for ASR alignment)
+    ocr_items: list[OcrItem] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         result = {
@@ -54,10 +116,14 @@ class AnalysisResult:
             result["what_changed"] = self.what_changed
         if self.ui_key_text:
             result["ui_key_text"] = self.ui_key_text
+        if self.ui_symbols:
+            result["ui_symbols"] = self.ui_symbols
         if self.player_action_guess:
             result["player_action_guess"] = self.player_action_guess
         if self.hook_detail:
             result["hook_detail"] = self.hook_detail
+        if self.ocr_items:
+            result["ocr_items"] = [item.to_dict() for item in self.ocr_items]
         return result
 
     @classmethod
@@ -76,8 +142,14 @@ class AnalysisResult:
             scene_label=data.get("scene_label"),
             what_changed=data.get("what_changed"),
             ui_key_text=data.get("ui_key_text", []),
+            ui_symbols=data.get("ui_symbols", []),
             player_action_guess=data.get("player_action_guess"),
             hook_detail=data.get("hook_detail"),
+            # OCR items
+            ocr_items=[
+                OcrItem.from_dict(item)
+                for item in data.get("ocr_items", [])
+            ],
         )
 
     def save(self, output_path: Path) -> None:
@@ -278,10 +350,34 @@ class ClaudeAnalyzer:
                 frame_paths, max_facts=max_facts, detail_level=detail_level
             )
 
+            # Convert ocr_items from Claude format to AnalysisResult format
+            # Calculate t_rel based on segment start time and frame index
+            # NOTE: Text is kept verbatim - no normalization/correction applied
+            ocr_items = []
+            if response.ocr_items:
+                segment_duration = segment.end_time - segment.start_time
+                num_frames = len(frame_paths)
+                for item in response.ocr_items:
+                    # Parse frame index from source_frame (e.g., "frame_0003.jpg" -> 3)
+                    try:
+                        frame_idx = int(item.source_frame[6:10])
+                    except (ValueError, IndexError):
+                        frame_idx = 1
+                    # Estimate t_rel: segment_start + (frame_idx - 1) / num_frames * duration
+                    if num_frames > 1:
+                        t_rel = segment.start_time + (frame_idx - 1) / (num_frames - 1) * segment_duration
+                    else:
+                        t_rel = segment.start_time
+                    ocr_items.append(OcrItem(
+                        text=item.text,  # Verbatim - no normalization
+                        t_rel=round(t_rel, 2),
+                        source_frame=item.source_frame,
+                    ))
+
             return AnalysisResult(
                 segment_id=segment.id,
                 scene_type=response.scene_type,
-                ocr_text=response.ocr_text,
+                ocr_text=response.ocr_text,  # Verbatim - no normalization
                 facts=response.facts,
                 caption=response.caption,
                 confidence=response.confidence,
@@ -291,9 +387,11 @@ class ClaudeAnalyzer:
                 # L1 fields
                 scene_label=response.scene_label,
                 what_changed=response.what_changed,
-                ui_key_text=response.ui_key_text or [],
+                ui_key_text=response.ui_key_text or [],  # Verbatim - no normalization
+                ui_symbols=response.ui_symbols or [],
                 player_action_guess=response.player_action_guess,
                 hook_detail=response.hook_detail,
+                ocr_items=ocr_items,
             )
         except Exception as e:
             return AnalysisResult(
@@ -380,6 +478,8 @@ class AnalyzeStats:
     errors: int = 0
     api_calls: int = 0
     max_frames: int = 3
+    # Dynamic frames tracking
+    upgraded_segments: int = 0  # Segments that got more frames due to subtitles
 
     # Segment ID lists for dry-run reporting
     will_process: list[str] = field(default_factory=list)
@@ -392,12 +492,21 @@ class AnalyzeStats:
         return self.api_calls * self.max_frames
 
 
+def _has_subtitle_content(result: AnalysisResult) -> bool:
+    """Check if analysis result has subtitle/dialogue content.
+
+    Used to determine if a segment should get more frames for better OCR.
+    """
+    return bool(result.ocr_text) or bool(result.ui_key_text)
+
+
 def analyze_session(
     manifest: Manifest,
     session_dir: Path,
     backend: str = "mock",
     *,
     max_frames: int = 3,
+    max_frames_dialogue: int = 6,
     max_facts: int = 3,
     detail_level: str = "L1",
     force: bool = False,
@@ -413,7 +522,8 @@ def analyze_session(
         manifest: Session manifest (will be modified in place)
         session_dir: Path to session directory
         backend: Analyzer backend to use
-        max_frames: Maximum frames per segment to analyze
+        max_frames: Initial max frames per segment (for first pass)
+        max_frames_dialogue: Max frames for segments with subtitles detected (for recall)
         max_facts: Maximum facts per segment to generate
         detail_level: "L0" for basic, "L1" for enhanced fields
         force: Re-analyze even if cache exists
@@ -425,6 +535,11 @@ def analyze_session(
 
     Returns:
         AnalyzeStats with processing statistics
+
+    Notes:
+        Dynamic frame allocation: If initial analysis detects subtitles (ocr_text
+        or ui_key_text non-empty) and max_frames < max_frames_dialogue, a second
+        pass is done with more frames to improve OCR recall.
     """
     stats = AnalyzeStats(total_segments=len(manifest.segments), max_frames=max_frames)
 
@@ -471,12 +586,27 @@ def analyze_session(
     analysis_dir = session_dir / "analysis"
     analysis_dir.mkdir(exist_ok=True)
 
-    # Process segments
+    # Process segments with dynamic frame allocation
     for segment in segments_to_process:
         try:
+            # First pass: analyze with initial max_frames
             result = analyzer.analyze_segment(
                 segment, session_dir, max_frames, max_facts, detail_level
             )
+
+            # Dynamic frame upgrade: if subtitles detected and can benefit from more frames
+            if (
+                not result.error
+                and _has_subtitle_content(result)
+                and max_frames < max_frames_dialogue
+                and len(segment.frames) > max_frames
+            ):
+                # Second pass with more frames for better OCR recall
+                result = analyzer.analyze_segment(
+                    segment, session_dir, max_frames_dialogue, max_facts, detail_level
+                )
+                stats.upgraded_segments += 1
+                stats.api_calls += 1  # Count the extra API call
 
             if result.error:
                 stats.errors += 1

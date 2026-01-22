@@ -175,3 +175,61 @@ yanhu compose --session 2026-01-20_14-09-50_demo_run01
 原因：mock backend 不复用 claude 缓存，会自动重新处理
 验证：yanhu analyze --session <id> --backend mock --dry-run
 ```
+
+---
+
+## 未来规划：Highlights 原文+Summary 双层结构
+
+### 背景
+
+当前 highlights.md 输出单条文本，混合了原始台词和场景描述。为了支持：
+1. ASR 时间戳对齐
+2. 视频剪辑的精确定位
+3. 更丰富的展示（原文+总结）
+
+计划在 highlights 中引入"原文+summary"双层结构。
+
+### 设计方案
+
+每条 highlight 未来格式：
+
+```markdown
+- [00:01:20] (segment=part_0009+0010, score=302)
+  > **Quote:** "公主不见踪影" / "只留一支素雅的步摇"
+  > **Summary:** 公主失踪，遗留步摇作为线索
+```
+
+字段说明：
+- **quote**: 1-3条原文（来源优先级：ui_key_text > ocr_items > ASR）
+- **summary**: 1句客观总结（来源：facts/what_changed/caption）
+- **segment/time**: 保留现有的时间戳和 segment ID 证据链
+
+### 数据流
+
+```
+ocr_items (带 t_rel) --> ASR 对齐 --> 精确时间戳
+                    |
+                    v
+               highlights.md (quote + summary)
+```
+
+### 依赖
+
+1. `ocr_items` 字段（已实现）：
+   - `text`: 字幕原文
+   - `t_rel`: 相对时间（秒）
+   - `source_frame`: 来源帧
+
+2. ASR 对齐（待实现）：
+   - 输入：ocr_items + 音频
+   - 输出：精确时间戳
+
+3. Highlights composer 升级（待实现）：
+   - 输入：AnalysisResult with ocr_items
+   - 输出：结构化 highlight (quote + summary)
+
+### 优先级
+
+- **P0（已完成）**：ocr_items schema + 完整 OCR 提取
+- **P1（待实现）**：ASR 对齐模块
+- **P2（待实现）**：Highlights 双层结构输出
