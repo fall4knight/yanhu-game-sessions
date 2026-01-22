@@ -1,8 +1,11 @@
 """Session composition: generate timeline and overview documents."""
 
+import json
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
+from yanhu.aligner import AlignedQuote
 from yanhu.analyzer import AnalysisResult
 from yanhu.manifest import Manifest, SegmentInfo
 
@@ -63,6 +66,156 @@ def is_low_value_ui(ui_texts: list[str] | None) -> bool:
     if not ui_texts:
         return False
     return all(is_platform_watermark(t) for t in ui_texts)
+
+
+# Sentence boundary punctuation for Chinese and English
+_SENTENCE_BOUNDARIES = frozenset("。！？；，、.!?;,")
+
+
+def truncate_at_sentence_boundary(text: str, max_chars: int = 40) -> str:
+    """Truncate text at a sentence boundary, not mid-word.
+
+    Args:
+        text: Text to truncate
+        max_chars: Maximum characters (default 40)
+
+    Returns:
+        Truncated text at nearest sentence boundary
+    """
+    if not text or len(text) <= max_chars:
+        return text
+
+    # Find last sentence boundary before max_chars
+    truncated = text[:max_chars]
+    last_boundary = -1
+    for i, char in enumerate(truncated):
+        if char in _SENTENCE_BOUNDARIES:
+            last_boundary = i
+
+    # If found boundary, truncate there (include the punctuation)
+    if last_boundary > 0:
+        return text[: last_boundary + 1]
+
+    # No boundary found - return full truncated portion (no mid-word cut)
+    return truncated
+
+
+def load_aligned_quotes(analysis_path: Path) -> list[AlignedQuote]:
+    """Load aligned_quotes from analysis JSON file.
+
+    Args:
+        analysis_path: Path to analysis JSON
+
+    Returns:
+        List of AlignedQuote objects
+    """
+    if not analysis_path.exists():
+        return []
+    try:
+        with open(analysis_path, encoding="utf-8") as f:
+            data = json.load(f)
+        quotes_data = data.get("aligned_quotes", [])
+        return [AlignedQuote.from_dict(q) for q in quotes_data]
+    except (json.JSONDecodeError, OSError, KeyError, TypeError):
+        return []
+
+
+def get_highlight_quote(
+    segment: SegmentInfo,
+    session_dir: Path,
+    analysis: AnalysisResult,
+    filtered_ui: list[str],
+) -> str | None:
+    """Get quote text for highlight, with aligned_quotes priority.
+
+    Priority:
+    1. aligned_quotes with source="both" (first one) -> "ocr (asr)"
+    2. aligned_quotes with source="ocr" (first one) -> ocr text
+    3. aligned_quotes with source="asr" (first one) -> asr text
+    4. ui_key_text (filtered, first 1-2 items joined with " / ")
+    5. ocr_text (first non-empty)
+
+    Note: Does NOT apply heart emoji - caller should use apply_heart_to_chunk.
+
+    Args:
+        segment: Segment info
+        session_dir: Session directory path
+        analysis: Analysis result
+        filtered_ui: Filtered UI text
+
+    Returns:
+        Quote text (without heart emoji), or None if not available
+    """
+    # Try aligned_quotes first
+    if segment.analysis_path:
+        analysis_path = session_dir / segment.analysis_path
+        aligned_quotes = load_aligned_quotes(analysis_path)
+
+        if aligned_quotes:
+            # Priority 1: source="both" with full format
+            for q in aligned_quotes:
+                if q.source == "both" and q.ocr and q.asr:
+                    return f"{q.ocr} ({q.asr})"
+
+            # Priority 2: first ocr
+            for q in aligned_quotes:
+                if q.ocr:
+                    return q.ocr
+
+            # Priority 3: first asr
+            for q in aligned_quotes:
+                if q.asr:
+                    return q.asr
+
+    # Fallback to ui_key_text (filtered) - join up to 2 items
+    if filtered_ui:
+        if len(filtered_ui) >= 2:
+            return f"{filtered_ui[0]} / {filtered_ui[1]}"
+        return filtered_ui[0]
+
+    # Fallback to ocr_text (use pick_dialogue_text for best selection)
+    dialogue = pick_dialogue_text(analysis.ocr_text)
+    if dialogue:
+        return dialogue
+
+    # Final fallback: facts[0] or caption
+    description = analysis.get_description()
+    if description:
+        return description
+
+    return None
+
+
+def get_highlight_summary(analysis: AnalysisResult) -> str | None:
+    """Get summary text for highlight (facts[0] + what_changed).
+
+    Args:
+        analysis: Analysis result
+
+    Returns:
+        Summary text (truncated at sentence boundary), or None
+    """
+    parts = []
+
+    # facts[0]
+    if analysis.facts:
+        parts.append(analysis.facts[0])
+
+    # what_changed (truncated)
+    if analysis.what_changed:
+        truncated_change = truncate_at_sentence_boundary(
+            analysis.what_changed, max_chars=40
+        )
+        parts.append(truncated_change)
+
+    if parts:
+        return " / ".join(parts)
+
+    # Fallback to caption
+    if analysis.caption:
+        return truncate_at_sentence_boundary(analysis.caption, max_chars=40)
+
+    return None
 
 
 def format_timestamp(seconds: float) -> str:
@@ -204,6 +357,25 @@ def get_segment_asr_text(segment: SegmentInfo, session_dir: Path | None) -> str 
     return None
 
 
+def get_segment_quote(segment: SegmentInfo, session_dir: Path | None) -> str | None:
+    """Get the first aligned quote for a segment.
+
+    Uses get_first_quote from aligner for proper schema handling.
+
+    Args:
+        segment: Segment info
+        session_dir: Path to session directory
+
+    Returns:
+        First quote display text from aligned_quotes, or None if not available
+    """
+    if session_dir and segment.analysis_path:
+        from yanhu.aligner import get_first_quote
+        analysis_file = session_dir / segment.analysis_path
+        return get_first_quote(analysis_file)
+    return None
+
+
 def has_valid_claude_analysis(manifest: Manifest, session_dir: Path) -> bool:
     """Check if any segment has valid Claude analysis.
 
@@ -265,6 +437,7 @@ def compose_timeline(manifest: Manifest, session_dir: Path | None = None) -> str
         description = get_segment_description(seg, session_dir)
         what_changed, ui_key_text = get_segment_l1_fields(seg, session_dir)
         asr_text = get_segment_asr_text(seg, session_dir)
+        quote_text = get_segment_quote(seg, session_dir)
 
         lines.extend([
             f"### {seg.id} ({time_range})",
@@ -282,6 +455,9 @@ def compose_timeline(manifest: Manifest, session_dir: Path | None = None) -> str
         # Add ASR text if present
         if asr_text:
             lines.append(f"- asr: {asr_text}")
+        # Add quote if aligned_quotes exists
+        if quote_text:
+            lines.append(f"- quote: {quote_text}")
 
         lines.append("")
 
@@ -695,6 +871,17 @@ def _merge_segment_ids(id1: str, id2: str) -> str:
     return f"{prefix}{num1:04d}+{num2:04d}"
 
 
+@dataclass
+class HighlightEntry:
+    """A highlight entry with quote, summary, and metadata."""
+
+    score: int
+    segment_id: str
+    start_time: float
+    quote: str | None  # Quote text (from aligned_quotes or fallback)
+    summary: str | None  # Summary text (facts[0] / what_changed)
+
+
 def compose_highlights(
     manifest: Manifest,
     session_dir: Path,
@@ -707,9 +894,13 @@ def compose_highlights(
     1. Score all segments, filter watermarks from ui_key_text
     2. Primary selection: segments with score >= min_score only (no low-score fill)
     3. Deduplicate by ui_key_text (keep highest score)
-    4. Merge adjacent dialogue segments
+    4. Merge adjacent dialogue segments (max 2 quotes per merged entry)
     5. Take top-k from merged list
-    6. Output highlight_text as main text (ui > dialogue ocr > facts)
+    6. Output format: quote + summary line
+
+    Output format per highlight:
+    - [HH:MM:SS] <QUOTE> (segment=..., score=...)
+      - summary: <facts[0]> / <what_changed truncated>
 
     Args:
         manifest: Session manifest with segments
@@ -721,9 +912,9 @@ def compose_highlights(
         Markdown content for highlights.md
     """
     # Score all segments with valid analysis
-    # Each entry: (score, segment, analysis, filtered_ui, highlight_text)
+    # Each entry: (score, segment, analysis, filtered_ui, quote, summary)
     scored_segments: list[
-        tuple[int, SegmentInfo, AnalysisResult, list[str], str]
+        tuple[int, SegmentInfo, AnalysisResult, list[str], str | None, str | None]
     ] = []
 
     for segment in manifest.segments:
@@ -732,8 +923,9 @@ def compose_highlights(
             continue
         score = score_segment(analysis)
         filtered_ui = filter_watermarks(analysis.ui_key_text)
-        highlight_text = get_highlight_text(analysis, filtered_ui)
-        scored_segments.append((score, segment, analysis, filtered_ui, highlight_text))
+        quote = get_highlight_quote(segment, session_dir, analysis, filtered_ui)
+        summary = get_highlight_summary(analysis)
+        scored_segments.append((score, segment, analysis, filtered_ui, quote, summary))
 
     # Sort by score (descending), then by time (ascending) for same score
     scored_segments.sort(key=lambda x: (-x[0], x[1].start_time))
@@ -741,10 +933,10 @@ def compose_highlights(
     # Primary selection: score >= min_score only (strict threshold, no fill)
     seen_ui_keys: set[tuple[str, ...]] = set()
     primary_selection: list[
-        tuple[int, SegmentInfo, AnalysisResult, list[str], str]
+        tuple[int, SegmentInfo, AnalysisResult, list[str], str | None, str | None]
     ] = []
 
-    for score, segment, analysis, filtered_ui, highlight_text in scored_segments:
+    for score, segment, analysis, filtered_ui, quote, summary in scored_segments:
         # Strict min_score - segments below don't enter at all
         if score < min_score:
             continue
@@ -757,25 +949,24 @@ def compose_highlights(
             seen_ui_keys.add(ui_key)
 
         primary_selection.append(
-            (score, segment, analysis, filtered_ui, highlight_text)
+            (score, segment, analysis, filtered_ui, quote, summary)
         )
 
     # Sort primary selection by time for merging
     primary_selection.sort(key=lambda x: x[1].start_time)
 
     # Merge adjacent dialogue segments
-    # Each merged entry: (score, segment_id_str, start_time, highlight_text)
-    merged_highlights: list[tuple[int, str, float, str]] = []
+    merged_highlights: list[HighlightEntry] = []
     segment_duration = manifest.segment_duration_seconds
 
     i = 0
     while i < len(primary_selection):
-        score1, seg1, analysis1, ui1, text1 = primary_selection[i]
+        score1, seg1, analysis1, ui1, quote1, summary1 = primary_selection[i]
         has_dialogue1 = has_dialogue_content(analysis1, ui1)
 
         # Check if next segment can be merged
         if i + 1 < len(primary_selection):
-            score2, seg2, analysis2, ui2, text2 = primary_selection[i + 1]
+            score2, seg2, analysis2, ui2, quote2, summary2 = primary_selection[i + 1]
             has_dialogue2 = has_dialogue_content(analysis2, ui2)
 
             # Merge conditions: adjacent, both have dialogue, time gap <= segment_duration
@@ -786,30 +977,53 @@ def compose_highlights(
                 and _are_adjacent_segments(seg1.id, seg2.id)
                 and time_gap <= segment_duration
             ):
-                # Apply heart to each segment's text chunk separately
-                chunk1 = apply_heart_to_chunk(text1, analysis1)
-                chunk2 = apply_heart_to_chunk(text2, analysis2)
-                # Merge: use earlier time, combined text, max score, merged ID
+                # Merge: max 1 quote from each segment (total max 2)
                 merged_id = _merge_segment_ids(seg1.id, seg2.id)
-                merged_text = _merge_highlight_texts(chunk1, chunk2)
                 merged_score = max(score1, score2)
-                merged_highlights.append(
-                    (merged_score, merged_id, seg1.start_time, merged_text)
-                )
+
+                # Apply heart to each segment's quote separately
+                chunk1 = apply_heart_to_chunk(quote1, analysis1) if quote1 else None
+                chunk2 = apply_heart_to_chunk(quote2, analysis2) if quote2 else None
+
+                # Merge quotes: each segment contributes at most 1 quote
+                merged_quote = None
+                if chunk1 and chunk2:
+                    merged_quote = f"{chunk1} / {chunk2}"
+                elif chunk1:
+                    merged_quote = chunk1
+                elif chunk2:
+                    merged_quote = chunk2
+
+                # Merge summaries: prefer first, fallback to second
+                merged_summary = summary1 or summary2
+
+                merged_highlights.append(HighlightEntry(
+                    score=merged_score,
+                    segment_id=merged_id,
+                    start_time=seg1.start_time,
+                    quote=merged_quote,
+                    summary=merged_summary,
+                ))
                 i += 2  # Skip both segments
                 continue
 
-        # No merge - add single segment (apply heart to its text)
-        final_text = apply_heart_to_chunk(text1, analysis1)
-        merged_highlights.append((score1, seg1.id, seg1.start_time, final_text))
+        # No merge - add single segment (apply heart to its quote)
+        final_quote = apply_heart_to_chunk(quote1, analysis1) if quote1 else None
+        merged_highlights.append(HighlightEntry(
+            score=score1,
+            segment_id=seg1.id,
+            start_time=seg1.start_time,
+            quote=final_quote,
+            summary=summary1,
+        ))
         i += 1
 
     # Sort by score (descending) and take top-k
-    merged_highlights.sort(key=lambda x: -x[0])
+    merged_highlights.sort(key=lambda x: -x.score)
     top_highlights = merged_highlights[:top_k]
 
     # Re-sort by time for display
-    top_highlights.sort(key=lambda x: x[2])
+    top_highlights.sort(key=lambda x: x.start_time)
 
     # Generate markdown
     lines = [
@@ -819,13 +1033,18 @@ def compose_highlights(
         "",
     ]
 
-    for score, segment_id, start_time, highlight_text in top_highlights:
-        timestamp = format_timestamp(start_time)
+    for entry in top_highlights:
+        timestamp = format_timestamp(entry.start_time)
+        quote_text = entry.quote or "No quote"
 
-        # Main highlight line: highlight_text is the main content
+        # Main highlight line with quote
         lines.append(
-            f"- [{timestamp}] {highlight_text} (segment={segment_id}, score={score})"
+            f"- [{timestamp}] {quote_text} (segment={entry.segment_id}, score={entry.score})"
         )
+
+        # Summary line (indented)
+        if entry.summary:
+            lines.append(f"  - summary: {entry.summary}")
 
     # If no highlights found
     if not top_highlights:

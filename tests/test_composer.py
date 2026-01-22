@@ -2768,3 +2768,185 @@ class TestGetHighlightTextFunction:
 
         result = apply_heart_to_chunk("普通台词内容", analysis)
         assert result == "❤️ 普通台词内容"
+
+
+class TestHighlightQuoteWithAlignedQuotes:
+    """Test highlights with aligned_quotes (source=both shows ocr + asr)."""
+
+    def test_aligned_quotes_both_shows_ocr_and_asr(self, tmp_path):
+        """Highlight should show 'ocr (asr)' when source=both."""
+        import json
+        from yanhu.composer import compose_highlights
+
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+
+        # Create analysis with aligned_quotes
+        analysis_data = {
+            "segment_id": "part_0001",
+            "scene_type": "cutscene",
+            "facts": ["角色特写镜头"],
+            "what_changed": "字幕从A变为B",
+            "aligned_quotes": [
+                {"t": 5.0, "source": "both", "ocr": "搞到最後", "asr": "搞到最後真的變成你爸爸"},
+            ],
+        }
+        (analysis_dir / "part_0001.json").write_text(
+            json.dumps(analysis_data, ensure_ascii=False)
+        )
+
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    analysis_path="analysis/part_0001.json",
+                ),
+            ],
+        )
+
+        result = compose_highlights(manifest, tmp_path, min_score=0)
+
+        # Should show OCR text with ASR in parentheses
+        assert "搞到最後" in result
+        assert "(搞到最後真的變成你爸爸)" in result
+
+    def test_aligned_quotes_ocr_only(self, tmp_path):
+        """Highlight should show only OCR when source=ocr."""
+        import json
+        from yanhu.composer import compose_highlights
+
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+
+        analysis_data = {
+            "segment_id": "part_0001",
+            "scene_type": "cutscene",
+            "facts": ["角色特写镜头"],
+            "aligned_quotes": [
+                {"t": 5.0, "source": "ocr", "ocr": "只有OCR文本"},
+            ],
+        }
+        (analysis_dir / "part_0001.json").write_text(
+            json.dumps(analysis_data, ensure_ascii=False)
+        )
+
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    analysis_path="analysis/part_0001.json",
+                ),
+            ],
+        )
+
+        result = compose_highlights(manifest, tmp_path, min_score=0)
+
+        assert "只有OCR文本" in result
+        assert "(asr:" not in result
+
+    def test_no_aligned_quotes_fallback_to_ui(self, tmp_path):
+        """Should fallback to ui_key_text when no aligned_quotes."""
+        from yanhu.analyzer import AnalysisResult
+        from yanhu.composer import compose_highlights
+
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+
+        analysis = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            facts=["场景描述"],
+            ui_key_text=["对话内容"],
+        )
+        analysis.save(analysis_dir / "part_0001.json")
+
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    analysis_path="analysis/part_0001.json",
+                ),
+            ],
+        )
+
+        result = compose_highlights(manifest, tmp_path, min_score=0)
+
+        # Should fallback to ui_key_text
+        assert "对话内容" in result
+
+
+class TestHighlightSummaryLine:
+    """Test highlights include summary line with facts + what_changed."""
+
+    def test_summary_line_present(self, tmp_path):
+        """Highlight should include summary line with facts and what_changed."""
+        import json
+        from yanhu.composer import compose_highlights
+
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+
+        analysis_data = {
+            "segment_id": "part_0001",
+            "scene_type": "cutscene",
+            "facts": ["男性角色戴眼镜特写镜头"],
+            "what_changed": "字幕从搞到最後变为真成你爸了，镜头从清晰特写切换到黑白模糊画面",
+            "ui_key_text": ["真成你爸了?"],
+        }
+        (analysis_dir / "part_0001.json").write_text(
+            json.dumps(analysis_data, ensure_ascii=False)
+        )
+
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    analysis_path="analysis/part_0001.json",
+                ),
+            ],
+        )
+
+        result = compose_highlights(manifest, tmp_path, min_score=0)
+
+        # Should have summary line
+        assert "- summary:" in result
+        # Should include facts[0]
+        assert "男性角色戴眼镜特写镜头" in result
+
+    def test_summary_truncates_at_sentence_boundary(self, tmp_path):
+        """Summary should truncate at sentence boundary, not mid-word."""
+        from yanhu.composer import truncate_at_sentence_boundary
+
+        # Short text - no truncation
+        assert truncate_at_sentence_boundary("短文本", 40) == "短文本"
+
+        # Text with sentence boundary
+        text = "第一句话。第二句话很长很长很长很长很长很长很长"
+        result = truncate_at_sentence_boundary(text, 10)
+        assert result == "第一句话。"
+        assert "第二句" not in result
+
+        # Text without boundary within limit
+        text2 = "没有标点的很长很长的文本内容"
+        result2 = truncate_at_sentence_boundary(text2, 10)
+        assert len(result2) == 10
