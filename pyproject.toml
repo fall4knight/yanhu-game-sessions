@@ -27,6 +27,9 @@ dev = [
 cloud = [
     "openai>=1.0",
 ]
+asr = [
+    "faster-whisper>=1.0",
+]
 
 [project.scripts]
 yanhu = "yanhu.cli:main"

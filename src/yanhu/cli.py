@@ -5,6 +5,7 @@ from pathlib import Path
 import click
 
 from yanhu import __version__
+from yanhu.aligner import align_segment, merge_aligned_quotes_to_analysis
 from yanhu.analyzer import analyze_session
 from yanhu.composer import (
     has_valid_claude_analysis,
@@ -333,6 +334,14 @@ def analyze(
 @click.option("--force", "-f", is_flag=True, help="Re-transcribe even if ASR exists")
 @click.option("--limit", "-l", type=int, help="Only process first N segments")
 @click.option("--segments", help="Comma-separated segment IDs to process")
+@click.option("--model-size", default="base", help="Whisper model (tiny/base/small/medium/large)")
+@click.option("--language", default=None, help="Language code (zh/en/yue), default=auto")
+@click.option("--vad-filter/--no-vad-filter", default=True, help="Enable VAD filter")
+@click.option("--device", default="cpu", help="Device (cpu/cuda/auto)")
+@click.option("--compute-type", default="int8",
+              type=click.Choice(["int8", "float16", "float32"]),
+              help="Quantization type (default: int8)")
+@click.option("--beam-size", default=5, type=int, help="Beam size for decoding (default: 5)")
 def transcribe(
     session: str,
     output_dir: str,
@@ -341,6 +350,12 @@ def transcribe(
     force: bool,
     limit: int | None,
     segments: str | None,
+    model_size: str,
+    language: str | None,
+    vad_filter: bool,
+    device: str,
+    compute_type: str,
+    beam_size: int,
 ):
     """Transcribe audio from video segments using ASR.
 
@@ -350,9 +365,11 @@ def transcribe(
 
       yanhu transcribe -s demo --backend mock
 
-      yanhu transcribe -s demo --backend whisper_local --limit 1
+      yanhu transcribe -s demo --backend whisper_local --model-size small --language zh
 
-      yanhu transcribe -s demo --backend mock --segments part_0001,part_0002
+      yanhu transcribe -s demo --backend whisper_local --segments part_0001 --force
+
+      yanhu transcribe -s demo --backend whisper_local --compute-type float32 --beam-size 5
     """
     session_dir = Path(output_dir) / session
 
@@ -378,6 +395,13 @@ def transcribe(
     click.echo(f"Transcribing session: {manifest.session_id}")
     click.echo(f"  Backend: {backend}")
     click.echo(f"  Total segments: {len(manifest.segments)}")
+    if backend == "whisper_local":
+        click.echo(f"  Model: {model_size}")
+        click.echo(f"  Language: {language or 'auto'}")
+        click.echo(f"  Device: {device}")
+        click.echo(f"  Compute type: {compute_type}")
+        click.echo(f"  Beam size: {beam_size}")
+        click.echo(f"  VAD filter: {'enabled' if vad_filter else 'disabled'}")
     if max_seconds:
         click.echo(f"  Max seconds: {max_seconds}")
     if force:
@@ -409,6 +433,12 @@ def transcribe(
             limit=limit,
             segments=segment_list,
             on_progress=on_progress,
+            model_size=model_size,
+            language=language,
+            vad_filter=vad_filter,
+            device=device,
+            compute_type=compute_type,
+            beam_size=beam_size,
         )
     except ValueError as e:
         raise click.ClickException(str(e))
@@ -469,6 +499,117 @@ def compose(session: str, output_dir: str):
     else:
         click.echo("\nComposition complete!")
         click.echo("  Note: Descriptions are placeholders. Run Vision/ASR analysis to fill them.")
+
+
+@main.command()
+@click.option("--session", "-s", required=True, help="Session ID")
+@click.option("--output-dir", "-o", default="sessions", help="Output directory")
+@click.option("--window", "-w", default=1.5, type=float, help="Time window for alignment (seconds)")
+@click.option("--max-quotes", "-m", default=6, type=int, help="Max quotes per segment")
+@click.option("--force", "-f", is_flag=True, help="Re-align even if aligned_quotes exists")
+@click.option("--segments", help="Comma-separated segment IDs to process")
+def align(
+    session: str,
+    output_dir: str,
+    window: float,
+    max_quotes: int,
+    force: bool,
+    segments: str | None,
+):
+    """Align OCR and ASR text to create unified quotes.
+
+    Generates aligned_quotes in analysis/<segment>.json by matching
+    OCR text (as anchor) with ASR transcription within a time window.
+
+    Examples:
+
+      yanhu align -s demo
+
+      yanhu align -s demo --window 2.0 --max-quotes 8
+
+      yanhu align -s demo --segments part_0001,part_0004 --force
+    """
+    session_dir = Path(output_dir) / session
+
+    # Check session exists
+    if not session_dir.exists():
+        raise click.ClickException(f"Session not found: {session_dir}")
+
+    # Load manifest
+    try:
+        manifest = Manifest.load(session_dir)
+    except FileNotFoundError:
+        raise click.ClickException(f"Manifest not found in {session_dir}")
+
+    # Check segments exist
+    if not manifest.segments:
+        raise click.ClickException("No segments found. Run 'yanhu segment' first.")
+
+    # Parse segment filter
+    segment_list = None
+    if segments:
+        segment_list = [s.strip() for s in segments.split(",")]
+
+    click.echo(f"Aligning session: {manifest.session_id}")
+    click.echo(f"  Window: {window}s")
+    click.echo(f"  Max quotes: {max_quotes}")
+    click.echo(f"  Total segments: {len(manifest.segments)}")
+    if force:
+        click.echo("  Force: enabled (ignoring cache)")
+    if segment_list:
+        click.echo(f"  Filter: {segment_list}")
+
+    # Process each segment
+    processed = 0
+    skipped_cache = 0
+    skipped_filter = 0
+    skipped_no_data = 0
+
+    for segment in manifest.segments:
+        # Apply filter
+        if segment_list and segment.id not in segment_list:
+            skipped_filter += 1
+            continue
+
+        analysis_path = session_dir / "analysis" / f"{segment.id}.json"
+
+        # Check if analysis exists
+        if not analysis_path.exists():
+            skipped_no_data += 1
+            click.echo(f"  {segment.id}: no analysis (skipped)")
+            continue
+
+        # Check cache
+        if not force:
+            import json
+            try:
+                with open(analysis_path, encoding="utf-8") as f:
+                    data = json.load(f)
+                if "aligned_quotes" in data:
+                    skipped_cache += 1
+                    click.echo(f"  {segment.id}: cached (skipped)")
+                    continue
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        # Run alignment
+        aligned_quotes = align_segment(analysis_path, window, max_quotes)
+
+        if aligned_quotes:
+            merge_aligned_quotes_to_analysis(aligned_quotes, analysis_path)
+            click.echo(f"  {segment.id}: {len(aligned_quotes)} quotes")
+            processed += 1
+        else:
+            click.echo(f"  {segment.id}: no quotes (no OCR/ASR)")
+            skipped_no_data += 1
+
+    # Summary
+    click.echo("")
+    click.echo("Alignment complete!")
+    click.echo(f"  Processed: {processed}")
+    click.echo(f"  Skipped (cached): {skipped_cache}")
+    click.echo(f"  Skipped (filtered): {skipped_filter}")
+    click.echo(f"  Skipped (no data): {skipped_no_data}")
 
 
 if __name__ == "__main__":

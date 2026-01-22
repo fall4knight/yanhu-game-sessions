@@ -37,6 +37,39 @@ class AsrItem:
 
 
 @dataclass
+class AsrConfig:
+    """Configuration for ASR transcription (for reproducibility)."""
+
+    device: str = "cpu"
+    compute_type: str = "int8"
+    model_size: str = "base"
+    language: str | None = None
+    beam_size: int = 5
+    vad_filter: bool = True
+
+    def to_dict(self) -> dict:
+        return {
+            "device": self.device,
+            "compute_type": self.compute_type,
+            "model_size": self.model_size,
+            "language": self.language,
+            "beam_size": self.beam_size,
+            "vad_filter": self.vad_filter,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "AsrConfig":
+        return cls(
+            device=data.get("device", "cpu"),
+            compute_type=data.get("compute_type", "int8"),
+            model_size=data.get("model_size", "base"),
+            language=data.get("language"),
+            beam_size=data.get("beam_size", 5),
+            vad_filter=data.get("vad_filter", True),
+        )
+
+
+@dataclass
 class AsrResult:
     """Result of ASR transcription for a segment."""
 
@@ -44,6 +77,7 @@ class AsrResult:
     asr_items: list[AsrItem] = field(default_factory=list)
     asr_backend: str = "mock"
     asr_error: str | None = None
+    asr_config: AsrConfig | None = None
 
     def to_dict(self) -> dict:
         result = {
@@ -53,6 +87,8 @@ class AsrResult:
             result["asr_items"] = [item.to_dict() for item in self.asr_items]
         if self.asr_error:
             result["asr_error"] = self.asr_error
+        if self.asr_config:
+            result["asr_config"] = self.asr_config.to_dict()
         return result
 
 
@@ -166,18 +202,40 @@ class WhisperLocalBackend:
     Audio files are extracted to sessions/<id>/audio/<seg>.wav
     """
 
-    def __init__(self, model_size: str = "base"):
+    def __init__(
+        self,
+        model_size: str = "base",
+        language: str | None = None,
+        vad_filter: bool = True,
+        force_audio: bool = False,
+        device: str = "cpu",
+        compute_type: str = "int8",
+        beam_size: int = 5,
+    ):
         """Initialize Whisper backend.
 
         Args:
             model_size: Whisper model size (tiny, base, small, medium, large)
+            language: Language code (e.g., "zh", "en") or None for auto-detect
+            vad_filter: Enable VAD filter for better results (default True)
+            force_audio: Force re-extract audio even if cached
+            device: Device for inference ("cpu", "cuda", "auto")
+            compute_type: Quantization type ("int8", "float16", "float32")
+            beam_size: Beam size for decoding (default 5)
         """
         self.model_size = model_size
+        self.language = language
+        self.vad_filter = vad_filter
+        self.force_audio = force_audio
+        self.device = device
+        self.compute_type = compute_type
+        self.beam_size = beam_size
         self._model = None
+        self._backend_type: str | None = None
 
     def _extract_audio(
         self, segment: SegmentInfo, session_dir: Path
-    ) -> Path | None:
+    ) -> tuple[Path | None, str | None]:
         """Extract audio from video segment to WAV file.
 
         Args:
@@ -185,7 +243,7 @@ class WhisperLocalBackend:
             session_dir: Session directory
 
         Returns:
-            Path to extracted audio file, or None on error
+            Tuple of (audio_path, error_message)
         """
         audio_dir = session_dir / "audio"
         audio_dir.mkdir(exist_ok=True)
@@ -193,21 +251,23 @@ class WhisperLocalBackend:
         video_path = session_dir / segment.video_path
         audio_path = audio_dir / f"{segment.id}.wav"
 
-        if audio_path.exists():
-            return audio_path
+        # Use cached audio if exists and not forcing
+        if audio_path.exists() and not self.force_audio:
+            return audio_path, None
 
         if not video_path.exists():
-            return None
+            return None, f"Video file not found: {video_path}"
 
         try:
             # Extract audio using ffmpeg
+            # -vn: no video, -ac 1: mono, -ar 16000: 16kHz, -f wav: WAV format
             cmd = [
                 "ffmpeg", "-y",
                 "-i", str(video_path),
-                "-vn",  # No video
-                "-acodec", "pcm_s16le",  # PCM 16-bit
-                "-ar", "16000",  # 16kHz sample rate (Whisper default)
-                "-ac", "1",  # Mono
+                "-vn",
+                "-ac", "1",
+                "-ar", "16000",
+                "-f", "wav",
                 str(audio_path),
             ]
             subprocess.run(
@@ -215,30 +275,58 @@ class WhisperLocalBackend:
                 capture_output=True,
                 check=True,
             )
-            return audio_path
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            return None
+            return audio_path, None
+        except subprocess.CalledProcessError as e:
+            stderr = e.stderr.decode("utf-8", errors="replace") if e.stderr else ""
+            return None, f"ffmpeg failed: {stderr[:200]}"
+        except FileNotFoundError:
+            return None, "ffmpeg not found. Install ffmpeg to use whisper_local backend."
 
-    def _load_model(self):
-        """Load Whisper model (lazy initialization)."""
+    def _load_model(self) -> str | None:
+        """Load Whisper model (lazy initialization).
+
+        Returns:
+            Error message if loading failed, None on success.
+        """
         if self._model is not None:
-            return
+            return None
 
         # Try faster-whisper first, fall back to openai-whisper
         try:
             from faster_whisper import WhisperModel
-            self._model = WhisperModel(self.model_size, device="cpu")
+            self._model = WhisperModel(
+                self.model_size,
+                device=self.device,
+                compute_type=self.compute_type,
+            )
             self._backend_type = "faster_whisper"
+            return None
         except ImportError:
-            try:
-                import whisper
-                self._model = whisper.load_model(self.model_size)
-                self._backend_type = "openai_whisper"
-            except ImportError:
-                raise ImportError(
-                    "Neither faster-whisper nor openai-whisper is installed. "
-                    "Install with: pip install faster-whisper"
-                )
+            pass
+
+        try:
+            import whisper
+            self._model = whisper.load_model(self.model_size)
+            self._backend_type = "openai_whisper"
+            return None
+        except ImportError:
+            pass
+
+        return (
+            "Neither faster-whisper nor openai-whisper is installed. "
+            "Install with: pip install 'yanhu-game-sessions[asr]'"
+        )
+
+    def _get_asr_config(self) -> AsrConfig:
+        """Create AsrConfig from current settings."""
+        return AsrConfig(
+            device=self.device,
+            compute_type=self.compute_type,
+            model_size=self.model_size,
+            language=self.language,
+            beam_size=self.beam_size,
+            vad_filter=self.vad_filter,
+        )
 
     def transcribe_segment(
         self,
@@ -256,23 +344,26 @@ class WhisperLocalBackend:
         Returns:
             ASR result with transcription items
         """
+        asr_config = self._get_asr_config()
+
         # Extract audio
-        audio_path = self._extract_audio(segment, session_dir)
+        audio_path, audio_error = self._extract_audio(segment, session_dir)
         if audio_path is None:
             return AsrResult(
                 segment_id=segment.id,
                 asr_backend="whisper_local",
-                asr_error="Failed to extract audio from video segment",
+                asr_error=audio_error or "Failed to extract audio",
+                asr_config=asr_config,
             )
 
         # Load model
-        try:
-            self._load_model()
-        except ImportError as e:
+        model_error = self._load_model()
+        if model_error:
             return AsrResult(
                 segment_id=segment.id,
                 asr_backend="whisper_local",
-                asr_error=str(e),
+                asr_error=model_error,
+                asr_config=asr_config,
             )
 
         # Transcribe
@@ -280,16 +371,20 @@ class WhisperLocalBackend:
             asr_items = self._transcribe_audio(
                 audio_path, segment.start_time, max_seconds
             )
+            # Ensure monotonic timestamps
+            asr_items = _ensure_monotonic(asr_items)
             return AsrResult(
                 segment_id=segment.id,
                 asr_items=asr_items,
                 asr_backend="whisper_local",
+                asr_config=asr_config,
             )
         except Exception as e:
             return AsrResult(
                 segment_id=segment.id,
                 asr_backend="whisper_local",
                 asr_error=f"Transcription failed: {e}",
+                asr_config=asr_config,
             )
 
     def _transcribe_audio(
@@ -311,32 +406,49 @@ class WhisperLocalBackend:
         asr_items: list[AsrItem] = []
 
         if self._backend_type == "faster_whisper":
+            # faster-whisper API
+            transcribe_opts: dict = {
+                "vad_filter": self.vad_filter,
+                "beam_size": self.beam_size,
+            }
+            if self.language:
+                transcribe_opts["language"] = self.language
+
             segments, _ = self._model.transcribe(
                 str(audio_path),
-                language="zh",
-                vad_filter=True,
+                **transcribe_opts,
             )
             for seg in segments:
                 if max_seconds and seg.start > max_seconds:
                     break
-                asr_items.append(AsrItem(
-                    text=seg.text.strip(),
-                    t_start=round(segment_start + seg.start, 2),
-                    t_end=round(segment_start + seg.end, 2),
-                ))
+                text = seg.text.strip()
+                if text:  # Skip empty segments
+                    asr_items.append(AsrItem(
+                        text=text,
+                        t_start=round(segment_start + seg.start, 2),
+                        t_end=round(segment_start + seg.end, 2),
+                    ))
         else:  # openai_whisper
+            transcribe_opts: dict = {
+                "beam_size": self.beam_size,
+            }
+            if self.language:
+                transcribe_opts["language"] = self.language
+
             result = self._model.transcribe(
                 str(audio_path),
-                language="zh",
+                **transcribe_opts,
             )
             for seg in result.get("segments", []):
                 if max_seconds and seg["start"] > max_seconds:
                     break
-                asr_items.append(AsrItem(
-                    text=seg["text"].strip(),
-                    t_start=round(segment_start + seg["start"], 2),
-                    t_end=round(segment_start + seg["end"], 2),
-                ))
+                text = seg["text"].strip()
+                if text:  # Skip empty segments
+                    asr_items.append(AsrItem(
+                        text=text,
+                        t_start=round(segment_start + seg["start"], 2),
+                        t_end=round(segment_start + seg["end"], 2),
+                    ))
 
         return asr_items
 
@@ -372,11 +484,27 @@ def _ensure_monotonic(items: list[AsrItem]) -> list[AsrItem]:
     return result
 
 
-def get_asr_backend(backend: str) -> AsrBackend:
+def get_asr_backend(
+    backend: str,
+    model_size: str = "base",
+    language: str | None = None,
+    vad_filter: bool = True,
+    force_audio: bool = False,
+    device: str = "cpu",
+    compute_type: str = "int8",
+    beam_size: int = 5,
+) -> AsrBackend:
     """Get ASR backend by name.
 
     Args:
         backend: Backend name ("mock" or "whisper_local")
+        model_size: Whisper model size (for whisper_local)
+        language: Language code (for whisper_local, None = auto)
+        vad_filter: Enable VAD filter (for whisper_local)
+        force_audio: Force re-extract audio (for whisper_local)
+        device: Device for inference ("cpu", "cuda", "auto")
+        compute_type: Quantization type ("int8", "float16", "float32")
+        beam_size: Beam size for decoding (default 5)
 
     Returns:
         ASR backend instance
@@ -387,7 +515,15 @@ def get_asr_backend(backend: str) -> AsrBackend:
     if backend == "mock":
         return MockAsrBackend()
     elif backend == "whisper_local":
-        return WhisperLocalBackend()
+        return WhisperLocalBackend(
+            model_size=model_size,
+            language=language,
+            vad_filter=vad_filter,
+            force_audio=force_audio,
+            device=device,
+            compute_type=compute_type,
+            beam_size=beam_size,
+        )
     else:
         raise ValueError(f"Unknown ASR backend: {backend}")
 
@@ -454,6 +590,13 @@ def transcribe_session(
     limit: int | None = None,
     segments: list[str] | None = None,
     on_progress: Callable[[str, str, AsrResult | None], None] | None = None,
+    # Whisper-specific options
+    model_size: str = "base",
+    language: str | None = None,
+    vad_filter: bool = True,
+    device: str = "cpu",
+    compute_type: str = "int8",
+    beam_size: int = 5,
 ) -> TranscribeStats:
     """Transcribe all segments in a session.
 
@@ -466,11 +609,26 @@ def transcribe_session(
         limit: Only process first N segments
         segments: Optional list of segment IDs to process
         on_progress: Callback(segment_id, status, result)
+        model_size: Whisper model size (for whisper_local)
+        language: Language code (for whisper_local, None = auto)
+        vad_filter: Enable VAD filter (for whisper_local)
+        device: Device for inference ("cpu", "cuda", "auto")
+        compute_type: Quantization type ("int8", "float16", "float32")
+        beam_size: Beam size for decoding (default 5)
 
     Returns:
         Transcription statistics
     """
-    asr_backend = get_asr_backend(backend)
+    asr_backend = get_asr_backend(
+        backend,
+        model_size=model_size,
+        language=language,
+        vad_filter=vad_filter,
+        force_audio=force,
+        device=device,
+        compute_type=compute_type,
+        beam_size=beam_size,
+    )
     stats = TranscribeStats()
 
     for i, segment in enumerate(manifest.segments):
