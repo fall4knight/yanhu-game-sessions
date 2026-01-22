@@ -30,6 +30,9 @@ cloud = [
 asr = [
     "faster-whisper>=1.0",
 ]
+watcher = [
+    "watchdog>=3.0",
+]
 
 [project.scripts]
 yanhu = "yanhu.cli:main"

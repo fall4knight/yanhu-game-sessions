@@ -297,18 +297,23 @@ yanhu-game-sessions/
 
 ---
 
-### Milestone 7: Watcher (Optional for MVP)
+### Milestone 7: Watcher (v0.2 Skeleton)
 
-**Scope**: Automatic file detection and pipeline triggering.
+**Scope**: Automatic file detection and queue management. Pipeline triggering deferred to v0.3.
 
-**Definition of Done**: New videos in `raw/` are automatically processed.
+**Definition of Done**: New videos in `raw/` are detected and queued for later processing.
 
-**Checklist**:
-- [ ] Implement `watcher.py` using watchdog library
-- [ ] Filename parser for game detection (pattern matching or user prompt)
-- [ ] Trigger full pipeline on new file detection
-- [ ] Add systemd/launchd service config for background running
-- [ ] Write integration test with temp directory
+**Checklist** (v0.2 skeleton):
+- [x] Implement `watcher.py` using watchdog library (optional dependency)
+  - [x] VideoHandler: detect new .mp4/.mkv/.mov files
+  - [x] QueueJob dataclass: created_at, raw_path, suggested_game, status
+  - [x] Queue persistence: append to `sessions/_queue/pending.jsonl`
+- [x] Filename parser for game detection (guess_game_from_filename)
+- [x] Add CLI command `yanhu watch --raw-dir <path> --queue-dir <path>`
+- [x] Write unit tests (32 tests, no real watchdog threads)
+- [ ] (v0.3) Trigger full pipeline on new file detection
+- [ ] (v0.3) Add systemd/launchd service config for background running
+- [ ] (v0.3) Integration test with temp directory and real Observer
 
 ---
 
@@ -381,7 +386,7 @@ yanhu-game-sessions/
 | 2026-01-21 | M4: ASR Transcription | Done | transcriber.py, whisper_local backend, asr_items写回, timeline展示 |
 | 2026-01-22 | M5: Quote+Summary | Done | aligner.py, aligned_quotes双字段, highlights quote+summary格式 |
 | 2026-01-22 | M6: Session Composition | Done | timeline/overview/highlights完整; quote优先, emoji绑定, 合并段限2条, watermark过滤, 431 tests |
-| - | M7: Watcher (Optional) | Not Started | Deferred to v0.2 |
+| 2026-01-22 | M7: Watcher (v0.2 skeleton) | Partial | watcher.py + CLI + queue persistence + 32 tests; pipeline trigger deferred to v0.3 |
 | - | M8: Documentation & Polish | Not Started | - |
 
 ---

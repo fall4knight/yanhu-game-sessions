@@ -612,5 +612,45 @@ def align(
     click.echo(f"  Skipped (no data): {skipped_no_data}")
 
 
+@main.command()
+@click.option(
+    "--raw-dir",
+    "-r",
+    required=True,
+    type=click.Path(exists=True, file_okay=False, dir_okay=True),
+    help="Directory to watch for new video files",
+)
+@click.option(
+    "--queue-dir",
+    "-q",
+    default="sessions/_queue",
+    type=click.Path(file_okay=False, dir_okay=True),
+    help="Directory for queue files (default: sessions/_queue)",
+)
+def watch(raw_dir: str, queue_dir: str):
+    """Watch a directory for new video files and queue them.
+
+    Monitors raw_dir for new .mp4/.mkv/.mov files and adds them to
+    a processing queue (pending.jsonl). Does NOT trigger pipeline
+    processing - only queues files for later batch processing.
+
+    Example:
+        yanhu watch --raw-dir ~/Videos/raw --queue-dir sessions/_queue
+    """
+    from yanhu.watcher import WatcherConfig, start_watcher
+
+    config = WatcherConfig(
+        raw_dir=Path(raw_dir),
+        queue_dir=Path(queue_dir),
+    )
+
+    click.echo("Starting watcher...")
+    click.echo(f"  Raw directory: {config.raw_dir}")
+    click.echo(f"  Queue file: {config.queue_file}")
+    click.echo("")
+
+    start_watcher(config)
+
+
 if __name__ == "__main__":
     main()
