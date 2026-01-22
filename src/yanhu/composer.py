@@ -179,6 +179,31 @@ def get_segment_l1_fields(
     return (None, [])
 
 
+def get_segment_asr_text(segment: SegmentInfo, session_dir: Path | None) -> str | None:
+    """Get first ASR text for a segment.
+
+    Args:
+        segment: Segment info
+        session_dir: Path to session directory
+
+    Returns:
+        First ASR text item, or None if not available
+    """
+    if session_dir and segment.analysis_path:
+        analysis_file = session_dir / segment.analysis_path
+        if analysis_file.exists():
+            try:
+                with open(analysis_file, encoding="utf-8") as f:
+                    import json
+                    data = json.load(f)
+                asr_items = data.get("asr_items", [])
+                if asr_items and len(asr_items) > 0:
+                    return asr_items[0].get("text", "")
+            except (OSError, KeyError, json.JSONDecodeError):
+                pass
+    return None
+
+
 def has_valid_claude_analysis(manifest: Manifest, session_dir: Path) -> bool:
     """Check if any segment has valid Claude analysis.
 
@@ -239,6 +264,7 @@ def compose_timeline(manifest: Manifest, session_dir: Path | None = None) -> str
         frames_str = format_frames_list(seg.frames)
         description = get_segment_description(seg, session_dir)
         what_changed, ui_key_text = get_segment_l1_fields(seg, session_dir)
+        asr_text = get_segment_asr_text(seg, session_dir)
 
         lines.extend([
             f"### {seg.id} ({time_range})",
@@ -253,6 +279,9 @@ def compose_timeline(manifest: Manifest, session_dir: Path | None = None) -> str
             lines.append(f"- change: {what_changed}")
         if ui_key_text:
             lines.append(f"- ui: {', '.join(ui_key_text)}")
+        # Add ASR text if present
+        if asr_text:
+            lines.append(f"- asr: {asr_text}")
 
         lines.append("")
 

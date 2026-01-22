@@ -94,6 +94,32 @@ C) Highlights check (always run after compose):
     yanhu compose --session <sid>
   ```
 
+D) ASR transcription check (mock backend, no cloud key required):
+- Run:
+  ```bash
+  source .venv/bin/activate && yanhu transcribe --session <sid> --backend mock --force
+  ```
+- Assert in analysis/<seg>.json:
+  - asr_items exists with at least 1 item OR asr_error exists
+  - For each asr_item: t_start <= t_end
+  - Timestamps are monotonically increasing (item[i].t_start >= item[i-1].t_end)
+  - asr_backend == "mock"
+- Then run compose and check timeline:
+  ```bash
+  source .venv/bin/activate && yanhu compose --session <sid>
+  ```
+- Assert timeline contains "- asr:" line for segments with asr_items
+
+E) ASR timestamp validation:
+- Read analysis JSON and verify:
+  ```python
+  for i, item in enumerate(asr_items):
+      assert item["t_start"] <= item["t_end"], f"t_start > t_end at item {i}"
+      if i > 0:
+          assert item["t_start"] >= asr_items[i-1]["t_end"], f"Not monotonic at item {i}"
+  ```
+- If validation fails, **FAIL** and print the specific violation.
+
 ## Output
 
 - PASS/FAIL with reasons

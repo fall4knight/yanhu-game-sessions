@@ -21,6 +21,7 @@ from yanhu.session import (
     create_session_directory,
     generate_session_id,
 )
+from yanhu.transcriber import transcribe_session
 
 
 @click.group()
@@ -322,6 +323,104 @@ def analyze(
         click.echo(f"  Skipped (filtered): {stats.skipped_filter}")
         if stats.errors:
             click.echo(f"  Errors: {stats.errors}")
+
+
+@main.command()
+@click.option("--session", "-s", required=True, help="Session ID")
+@click.option("--output-dir", "-o", default="sessions", help="Output directory")
+@click.option("--backend", "-b", default="mock", type=click.Choice(["mock", "whisper_local"]))
+@click.option("--max-seconds", type=int, help="Max audio seconds per segment")
+@click.option("--force", "-f", is_flag=True, help="Re-transcribe even if ASR exists")
+@click.option("--limit", "-l", type=int, help="Only process first N segments")
+@click.option("--segments", help="Comma-separated segment IDs to process")
+def transcribe(
+    session: str,
+    output_dir: str,
+    backend: str,
+    max_seconds: int | None,
+    force: bool,
+    limit: int | None,
+    segments: str | None,
+):
+    """Transcribe audio from video segments using ASR.
+
+    Generates ASR transcription and writes to analysis/<segment>.json.
+
+    Examples:
+
+      yanhu transcribe -s demo --backend mock
+
+      yanhu transcribe -s demo --backend whisper_local --limit 1
+
+      yanhu transcribe -s demo --backend mock --segments part_0001,part_0002
+    """
+    session_dir = Path(output_dir) / session
+
+    # Check session exists
+    if not session_dir.exists():
+        raise click.ClickException(f"Session not found: {session_dir}")
+
+    # Load manifest
+    try:
+        manifest = Manifest.load(session_dir)
+    except FileNotFoundError:
+        raise click.ClickException(f"Manifest not found in {session_dir}")
+
+    # Check segments exist
+    if not manifest.segments:
+        raise click.ClickException("No segments found. Run 'yanhu segment' first.")
+
+    # Parse segment filter
+    segment_list = None
+    if segments:
+        segment_list = [s.strip() for s in segments.split(",")]
+
+    click.echo(f"Transcribing session: {manifest.session_id}")
+    click.echo(f"  Backend: {backend}")
+    click.echo(f"  Total segments: {len(manifest.segments)}")
+    if max_seconds:
+        click.echo(f"  Max seconds: {max_seconds}")
+    if force:
+        click.echo("  Force: enabled (ignoring cache)")
+    if limit:
+        click.echo(f"  Limit: {limit} segments")
+    if segment_list:
+        click.echo(f"  Filter: {segment_list}")
+
+    # Progress callback
+    def on_progress(segment_id: str, status: str, result):
+        if status == "cached":
+            click.echo(f"  {segment_id}: cached (skipped)")
+        elif status == "done":
+            num_items = len(result.asr_items) if result else 0
+            click.echo(f"  {segment_id}: {num_items} items")
+        elif status == "error":
+            error_msg = result.asr_error if result else "unknown error"
+            click.echo(f"  {segment_id}: error - {error_msg}")
+
+    # Run transcription
+    try:
+        stats = transcribe_session(
+            manifest,
+            session_dir,
+            backend=backend,
+            max_seconds=max_seconds,
+            force=force,
+            limit=limit,
+            segments=segment_list,
+            on_progress=on_progress,
+        )
+    except ValueError as e:
+        raise click.ClickException(str(e))
+
+    # Summary
+    click.echo("")
+    click.echo("Transcription complete!")
+    click.echo(f"  Processed: {stats.processed}")
+    click.echo(f"  Skipped (cached): {stats.skipped_cache}")
+    click.echo(f"  Skipped (filtered): {stats.skipped_filter}")
+    if stats.errors:
+        click.echo(f"  Errors: {stats.errors}")
 
 
 @main.command()
