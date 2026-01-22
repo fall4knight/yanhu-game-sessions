@@ -291,6 +291,32 @@ yanhu-game-sessions/
 
 ---
 
+## Polish Backlog (Stretch)
+
+### OCR Variant Denoise for Highlights (Stretch)
+
+**Goal**: Reduce obvious OCR noise in consumer layer (ui_key_text / aligned_quotes / highlights) WITHOUT modifying evidence.
+
+**Non-negotiables**:
+- **Preserve evidence**: `ocr_items` must remain verbatim and unchanged (no deletion, no rewrite)
+- **Denoise affects only display fields**: ui_key_text / aligned_quotes / highlights
+- **Must be behind a feature flag** (default OFF)
+
+**Verification**:
+- Add verify assertions when flag ON:
+  - `ocr_items` count unchanged
+  - highlights/timeline do not contain raw JSON pollution
+  - denoise never alters `ocr_items` text
+- Add 3 regression fixtures:
+  - Cantonese clip
+  - Mandarin clip
+  - Game analysis subtitle clip
+
+**Acceptance criteria**:
+- Actor clip no longer surfaces "真束条了?" in highlights when flag ON, while `ocr_items` still contains the original noisy variants.
+
+---
+
 ## Risks & Mitigations
 
 | Risk | Severity | Likelihood | Mitigation |

@@ -233,3 +233,11 @@ ocr_items (带 t_rel) --> ASR 对齐 --> 精确时间戳
 - **P0（已完成）**：ocr_items schema + 完整 OCR 提取
 - **P1（待实现）**：ASR 对齐模块
 - **P2（待实现）**：Highlights 双层结构输出
+
+---
+
+## Future: OCR Variant Denoise (Optional)
+
+**Status**: Stretch goal, feature flag OFF by default.
+
+OCR denoise is an optional polish step that reduces noise (e.g., "真束条了?" → filtered in highlights) in display layers only, while preserving `ocr_items` verbatim as evidence. See `docs/PROJECT_PLAN.md` "Polish Backlog" section for full spec. Enable with `--denoise` flag when implemented.
