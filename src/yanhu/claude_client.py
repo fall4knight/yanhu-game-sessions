@@ -41,6 +41,37 @@ class ClaudeClient:
 
     SCENE_TYPES = ["dialogue", "choice", "combat", "menu", "cutscene", "unknown"]
     DEFAULT_MODEL = "claude-sonnet-4-20250514"
+    DEFAULT_MAX_PARSE_RETRIES = 2
+
+    # Correction prompt prepended on JSON parse retry
+    JSON_CORRECTION_PROMPT = (
+        "Your previous output was not valid JSON. "
+        "Output ONLY valid JSON parsable by json.loads. "
+        "Avoid unescaped double quotes; use 「」 instead.\n\n"
+    )
+
+    # Repair prompt for fixing invalid JSON without images
+    JSON_REPAIR_PROMPT = """Fix this text to be valid JSON matching the schema below.
+Output ONLY the corrected JSON, no explanation.
+
+Schema:
+{{
+  "scene_type": "dialogue|choice|combat|menu|cutscene|unknown",
+  "scene_label": "Loading|Menu|Cutscene|Combat|Dialogue|Error|TVTest|Unknown",
+  "ocr_text": ["string array"],
+  "facts": ["string array"],
+  "caption": "string",
+  "confidence": "low|med|high",
+  "what_changed": "string",
+  "ui_key_text": ["string array"],
+  "player_action_guess": "string",
+  "hook_detail": "string"
+}}
+
+Text to fix:
+{raw_text}
+
+Output ONLY valid JSON:"""
 
     def __init__(self, api_key: str | None = None, model: str | None = None):
         """Initialize Claude client.
@@ -311,25 +342,30 @@ class ClaudeClient:
         max_retries: int = 2,
         max_facts: int = 3,
         detail_level: str = "L1",
+        max_parse_retries: int | None = None,
     ) -> ClaudeResponse:
         """Analyze video frames using Claude Vision.
 
         Args:
             frame_paths: List of paths to frame images
-            max_retries: Maximum number of retries on failure
+            max_retries: Maximum number of retries on API failure
             max_facts: Maximum number of facts to return
             detail_level: "L0" for basic, "L1" for enhanced fields
+            max_parse_retries: Max retries for JSON parse errors (default 2)
 
         Returns:
             ClaudeResponse with analysis results
         """
+        if max_parse_retries is None:
+            max_parse_retries = self.DEFAULT_MAX_PARSE_RETRIES
+
         client = self._get_client()
 
         # Build content blocks with images
-        content = []
+        image_content = []
         for path in frame_paths:
             data, media_type = self._encode_image(path)
-            content.append({
+            image_content.append({
                 "type": "image",
                 "source": {
                     "type": "base64",
@@ -338,25 +374,31 @@ class ClaudeClient:
                 },
             })
 
-        # Add text prompt
-        content.append({
-            "type": "text",
-            "text": self._build_prompt(max_facts, detail_level),
-        })
+        base_prompt = self._build_prompt(max_facts, detail_level)
 
-        # Retry logic with exponential backoff
+        # Retry logic with exponential backoff for API errors
         last_error = None
         for attempt in range(max_retries + 1):
             try:
+                # First attempt: normal analysis with images
+                content = image_content + [{"type": "text", "text": base_prompt}]
                 response = client.messages.create(
                     model=self.model,
                     max_tokens=1024,
                     messages=[{"role": "user", "content": content}],
                 )
 
-                # Parse response
-                text = response.content[0].text
-                return self._parse_response(text, self.model)
+                raw_text = response.content[0].text
+                result = self._try_parse_response(raw_text, self.model)
+
+                if result.error is None:
+                    return result
+
+                # JSON parse failed, try retry with correction prompt
+                result = self._retry_with_correction(
+                    client, image_content, base_prompt, raw_text, max_parse_retries
+                )
+                return result
 
             except Exception as e:
                 last_error = e
@@ -374,6 +416,81 @@ class ClaudeClient:
             model=self.model,
             error=str(last_error),
         )
+
+    def _retry_with_correction(
+        self,
+        client,
+        image_content: list[dict],
+        base_prompt: str,
+        raw_text: str,
+        max_parse_retries: int,
+    ) -> ClaudeResponse:
+        """Retry JSON parsing with correction prompts.
+
+        Args:
+            client: Anthropic client
+            image_content: Image content blocks
+            base_prompt: Original analysis prompt
+            raw_text: Raw text from failed parse attempt
+            max_parse_retries: Maximum parse retries
+
+        Returns:
+            ClaudeResponse (either successful or with error)
+        """
+        last_raw_text = raw_text
+
+        for retry in range(max_parse_retries):
+            try:
+                if retry == 0:
+                    # First retry: with images + correction prompt
+                    correction_prompt = self.JSON_CORRECTION_PROMPT + base_prompt
+                    content = image_content + [{"type": "text", "text": correction_prompt}]
+                else:
+                    # Subsequent retries: repair pass without images (cheaper)
+                    repair_prompt = self.JSON_REPAIR_PROMPT.format(
+                        raw_text=last_raw_text[:1000]  # Limit raw text size
+                    )
+                    content = [{"type": "text", "text": repair_prompt}]
+
+                response = client.messages.create(
+                    model=self.model,
+                    max_tokens=1024,
+                    messages=[{"role": "user", "content": content}],
+                )
+
+                last_raw_text = response.content[0].text
+                result = self._try_parse_response(last_raw_text, self.model)
+
+                if result.error is None:
+                    return result
+
+            except Exception:
+                # API error during retry, continue to next retry
+                pass
+
+        # All parse retries failed, return error response
+        truncated_text = last_raw_text[:500] if last_raw_text else None
+        return ClaudeResponse(
+            scene_type="unknown",
+            ocr_text=[],
+            facts=[],
+            caption="",
+            model=self.model,
+            error=f"JSON parse error after {max_parse_retries} retries",
+            raw_text=truncated_text,
+        )
+
+    def _try_parse_response(self, text: str, model: str) -> ClaudeResponse:
+        """Try to parse Claude's JSON response without raising exceptions.
+
+        Args:
+            text: Raw response text
+            model: Model used
+
+        Returns:
+            ClaudeResponse with parsed data or error field set
+        """
+        return self._parse_response(text, model)
 
     def _parse_response(self, text: str, model: str) -> ClaudeResponse:
         """Parse Claude's JSON response.
@@ -446,6 +563,7 @@ class MockClaudeClient:
         max_facts: int = 3,
         detail_level: str = "L1",
         segment_id: str = "",
+        max_parse_retries: int = 2,
     ) -> ClaudeResponse:
         """Mock analyze that returns predefined or default response."""
         self.calls.append((frame_paths, segment_id))
@@ -472,3 +590,102 @@ class MockClaudeClient:
             response.hook_detail = ""
 
         return response
+
+
+class FakeClaudeClient:
+    """Fake Claude client that returns a sequence of raw text responses.
+
+    Used for testing JSON parse retry logic without making API calls.
+    """
+
+    def __init__(self, raw_responses: list[str]):
+        """Initialize fake client with a sequence of raw responses.
+
+        Args:
+            raw_responses: List of raw text responses to return in order.
+                          Each call to analyze_frames consumes responses
+                          until a valid JSON is found or retries exhausted.
+        """
+        self.raw_responses = list(raw_responses)  # Copy to avoid mutation
+        self.call_count = 0
+        self.calls: list[tuple[list[Path], str]] = []
+
+    def analyze_frames(
+        self,
+        frame_paths: list[Path],
+        max_retries: int = 2,
+        max_facts: int = 3,
+        detail_level: str = "L1",
+        segment_id: str = "",
+        max_parse_retries: int = 2,
+    ) -> ClaudeResponse:
+        """Fake analyze that simulates JSON parse retry behavior.
+
+        Consumes raw_responses in order, retrying on parse failures.
+        """
+        self.calls.append((frame_paths, segment_id))
+
+        last_raw_text = ""
+        # Initial attempt + max_parse_retries
+        for attempt in range(1 + max_parse_retries):
+            if not self.raw_responses:
+                break
+
+            raw_text = self.raw_responses.pop(0)
+            last_raw_text = raw_text
+            self.call_count += 1
+
+            # Try to parse
+            result = self._try_parse(raw_text)
+            if result.error is None:
+                return result
+
+        # All attempts failed
+        truncated_text = last_raw_text[:500] if last_raw_text else None
+        return ClaudeResponse(
+            scene_type="unknown",
+            ocr_text=[],
+            facts=[],
+            caption="",
+            model="fake-model",
+            error=f"JSON parse error after {max_parse_retries} retries",
+            raw_text=truncated_text,
+        )
+
+    def _try_parse(self, text: str) -> ClaudeResponse:
+        """Try to parse response text as JSON."""
+        try:
+            text = text.strip()
+            if text.startswith("```"):
+                lines = text.split("\n")
+                text = "\n".join(lines[1:-1] if lines[-1] == "```" else lines[1:])
+
+            data = json.loads(text)
+
+            scene_type = data.get("scene_type", "unknown")
+            if scene_type not in ClaudeClient.SCENE_TYPES:
+                scene_type = "unknown"
+
+            return ClaudeResponse(
+                scene_type=scene_type,
+                ocr_text=data.get("ocr_text", []),
+                facts=data.get("facts", []),
+                caption=data.get("caption", ""),
+                model="fake-model",
+                confidence=data.get("confidence"),
+                scene_label=data.get("scene_label"),
+                what_changed=data.get("what_changed"),
+                ui_key_text=data.get("ui_key_text"),
+                player_action_guess=data.get("player_action_guess"),
+                hook_detail=data.get("hook_detail"),
+            )
+        except json.JSONDecodeError as e:
+            return ClaudeResponse(
+                scene_type="unknown",
+                ocr_text=[],
+                facts=[],
+                caption="",
+                model="fake-model",
+                error=f"JSON parse error: {e}",
+                raw_text=text[:500] if text else None,
+            )

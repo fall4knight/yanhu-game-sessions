@@ -1,6 +1,8 @@
 """Tests for Claude client."""
 
-from yanhu.claude_client import ClaudeClient
+from pathlib import Path
+
+from yanhu.claude_client import ClaudeClient, FakeClaudeClient
 
 
 class TestClaudeClientPrompt:
@@ -413,3 +415,231 @@ class TestClaudeClientParseResponse:
         assert response.raw_text is None
         assert response.scene_type == "dialogue"
         assert response.caption == "test caption"
+
+
+class TestFakeClaudeClientRetryBehavior:
+    """Test JSON parse retry behavior using FakeClaudeClient."""
+
+    def test_bad_json_then_good_json_succeeds(self):
+        """Should retry and succeed when first response is bad JSON, second is good."""
+        bad_json = "This is not valid JSON at all"
+        good_json = (
+            '{"scene_type": "dialogue", "ocr_text": ["测试"], '
+            '"facts": ["角色对话"], "caption": "对话场景", '
+            '"scene_label": "Dialogue", "what_changed": "对话开始"}'
+        )
+
+        fake_client = FakeClaudeClient([bad_json, good_json])
+        response = fake_client.analyze_frames(
+            [Path("/fake/frame1.jpg")],
+            segment_id="part_0001",
+            max_parse_retries=2,
+        )
+
+        # Should succeed with the good JSON
+        assert response.error is None
+        assert response.scene_type == "dialogue"
+        assert response.facts == ["角色对话"]
+        assert response.scene_label == "Dialogue"
+        # Should have consumed 2 responses (1 bad + 1 good)
+        assert fake_client.call_count == 2
+
+    def test_two_bad_json_then_good_json_succeeds(self):
+        """Should succeed on third attempt after two bad JSONs."""
+        bad_json_1 = "Invalid JSON 1"
+        bad_json_2 = '{"incomplete": true'  # Missing closing brace
+        good_json = (
+            '{"scene_type": "cutscene", "ocr_text": [], '
+            '"facts": ["过场动画"], "caption": "CG播放"}'
+        )
+
+        fake_client = FakeClaudeClient([bad_json_1, bad_json_2, good_json])
+        response = fake_client.analyze_frames(
+            [Path("/fake/frame1.jpg")],
+            segment_id="part_0001",
+            max_parse_retries=2,
+        )
+
+        # Should succeed on the third attempt
+        assert response.error is None
+        assert response.scene_type == "cutscene"
+        assert fake_client.call_count == 3
+
+    def test_all_bad_json_returns_error(self):
+        """Should return error JSON when all attempts fail."""
+        bad_responses = [
+            "Not JSON 1",
+            "Not JSON 2",
+            "Not JSON 3",
+        ]
+
+        fake_client = FakeClaudeClient(bad_responses)
+        response = fake_client.analyze_frames(
+            [Path("/fake/frame1.jpg")],
+            segment_id="part_0001",
+            max_parse_retries=2,
+        )
+
+        # Should fail with error
+        assert response.error is not None
+        assert "JSON parse error" in response.error
+        assert response.scene_type == "unknown"
+        assert response.raw_text is not None
+        # Should have tried initial + 2 retries = 3 attempts
+        assert fake_client.call_count == 3
+
+    def test_first_attempt_good_json_no_retry(self):
+        """Should not retry when first attempt succeeds."""
+        good_json = (
+            '{"scene_type": "menu", "ocr_text": [], '
+            '"facts": ["菜单界面"], "caption": "主菜单"}'
+        )
+        extra_response = "Should not be consumed"
+
+        fake_client = FakeClaudeClient([good_json, extra_response])
+        response = fake_client.analyze_frames(
+            [Path("/fake/frame1.jpg")],
+            segment_id="part_0001",
+            max_parse_retries=2,
+        )
+
+        # Should succeed without retry
+        assert response.error is None
+        assert response.scene_type == "menu"
+        # Only one response should be consumed
+        assert fake_client.call_count == 1
+        # Extra response should still be in queue
+        assert len(fake_client.raw_responses) == 1
+
+    def test_max_parse_retries_zero_no_retry(self):
+        """Should not retry when max_parse_retries is 0."""
+        bad_json = "Invalid JSON"
+        good_json = '{"scene_type": "dialogue", "ocr_text": [], "facts": [], "caption": "test"}'
+
+        fake_client = FakeClaudeClient([bad_json, good_json])
+        response = fake_client.analyze_frames(
+            [Path("/fake/frame1.jpg")],
+            segment_id="part_0001",
+            max_parse_retries=0,
+        )
+
+        # Should fail immediately without retry
+        assert response.error is not None
+        assert fake_client.call_count == 1
+
+    def test_error_json_has_truncated_raw_text(self):
+        """Error JSON should have raw_text truncated to 500 chars."""
+        long_bad_json = "x" * 1000
+
+        fake_client = FakeClaudeClient([long_bad_json] * 3)
+        response = fake_client.analyze_frames(
+            [Path("/fake/frame1.jpg")],
+            segment_id="part_0001",
+            max_parse_retries=2,
+        )
+
+        assert response.error is not None
+        assert response.raw_text is not None
+        assert len(response.raw_text) == 500
+
+    def test_markdown_wrapped_json_is_parsed(self):
+        """Should handle JSON wrapped in markdown code blocks."""
+        markdown_json = """```json
+{"scene_type": "combat", "ocr_text": [], "facts": ["战斗场景"], "caption": "战斗中"}
+```"""
+
+        fake_client = FakeClaudeClient([markdown_json])
+        response = fake_client.analyze_frames(
+            [Path("/fake/frame1.jpg")],
+            segment_id="part_0001",
+        )
+
+        assert response.error is None
+        assert response.scene_type == "combat"
+
+    def test_l1_fields_parsed_correctly(self):
+        """Should parse all L1 fields correctly."""
+        l1_json = """{
+            "scene_type": "dialogue",
+            "scene_label": "Dialogue",
+            "ocr_text": ["你好"],
+            "facts": ["角色对话中"],
+            "caption": "对话场景",
+            "confidence": "high",
+            "what_changed": "对话内容变化",
+            "ui_key_text": ["确认", "取消"],
+            "player_action_guess": "可能在选择选项",
+            "hook_detail": "角色表情变化"
+        }"""
+
+        fake_client = FakeClaudeClient([l1_json])
+        response = fake_client.analyze_frames(
+            [Path("/fake/frame1.jpg")],
+            segment_id="part_0001",
+        )
+
+        assert response.error is None
+        assert response.scene_label == "Dialogue"
+        assert response.what_changed == "对话内容变化"
+        assert response.ui_key_text == ["确认", "取消"]
+        assert response.player_action_guess == "可能在选择选项"
+        assert response.hook_detail == "角色表情变化"
+        assert response.confidence == "high"
+
+
+class TestFakeClaudeClientTimelinePollution:
+    """Test that error JSON from FakeClaudeClient doesn't pollute timeline."""
+
+    def test_error_response_has_empty_facts(self):
+        """Error response should have empty facts to avoid timeline pollution."""
+        fake_client = FakeClaudeClient(["bad json"] * 3)
+        response = fake_client.analyze_frames(
+            [Path("/fake/frame1.jpg")],
+            max_parse_retries=2,
+        )
+
+        assert response.error is not None
+        assert response.facts == []
+        assert response.ocr_text == []
+        assert response.caption == ""
+
+    def test_error_response_scene_type_is_unknown(self):
+        """Error response should have scene_type='unknown'."""
+        fake_client = FakeClaudeClient(["bad json"] * 3)
+        response = fake_client.analyze_frames(
+            [Path("/fake/frame1.jpg")],
+            max_parse_retries=2,
+        )
+
+        assert response.scene_type == "unknown"
+
+    def test_error_response_model_is_set(self):
+        """Error response should still have model field set."""
+        fake_client = FakeClaudeClient(["bad json"] * 3)
+        response = fake_client.analyze_frames(
+            [Path("/fake/frame1.jpg")],
+            max_parse_retries=2,
+        )
+
+        assert response.model == "fake-model"
+
+
+class TestClaudeClientHasRetryConstants:
+    """Test that ClaudeClient has retry-related constants."""
+
+    def test_has_default_max_parse_retries(self):
+        """ClaudeClient should have DEFAULT_MAX_PARSE_RETRIES constant."""
+        assert hasattr(ClaudeClient, "DEFAULT_MAX_PARSE_RETRIES")
+        assert ClaudeClient.DEFAULT_MAX_PARSE_RETRIES == 2
+
+    def test_has_json_correction_prompt(self):
+        """ClaudeClient should have JSON_CORRECTION_PROMPT constant."""
+        assert hasattr(ClaudeClient, "JSON_CORRECTION_PROMPT")
+        assert "valid JSON" in ClaudeClient.JSON_CORRECTION_PROMPT
+        assert "json.loads" in ClaudeClient.JSON_CORRECTION_PROMPT
+
+    def test_has_json_repair_prompt(self):
+        """ClaudeClient should have JSON_REPAIR_PROMPT constant."""
+        assert hasattr(ClaudeClient, "JSON_REPAIR_PROMPT")
+        assert "Schema" in ClaudeClient.JSON_REPAIR_PROMPT
+        assert "{raw_text}" in ClaudeClient.JSON_REPAIR_PROMPT
