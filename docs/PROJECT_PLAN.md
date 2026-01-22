@@ -191,20 +191,29 @@ yanhu-game-sessions/
 
 **Scope**: Integrate multimodal vision models for scene classification and OCR.
 
-**Definition of Done**: Each segment has `analysis.json` with scene classification and OCR.
+**Definition of Done**: Each segment has `analysis/<segment_id>.json` with scene classification, OCR, and L1 fields.
 
-**Checklist**:
-- [ ] Define `models/base.py` abstract interface for vision models
-- [ ] Implement `models/claude_vision.py` using Anthropic API
-  - [ ] Prompt template for scene classification + OCR
-  - [ ] Handle rate limits and retries
+**Checklist** (actual implementation path):
 - [x] Implement `analyzer.py` with AnalysisResult dataclass
+  - [x] Schema: segment_id, scene_type, ocr_text, facts, caption, confidence, model, error
+  - [x] L1 fields: scene_label, what_changed, ui_key_text, ui_symbols, ocr_items, hook_detail
   - [x] Mock backend: generates placeholder captions
   - [x] Output: `analysis/<segment_id>.json`
-- [x] Add CLI command `yanhu analyze --session <id> --backend mock`
+- [x] Implement `claude_client.py` for Claude Vision API
+  - [x] Multi-frame analysis (--max-frames configurable)
+  - [x] L1 prompt template: scene classification + OCR + facts + what_changed
+  - [x] OCR text deduplication and watermark filtering
+  - [x] Quote fidelity: preserve verbatim OCR in ocr_items with t_rel and source_frame
+  - [x] JSON parse with retry/repair fallback (raw_text field on failure)
+  - [x] Backend-aware caching (mock vs claude-* model prefix)
+- [x] Add CLI command `yanhu analyze --session <id> --backend mock|claude`
+  - [x] Options: --limit, --segments, --dry-run, --force, --max-frames, --detail-level
 - [x] Update manifest with `analysis_path` field
-- [x] Update composer to use analysis captions (replaces TODO)
-- [x] Write unit tests for mock analyzer and analysis integration
+- [x] Update composer to use analysis (facts, what_changed, ui_key_text, quote)
+- [x] Write unit tests for analyzer, claude_client, and integration
+- [x] Verify gate coverage: cache behavior, JSON pollution check, highlights assertions
+- [ ] (Refactor optional) Extract `models/base.py` abstract interface for vision backends
+- [ ] (Stretch) OpenAI Vision backend
 
 ---
 
@@ -212,53 +221,79 @@ yanhu-game-sessions/
 
 **Scope**: Implement audio transcription with optional LLM post-processing.
 
-**Definition of Done**: Each segment has timestamped transcript in `analysis.json`.
+**Definition of Done**: Each segment has timestamped transcript (`asr_items`) in `analysis.json`.
 
-**Checklist**:
-- [ ] Implement `models/whisper_asr.py` using OpenAI Whisper API (or local whisper.cpp)
-- [ ] Implement `asr.py`
-  - [ ] Function `transcribe_segment(video_path) -> List[TranscriptEntry]`
-  - [ ] Handle segments with no speech (return empty list)
-- [ ] (Optional) Implement `asr_postprocess.py` for LLM-based correction
-- [ ] Merge ASR results into `analysis.json`
-- [ ] Add CLI command `yanhu transcribe <session_id>`
-- [ ] Write unit test with known audio sample
+**Checklist** (actual implementation path):
+- [x] Implement `transcriber.py` with AsrItem dataclass and backend abstraction
+  - [x] AsrItem schema: text, t_start, t_end (session-relative timestamps)
+  - [x] AsrConfig: device, compute_type, model_size, language, beam_size, vad_filter
+  - [x] Mock backend: generates placeholder transcripts
+  - [x] WhisperLocalBackend using faster-whisper library
+- [x] Add CLI command `yanhu transcribe --session <id> --backend mock|whisper_local`
+  - [x] Options: --segments, --force, --model-size, --compute-type, --beam-size, --vad-filter/--no-vad-filter, --language
+  - [x] Write asr_items + asr_config + asr_backend to analysis.json
+- [x] Timeline shows ASR: `- asr: <first transcript>` or `[无字幕]`
+- [x] Write unit tests for transcriber backends and CLI
+- [x] Verify gate: asr_items presence assertions
+- [ ] (Stretch) OpenAI Whisper API backend
+- [ ] (Stretch) Implement `asr_postprocess.py` for LLM-based correction
 
 ---
 
-### Milestone 5: Segment Summarization
+### Milestone 5: Segment Summarization (Quote + Summary Dual-Layer)
 
-**Scope**: Generate natural language descriptions for each segment combining vision and ASR data.
+**Scope**: Generate structured quote + summary for each segment combining OCR, ASR, and vision analysis.
 
-**Definition of Done**: Each segment has `summary.txt` with natural language description.
+**Definition of Done**: Each highlight has quote (verbatim original) + summary (objective description) dual-layer output.
 
-**Checklist**:
-- [ ] Implement `segment_summarizer.py`
-  - [ ] Function `summarize_segment(analysis: AnalysisResult) -> str`
-  - [ ] Prompt template combining vision + ASR data
-- [ ] Add CLI command `yanhu summarize <session_id>`
-- [ ] Write test verifying summary is non-empty and in Chinese
+**Checklist** (target implementation path):
+- [x] OCR/ASR alignment fusion (`aligner.py`)
+  - [x] AlignedQuote schema: t, source (ocr/asr/both), ocr, asr fields
+  - [x] Time-window matching (default 1.5s) with OCR as anchor
+  - [x] Preserve both OCR and ASR text verbatim when source="both"
+  - [x] CLI command `yanhu align --session <id> --segments --window --max-quotes`
+- [x] Quote selection logic in highlights
+  - [x] Priority: aligned_quotes (source=both → "ocr (asr)") > ocr > asr > ui_key_text > ocr_text > facts
+  - [x] Heart emoji binding from ui_symbols
+- [x] Summary generation in highlights
+  - [x] Format: `facts[0] / truncated what_changed` (sentence boundary truncation, max 40 chars)
+  - [x] Fallback to caption if no facts
+- [x] Highlights output format: `- [HH:MM:SS] <QUOTE> (segment=..., score=...)` + `  - summary: ...`
+- [x] Write unit tests for aligner, quote selection, summary truncation
+- [x] Verify gate: aligned_quotes assertions, timeline quote line with ASR annotation
+- [ ] (Optional) Standalone `yanhu summarize` CLI for batch summary generation
+  - Note: Not required for MVP; highlights already provide quote+summary dual-layer output
 
 ---
 
 ### Milestone 6: Session Composition
 
-**Scope**: Merge all segment summaries into final session documents.
+**Scope**: Merge all segment analysis into final session documents with AI-generated content.
 
-**Definition of Done**: Session folder contains `overview.md`, `timeline.md`, `highlights.md`.
+**Definition of Done**: Session folder contains `overview.md`, `timeline.md`, `highlights.md` with full AI content.
 
-**Checklist**:
-- [x] Implement `composer.py` (skeleton without AI descriptions)
+**Checklist** (actual implementation path):
+- [x] Implement `composer.py`
   - [x] Function `compose_overview(manifest) -> str`
-  - [x] Function `compose_timeline(manifest) -> str`
+  - [x] Function `compose_timeline(manifest) -> str` with facts, change, ui, asr, quote lines
   - [x] Function `format_timestamp(seconds) -> HH:MM:SS`
   - [x] Function `compose_highlights(manifest, session_dir, top_k) -> str`
 - [x] Add CLI command `yanhu compose --session <id>`
-- [x] Generate timeline.md with segment time ranges and frame links
+- [x] Generate timeline.md with segment time ranges, frame links, and analysis content
+  - [x] Show: facts[0] blockquote, change line, ui line, asr line, quote line
 - [x] Generate overview.md with session metadata
-- [x] Generate highlights.md with top-k scored segments
-- [ ] Fill in AI-generated descriptions (requires M3-M5)
-- [x] Write unit tests for timestamp formatting and timeline structure
+- [x] Generate highlights.md with scored segments
+  - [x] Quote-first priority with aligned_quotes support
+  - [x] Heart emoji binding from ui_symbols (inserts before "都做过" keyword)
+  - [x] Adjacent segment merging (max 2 quotes when merged)
+  - [x] Watermark filtering (小红书, @username, etc.)
+  - [x] Score-based deduplication by ui_key_text
+  - [x] Summary line: `facts[0] / truncated what_changed`
+- [x] Write unit tests for timestamp, timeline, highlights, quote selection, heart prefix
+- [x] AI-generated descriptions integration
+  - [x] Vision analysis: facts, what_changed, ui_key_text, scene_label (M3)
+  - [x] ASR transcription: asr_items with timestamps (M4)
+  - [x] Quote + Summary dual-layer in highlights (M5)
 
 ---
 
@@ -341,13 +376,11 @@ yanhu-game-sessions/
 | 2026-01-20 | M0: Project Scaffolding | Done | CI added; all 6 checklist items complete |
 | 2026-01-20 | M1: Video Ingestion & Segmentation | Done | ingest + segment CLI, manifest, 30 unit tests |
 | 2026-01-20 | M2: Frame Extraction | Done | extract CLI, 54 unit tests total |
-| 2026-01-20 | M6: Compose Skeleton | Done | timeline.md + overview.md (no AI), 78 tests |
 | 2026-01-20 | M3: Mock Vision Analysis | Done | analyze CLI, mock backend, 109 tests |
-| 2026-01-21 | M6: Highlights | Done | highlights.md with score-based selection |
-| - | M3: Vision Analysis | Partial | Mock done; Claude/OpenAI backends pending |
-| - | M4: ASR Transcription | Not Started | - |
-| - | M5: Segment Summarization | Not Started | - |
-| - | M6: Session Composition | Partial | Skeleton done; AI descriptions pending M3-M5 |
+| 2026-01-21 | M3: Claude Vision | Done | claude_client.py, L1 fields, OCR排噪, JSON兜底, verify gate |
+| 2026-01-21 | M4: ASR Transcription | Done | transcriber.py, whisper_local backend, asr_items写回, timeline展示 |
+| 2026-01-22 | M5: Quote+Summary | Done | aligner.py, aligned_quotes双字段, highlights quote+summary格式 |
+| 2026-01-22 | M6: Session Composition | Done | timeline/overview/highlights完整; quote优先, emoji绑定, 合并段限2条, watermark过滤, 431 tests |
 | - | M7: Watcher (Optional) | Not Started | Deferred to v0.2 |
 | - | M8: Documentation & Polish | Not Started | - |
 
