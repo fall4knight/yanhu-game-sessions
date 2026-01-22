@@ -2776,6 +2776,7 @@ class TestHighlightQuoteWithAlignedQuotes:
     def test_aligned_quotes_both_shows_ocr_and_asr(self, tmp_path):
         """Highlight should show 'ocr (asr)' when source=both."""
         import json
+
         from yanhu.composer import compose_highlights
 
         analysis_dir = tmp_path / "analysis"
@@ -2818,6 +2819,7 @@ class TestHighlightQuoteWithAlignedQuotes:
     def test_aligned_quotes_ocr_only(self, tmp_path):
         """Highlight should show only OCR when source=ocr."""
         import json
+
         from yanhu.composer import compose_highlights
 
         analysis_dir = tmp_path / "analysis"
@@ -2896,6 +2898,7 @@ class TestHighlightSummaryLine:
     def test_summary_line_present(self, tmp_path):
         """Highlight should include summary line with facts and what_changed."""
         import json
+
         from yanhu.composer import compose_highlights
 
         analysis_dir = tmp_path / "analysis"

@@ -120,6 +120,25 @@ E) ASR timestamp validation:
   ```
 - If validation fails, **FAIL** and print the specific violation.
 
+F) ASR whisper_local backend check (requires faster-whisper installed):
+- Prerequisites:
+  - Check faster-whisper is installed: `pip show faster-whisper`
+  - If not installed, skip this check with note: "faster-whisper not installed, skipping"
+- Run:
+  ```bash
+  source .venv/bin/activate && yanhu transcribe --session <sid> --backend whisper_local --segments <seg> --model-size base --force
+  ```
+- Assert in analysis/<seg>.json:
+  - asr_items exists with at least 1 item OR asr_error exists
+  - asr_backend == "whisper_local"
+  - If asr_items exists: timestamps are session-relative (t_start >= segment.start_time)
+  - Timestamps are monotonically increasing
+- Check audio file was created:
+  ```bash
+  [ -f sessions/<sid>/audio/<seg>.wav ] && echo "AUDIO EXISTS" || echo "AUDIO MISSING"
+  ```
+- If AUDIO MISSING and no asr_error, **FAIL**
+
 ## Output
 
 - PASS/FAIL with reasons
