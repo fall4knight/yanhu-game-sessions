@@ -6,7 +6,12 @@ import click
 
 from yanhu import __version__
 from yanhu.analyzer import analyze_session
-from yanhu.composer import has_valid_claude_analysis, write_overview, write_timeline
+from yanhu.composer import (
+    has_valid_claude_analysis,
+    write_highlights,
+    write_overview,
+    write_timeline,
+)
 from yanhu.extractor import extract_frames
 from yanhu.ffmpeg_utils import FFmpegError, FFmpegNotFoundError, check_ffmpeg_available
 from yanhu.manifest import Manifest, create_manifest
@@ -323,9 +328,9 @@ def analyze(
 @click.option("--session", "-s", required=True, help="Session ID")
 @click.option("--output-dir", "-o", default="sessions", help="Output directory (default: sessions)")
 def compose(session: str, output_dir: str):
-    """Compose timeline and overview from session data.
+    """Compose timeline, overview, and highlights from session data.
 
-    Generates timeline.md and overview.md, using analysis captions if available.
+    Generates timeline.md, overview.md, and highlights.md using analysis if available.
     """
     session_dir = Path(output_dir) / session
 
@@ -353,6 +358,10 @@ def compose(session: str, output_dir: str):
     # Write overview
     overview_path = write_overview(manifest, session_dir)
     click.echo(f"  Written: {overview_path.name}")
+
+    # Write highlights
+    highlights_path = write_highlights(manifest, session_dir)
+    click.echo(f"  Written: {highlights_path.name}")
 
     # Check if valid Claude analysis exists and show appropriate message
     if has_valid_claude_analysis(manifest, session_dir):

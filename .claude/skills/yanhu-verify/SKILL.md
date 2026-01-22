@@ -79,6 +79,21 @@ B) Timeline pollution check (always run after compose):
     yanhu compose --session <sid>
   ```
 
+C) Highlights check (always run after compose):
+- Check that highlights.md exists and contains at least one highlight item:
+  ```bash
+  [ -f sessions/<sid>/highlights.md ] && grep -c '^\- \[' sessions/<sid>/highlights.md || echo "0"
+  ```
+- If file missing or count is 0, **FAIL** and print:
+  ```
+  ## FAIL: highlights.md missing or empty
+
+  The highlights file should contain at least one `- [HH:MM:SS]` entry.
+  Fix: ensure analysis exists and rerun compose:
+    yanhu analyze --session <sid> --backend claude
+    yanhu compose --session <sid>
+  ```
+
 ## Output
 
 - PASS/FAIL with reasons

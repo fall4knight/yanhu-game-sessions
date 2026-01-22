@@ -252,10 +252,11 @@ yanhu-game-sessions/
   - [x] Function `compose_overview(manifest) -> str`
   - [x] Function `compose_timeline(manifest) -> str`
   - [x] Function `format_timestamp(seconds) -> HH:MM:SS`
-  - [ ] Function `compose_highlights(segments, threshold) -> str` (requires Vision/ASR)
+  - [x] Function `compose_highlights(manifest, session_dir, top_k) -> str`
 - [x] Add CLI command `yanhu compose --session <id>`
 - [x] Generate timeline.md with segment time ranges and frame links
 - [x] Generate overview.md with session metadata
+- [x] Generate highlights.md with top-k scored segments
 - [ ] Fill in AI-generated descriptions (requires M3-M5)
 - [x] Write unit tests for timestamp formatting and timeline structure
 
@@ -316,6 +317,7 @@ yanhu-game-sessions/
 | 2026-01-20 | M2: Frame Extraction | Done | extract CLI, 54 unit tests total |
 | 2026-01-20 | M6: Compose Skeleton | Done | timeline.md + overview.md (no AI), 78 tests |
 | 2026-01-20 | M3: Mock Vision Analysis | Done | analyze CLI, mock backend, 109 tests |
+| 2026-01-21 | M6: Highlights | Done | highlights.md with score-based selection |
 | - | M3: Vision Analysis | Partial | Mock done; Claude/OpenAI backends pending |
 | - | M4: ASR Transcription | Not Started | - |
 | - | M5: Segment Summarization | Not Started | - |

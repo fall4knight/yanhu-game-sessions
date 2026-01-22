@@ -10,7 +10,6 @@ from typing import Protocol
 
 from yanhu.manifest import Manifest, SegmentInfo
 
-
 # OCR normalization patterns: (pattern, replacement)
 # NOTE: Normalization is DISABLED - OCR text must be kept verbatim.
 # These patterns are kept for reference but NOT applied to output fields.
@@ -365,7 +364,8 @@ class ClaudeAnalyzer:
                         frame_idx = 1
                     # Estimate t_rel: segment_start + (frame_idx - 1) / num_frames * duration
                     if num_frames > 1:
-                        t_rel = segment.start_time + (frame_idx - 1) / (num_frames - 1) * segment_duration
+                        frame_ratio = (frame_idx - 1) / (num_frames - 1)
+                        t_rel = segment.start_time + frame_ratio * segment_duration
                     else:
                         t_rel = segment.start_time
                     ocr_items.append(OcrItem(

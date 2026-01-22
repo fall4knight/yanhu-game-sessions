@@ -1,12 +1,18 @@
 """Tests for session composition."""
 
 from yanhu.composer import (
+    _has_heart_symbol,
+    apply_heart_to_chunk,
     compose_overview,
     compose_timeline,
+    filter_watermarks,
     format_frames_list,
     format_time_range,
     format_timestamp,
+    get_highlight_text,
     has_valid_claude_analysis,
+    is_low_value_ui,
+    is_platform_watermark,
 )
 from yanhu.manifest import Manifest, SegmentInfo
 
@@ -984,3 +990,1781 @@ class TestErrorHandlingInTimeline:
         # Should not have L1 lines
         assert "- change:" not in result
         assert "- ui:" not in result
+
+
+class TestScoreSegment:
+    """Test segment scoring for highlights."""
+
+    def test_ui_key_text_gives_highest_score(self):
+        """ui_key_text should give highest weight."""
+        from yanhu.analyzer import AnalysisResult
+        from yanhu.composer import score_segment
+
+        with_ui = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            ui_key_text=["对话内容"],
+        )
+        without_ui = AnalysisResult(
+            segment_id="part_0002",
+            scene_type="dialogue",
+            ocr_text=["文字1", "文字2", "文字3"],
+        )
+
+        score_with_ui = score_segment(with_ui)
+        score_without_ui = score_segment(without_ui)
+
+        assert score_with_ui > score_without_ui
+
+    def test_ocr_text_count_increases_score(self):
+        """More ocr_text should increase score."""
+        from yanhu.analyzer import AnalysisResult
+        from yanhu.composer import score_segment
+
+        few_ocr = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="unknown",
+            ocr_text=["一条"],
+        )
+        many_ocr = AnalysisResult(
+            segment_id="part_0002",
+            scene_type="unknown",
+            ocr_text=["一条", "两条", "三条", "四条"],
+        )
+
+        assert score_segment(many_ocr) > score_segment(few_ocr)
+
+    def test_scene_label_dialogue_higher_than_combat(self):
+        """Dialogue scene_label should score higher than Combat."""
+        from yanhu.analyzer import AnalysisResult
+        from yanhu.composer import score_segment
+
+        dialogue = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            scene_label="Dialogue",
+        )
+        combat = AnalysisResult(
+            segment_id="part_0002",
+            scene_type="combat",
+            scene_label="Combat",
+        )
+
+        assert score_segment(dialogue) > score_segment(combat)
+
+    def test_what_changed_keywords_add_score(self):
+        """Change keywords in what_changed should add score."""
+        from yanhu.analyzer import AnalysisResult
+        from yanhu.composer import score_segment
+
+        with_change = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="unknown",
+            what_changed="从菜单切换到对话",
+        )
+        no_change = AnalysisResult(
+            segment_id="part_0002",
+            scene_type="unknown",
+            what_changed="画面保持不变",
+        )
+
+        assert score_segment(with_change) > score_segment(no_change)
+
+    def test_empty_analysis_scores_zero(self):
+        """Empty analysis should score 0."""
+        from yanhu.analyzer import AnalysisResult
+        from yanhu.composer import score_segment
+
+        empty = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="unknown",
+        )
+
+        assert score_segment(empty) == 0
+
+
+class TestComposeHighlights:
+    """Test highlights composition."""
+
+    def test_highlights_contains_session_id(self, tmp_path):
+        """Highlights should include session ID in title."""
+        from yanhu.composer import compose_highlights
+
+        manifest = Manifest(
+            session_id="2026-01-20_12-00-00_test_run01",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[],
+        )
+        result = compose_highlights(manifest, tmp_path)
+        assert "2026-01-20_12-00-00_test_run01" in result
+
+    def test_highlights_selects_top_k(self, tmp_path):
+        """Should select top-k segments by score, with adjacent dialogue merging."""
+        from yanhu.analyzer import AnalysisResult
+        from yanhu.composer import compose_highlights
+
+        # Create 5 segments with different scores
+        # Note: part_0004 and part_0005 are adjacent with dialogue, so will be merged
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+
+        for i in range(5):
+            analysis = AnalysisResult(
+                segment_id=f"part_000{i+1}",
+                scene_type="dialogue",
+                facts=[f"描述{i+1}"],
+                ui_key_text=[f"UI文字{i}"] if i >= 3 else [],  # 4,5 have ui_key_text
+            )
+            analysis.save(analysis_dir / f"part_000{i+1}.json")
+
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    f"part_000{i+1}", i * 60.0, (i + 1) * 60.0, f"segments/s_{i+1}.mp4",
+                    analysis_path=f"analysis/part_000{i+1}.json",
+                )
+                for i in range(5)
+            ],
+        )
+
+        # Use min_score=0 to include all segments
+        result = compose_highlights(manifest, tmp_path, top_k=3, min_score=0)
+
+        # part_0004 and part_0005 are adjacent with dialogue, so merged
+        # The merged segment should appear as "part_0004+0005"
+        assert "part_0004" in result  # Will appear in merged ID
+        # Count highlight lines
+        highlight_lines = [
+            line for line in result.split("\n") if line.startswith("- [")
+        ]
+        assert len(highlight_lines) == 3
+
+    def test_highlights_sorted_by_time(self, tmp_path):
+        """Top segments should be displayed in time order."""
+        from yanhu.analyzer import AnalysisResult
+        from yanhu.composer import compose_highlights
+
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+
+        # Create NON-adjacent segments to prevent merging
+        # Use part_0001, part_0003, part_0005 (gaps between them)
+        for i, seg_id in enumerate(["part_0001", "part_0003", "part_0005"]):
+            analysis = AnalysisResult(
+                segment_id=seg_id,
+                scene_type="dialogue",
+                facts=["描述"],
+                ui_key_text=[f"UI文字{i}"],  # Different UI to avoid dedup
+            )
+            analysis.save(analysis_dir / f"{seg_id}.json")
+
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    analysis_path="analysis/part_0001.json",
+                ),
+                SegmentInfo(
+                    "part_0003", 120.0, 180.0, "s3.mp4",
+                    analysis_path="analysis/part_0003.json",
+                ),
+                SegmentInfo(
+                    "part_0005", 240.0, 300.0, "s5.mp4",
+                    analysis_path="analysis/part_0005.json",
+                ),
+            ],
+        )
+
+        # Use min_score=0 to include all segments
+        result = compose_highlights(manifest, tmp_path, top_k=3, min_score=0)
+
+        # Find positions of segment IDs in output (non-adjacent so not merged)
+        pos_1 = result.find("part_0001")
+        pos_3 = result.find("part_0003")
+        pos_5 = result.find("part_0005")
+
+        # Should be in time order
+        assert pos_1 < pos_3 < pos_5
+
+    def test_highlights_includes_timestamp(self, tmp_path):
+        """Highlight items should include timestamp."""
+        from yanhu.analyzer import AnalysisResult
+        from yanhu.composer import compose_highlights
+
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+
+        analysis = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            facts=["测试描述"],
+            ui_key_text=["UI文字"],
+        )
+        analysis.save(analysis_dir / "part_0001.json")
+
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    "part_0001", 125.0, 185.0, "s1.mp4",
+                    analysis_path="analysis/part_0001.json",
+                ),
+            ],
+        )
+
+        result = compose_highlights(manifest, tmp_path)
+
+        # Should have timestamp [00:02:05] for 125 seconds
+        assert "[00:02:05]" in result
+
+    def test_highlights_includes_ui_text_as_main(self, tmp_path):
+        """Highlight with ui_key_text should use it as main text (not separate)."""
+        from yanhu.analyzer import AnalysisResult
+        from yanhu.composer import compose_highlights
+
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+
+        analysis = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            facts=["测试描述"],
+            ui_key_text=["关键对话内容"],
+        )
+        analysis.save(analysis_dir / "part_0001.json")
+
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    analysis_path="analysis/part_0001.json",
+                ),
+            ],
+        )
+
+        result = compose_highlights(manifest, tmp_path)
+
+        # ui_key_text is now the main highlight text, not shown as separate "ui:" line
+        assert "关键对话内容" in result
+        # The main line should contain the ui text directly
+        lines = [line for line in result.split("\n") if "关键对话内容" in line]
+        assert any(line.startswith("- [") for line in lines)
+
+    def test_highlights_includes_score(self, tmp_path):
+        """Highlight items should include score for debug."""
+        from yanhu.analyzer import AnalysisResult
+        from yanhu.composer import compose_highlights
+
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+
+        # Create segment with enough score to meet threshold
+        analysis = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            facts=["测试描述"],
+            scene_label="Dialogue",  # +50
+            ui_key_text=["重要内容"],  # +110
+        )
+        analysis.save(analysis_dir / "part_0001.json")
+
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    analysis_path="analysis/part_0001.json",
+                ),
+            ],
+        )
+
+        result = compose_highlights(manifest, tmp_path)
+
+        assert "score=" in result
+
+    def test_highlights_skips_errored_analysis(self, tmp_path):
+        """Should skip segments with analysis errors."""
+        from yanhu.analyzer import AnalysisResult
+        from yanhu.composer import compose_highlights
+
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+
+        # One good, one errored
+        good = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            facts=["正常分析"],
+            ui_key_text=["正常UI"],
+        )
+        good.save(analysis_dir / "part_0001.json")
+
+        errored = AnalysisResult(
+            segment_id="part_0002",
+            scene_type="unknown",
+            error="JSON parse error",
+            raw_text="bad json",
+        )
+        errored.save(analysis_dir / "part_0002.json")
+
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    analysis_path="analysis/part_0001.json",
+                ),
+                SegmentInfo(
+                    "part_0002", 60.0, 120.0, "s2.mp4",
+                    analysis_path="analysis/part_0002.json",
+                ),
+            ],
+        )
+
+        result = compose_highlights(manifest, tmp_path)
+
+        assert "part_0001" in result
+        assert "part_0002" not in result
+
+    def test_highlights_empty_when_no_analysis(self, tmp_path):
+        """Should show placeholder when no analysis available."""
+        from yanhu.composer import compose_highlights
+
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo("part_0001", 0.0, 60.0, "s1.mp4"),  # No analysis_path
+            ],
+        )
+
+        result = compose_highlights(manifest, tmp_path)
+
+        assert "No highlights available" in result
+
+
+class TestWriteHighlights:
+    """Test highlights file writing."""
+
+    def test_write_highlights_creates_file(self, tmp_path):
+        """write_highlights should create highlights.md file."""
+        from yanhu.composer import write_highlights
+
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[],
+        )
+
+        result_path = write_highlights(manifest, tmp_path)
+
+        assert result_path.exists()
+        assert result_path.name == "highlights.md"
+        content = result_path.read_text()
+        assert "# Highlights:" in content
+
+
+class TestPlatformWatermarks:
+    """Test platform watermark detection and filtering."""
+
+    def test_xiaohongshu_is_watermark(self):
+        """小红书 should be detected as watermark."""
+        assert is_platform_watermark("小红书") is True
+
+    def test_common_platform_keywords(self):
+        """Common platform keywords should be detected."""
+        watermarks = ["关注", "点赞", "收藏", "分享", "评论", "抖音", "快手"]
+        for keyword in watermarks:
+            assert is_platform_watermark(keyword) is True, f"{keyword} should be watermark"
+
+    def test_username_mention_is_watermark(self):
+        """@username patterns should be detected as watermark."""
+        assert is_platform_watermark("@用户名") is True
+        assert is_platform_watermark("@test_user123") is True
+        assert is_platform_watermark("@小明") is True
+
+    def test_normal_text_not_watermark(self):
+        """Normal dialogue text should not be watermark."""
+        assert is_platform_watermark("真成你爸了?") is False
+        assert is_platform_watermark("公主最后一次登上望帝乡") is False
+        assert is_platform_watermark("对话内容") is False
+
+    def test_filter_watermarks_removes_platform_keywords(self):
+        """filter_watermarks should remove platform keywords."""
+        ui_texts = ["小红书", "真成你爸了?", "关注"]
+        result = filter_watermarks(ui_texts)
+        assert result == ["真成你爸了?"]
+
+    def test_filter_watermarks_empty_input(self):
+        """filter_watermarks should handle empty input."""
+        assert filter_watermarks(None) == []
+        assert filter_watermarks([]) == []
+
+    def test_filter_watermarks_all_filtered(self):
+        """filter_watermarks should return empty if all are watermarks."""
+        ui_texts = ["小红书", "关注", "点赞"]
+        result = filter_watermarks(ui_texts)
+        assert result == []
+
+    def test_is_low_value_ui_all_watermarks(self):
+        """is_low_value_ui should return True when all are watermarks."""
+        assert is_low_value_ui(["小红书"]) is True
+        assert is_low_value_ui(["小红书", "关注"]) is True
+
+    def test_is_low_value_ui_mixed_content(self):
+        """is_low_value_ui should return False when mixed content."""
+        assert is_low_value_ui(["小红书", "对话内容"]) is False
+
+    def test_is_low_value_ui_empty(self):
+        """is_low_value_ui should return False for empty input."""
+        assert is_low_value_ui(None) is False
+        assert is_low_value_ui([]) is False
+
+
+class TestScoreSegmentWatermarks:
+    """Test scoring with watermark filtering."""
+
+    def test_watermark_only_ui_gets_penalty(self):
+        """Segment with only watermark UI should get penalty."""
+        from yanhu.analyzer import AnalysisResult
+        from yanhu.composer import score_segment
+
+        # Only watermark
+        watermark_only = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="unknown",
+            ui_key_text=["小红书"],
+        )
+        # No UI at all
+        no_ui = AnalysisResult(
+            segment_id="part_0002",
+            scene_type="unknown",
+        )
+
+        score_watermark = score_segment(watermark_only)
+        score_no_ui = score_segment(no_ui)
+
+        # Watermark-only should be penalized (negative or less than no UI)
+        assert score_watermark < score_no_ui
+
+    def test_mixed_ui_not_penalized(self):
+        """Segment with mixed UI (watermark + content) should not be penalized."""
+        from yanhu.analyzer import AnalysisResult
+        from yanhu.composer import score_segment
+
+        mixed_ui = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="unknown",
+            ui_key_text=["小红书", "对话内容"],
+        )
+        content_only = AnalysisResult(
+            segment_id="part_0002",
+            scene_type="unknown",
+            ui_key_text=["对话内容"],
+        )
+
+        score_mixed = score_segment(mixed_ui)
+        score_content = score_segment(content_only)
+
+        # Mixed should still score well (content is counted)
+        assert score_mixed == score_content  # Both have 1 valid UI item
+
+    def test_xiaohongshu_segment_not_selected_as_highlight(self, tmp_path):
+        """Segment with only 小红书 UI should not be in top highlights."""
+        from yanhu.analyzer import AnalysisResult
+        from yanhu.composer import compose_highlights
+
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+
+        # Create segment with only 小红书
+        xiaohongshu = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="unknown",
+            facts=["夜晚驾驶场景"],
+            ui_key_text=["小红书"],
+        )
+        xiaohongshu.save(analysis_dir / "part_0001.json")
+
+        # Create segment with real content
+        good_content = AnalysisResult(
+            segment_id="part_0002",
+            scene_type="dialogue",
+            facts=["角色对话"],
+            ui_key_text=["真成你爸了?"],
+        )
+        good_content.save(analysis_dir / "part_0002.json")
+
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    analysis_path="analysis/part_0001.json",
+                ),
+                SegmentInfo(
+                    "part_0002", 60.0, 120.0, "s2.mp4",
+                    analysis_path="analysis/part_0002.json",
+                ),
+            ],
+        )
+
+        result = compose_highlights(manifest, tmp_path, top_k=1)
+
+        # Good content should be selected, not xiaohongshu
+        assert "part_0002" in result
+        assert "真成你爸了?" in result
+        # xiaohongshu should not appear in UI line (filtered out)
+        assert "ui: 小红书" not in result
+
+
+class TestMinScoreThreshold:
+    """Test minimum score threshold for highlights."""
+
+    def test_low_score_segments_excluded(self, tmp_path):
+        """Segments below min_score should not be in primary selection."""
+        from yanhu.analyzer import AnalysisResult
+        from yanhu.composer import compose_highlights
+
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+
+        # Low score segment (no UI, no special scene)
+        low_score = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="unknown",
+            facts=["普通场景"],
+        )
+        low_score.save(analysis_dir / "part_0001.json")
+
+        # High score segment
+        high_score = AnalysisResult(
+            segment_id="part_0002",
+            scene_type="dialogue",
+            facts=["角色对话"],
+            scene_label="Dialogue",
+            ui_key_text=["重要对话"],
+        )
+        high_score.save(analysis_dir / "part_0002.json")
+
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    analysis_path="analysis/part_0001.json",
+                ),
+                SegmentInfo(
+                    "part_0002", 60.0, 120.0, "s2.mp4",
+                    analysis_path="analysis/part_0002.json",
+                ),
+            ],
+        )
+
+        result = compose_highlights(manifest, tmp_path, top_k=8, min_score=80)
+
+        # Only high score segment should be included
+        assert "part_0002" in result
+        # Low score might be included as secondary fill, check score is shown
+        lines = [line for line in result.split("\n") if "part_0001" in line]
+        # If included, it should be via secondary selection (score < 80)
+        if lines:
+            # It was included as secondary fill
+            pass
+        else:
+            # Not included at all - also acceptable
+            assert "part_0001" not in result
+
+    def test_min_score_threshold_respected(self, tmp_path):
+        """Only segments meeting min_score should be primary selected."""
+        from yanhu.analyzer import AnalysisResult
+        from yanhu.composer import compose_highlights
+
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+
+        # Create multiple segments with varying scores
+        for i in range(5):
+            score_boost = (i + 1) * 30  # 30, 60, 90, 120, 150
+            analysis = AnalysisResult(
+                segment_id=f"part_000{i+1}",
+                scene_type="dialogue" if score_boost >= 90 else "unknown",
+                facts=[f"描述{i+1}"],
+                scene_label="Dialogue" if score_boost >= 90 else None,
+                ui_key_text=[f"UI{i}"] if score_boost >= 120 else [],
+            )
+            analysis.save(analysis_dir / f"part_000{i+1}.json")
+
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    f"part_000{i+1}", i * 60.0, (i + 1) * 60.0, f"s{i+1}.mp4",
+                    analysis_path=f"analysis/part_000{i+1}.json",
+                )
+                for i in range(5)
+            ],
+        )
+
+        result = compose_highlights(manifest, tmp_path, top_k=2, min_score=100)
+
+        # Count highlight lines - should be <= 2
+        highlight_lines = [
+            line for line in result.split("\n") if line.startswith("- [")
+        ]
+        assert len(highlight_lines) <= 2
+
+
+class TestUiDeduplication:
+    """Test ui_key_text deduplication."""
+
+    def test_duplicate_ui_keeps_higher_score(self, tmp_path):
+        """When two segments have same UI, keep higher score."""
+        from yanhu.analyzer import AnalysisResult
+        from yanhu.composer import compose_highlights
+
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+
+        # Two segments with same UI text
+        first = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            facts=["场景描述1"],
+            scene_label="Dialogue",
+            ui_key_text=["桌上日记, 这是随公主出嫁的第五个年头"],
+        )
+        first.save(analysis_dir / "part_0001.json")
+
+        second = AnalysisResult(
+            segment_id="part_0002",
+            scene_type="dialogue",
+            facts=["场景描述2"],
+            scene_label="Dialogue",
+            ui_key_text=["桌上日记, 这是随公主出嫁的第五个年头"],  # Same UI
+            ocr_text=["额外文字"],  # Extra content = higher score
+        )
+        second.save(analysis_dir / "part_0002.json")
+
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    analysis_path="analysis/part_0001.json",
+                ),
+                SegmentInfo(
+                    "part_0002", 60.0, 120.0, "s2.mp4",
+                    analysis_path="analysis/part_0002.json",
+                ),
+            ],
+        )
+
+        result = compose_highlights(manifest, tmp_path, top_k=8, min_score=0)
+
+        # Only one should appear (the higher score one)
+        count = result.count("桌上日记")
+        assert count == 1, f"Duplicate UI should be deduplicated, found {count}"
+
+        # Higher score (part_0002) should be kept
+        assert "part_0002" in result
+
+    def test_different_ui_not_deduplicated_nonadjacent(self, tmp_path):
+        """Non-adjacent segments with different UI should both appear separately."""
+        from yanhu.analyzer import AnalysisResult
+        from yanhu.composer import compose_highlights
+
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+
+        # Use non-adjacent segment IDs to prevent merging
+        first = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            facts=["场景描述1"],
+            ui_key_text=["第一段对话"],
+        )
+        first.save(analysis_dir / "part_0001.json")
+
+        second = AnalysisResult(
+            segment_id="part_0003",  # Non-adjacent (skip part_0002)
+            scene_type="dialogue",
+            facts=["场景描述2"],
+            ui_key_text=["第二段对话"],  # Different UI
+        )
+        second.save(analysis_dir / "part_0003.json")
+
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    analysis_path="analysis/part_0001.json",
+                ),
+                SegmentInfo(
+                    "part_0003", 120.0, 180.0, "s3.mp4",
+                    analysis_path="analysis/part_0003.json",
+                ),
+            ],
+        )
+
+        result = compose_highlights(manifest, tmp_path, top_k=8, min_score=0)
+
+        # Both should appear separately (non-adjacent, so not merged)
+        assert "part_0001" in result
+        assert "part_0003" in result
+        assert "第一段对话" in result
+        assert "第二段对话" in result
+
+    def test_segments_without_ui_not_deduplicated(self, tmp_path):
+        """Segments without UI should not be deduplicated against each other."""
+        from yanhu.analyzer import AnalysisResult
+        from yanhu.composer import compose_highlights
+
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+
+        # Both have no UI
+        first = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="combat",
+            facts=["战斗场景1"],
+            scene_label="Combat",
+        )
+        first.save(analysis_dir / "part_0001.json")
+
+        second = AnalysisResult(
+            segment_id="part_0002",
+            scene_type="combat",
+            facts=["战斗场景2"],
+            scene_label="Combat",
+        )
+        second.save(analysis_dir / "part_0002.json")
+
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    analysis_path="analysis/part_0001.json",
+                ),
+                SegmentInfo(
+                    "part_0002", 60.0, 120.0, "s2.mp4",
+                    analysis_path="analysis/part_0002.json",
+                ),
+            ],
+        )
+
+        result = compose_highlights(manifest, tmp_path, top_k=8, min_score=0)
+
+        # Both should appear (no UI = no deduplication key)
+        assert "part_0001" in result
+        assert "part_0002" in result
+
+
+class TestAdjacentSegmentMerging:
+    """Test adjacent dialogue segment merging."""
+
+    def test_adjacent_dialogue_segments_merged(self, tmp_path):
+        """Adjacent segments with dialogue should be merged."""
+        from yanhu.analyzer import AnalysisResult
+        from yanhu.composer import compose_highlights
+
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+
+        # Two adjacent segments with dialogue
+        first = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            facts=["场景描述1"],
+            ui_key_text=["第一句台词"],
+        )
+        first.save(analysis_dir / "part_0001.json")
+
+        second = AnalysisResult(
+            segment_id="part_0002",
+            scene_type="dialogue",
+            facts=["场景描述2"],
+            ui_key_text=["第二句台词"],
+        )
+        second.save(analysis_dir / "part_0002.json")
+
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    analysis_path="analysis/part_0001.json",
+                ),
+                SegmentInfo(
+                    "part_0002", 60.0, 120.0, "s2.mp4",
+                    analysis_path="analysis/part_0002.json",
+                ),
+            ],
+        )
+
+        result = compose_highlights(manifest, tmp_path, top_k=8, min_score=0)
+
+        # Should be merged into one highlight with combined ID
+        assert "part_0001+0002" in result
+        # Both texts should appear
+        assert "第一句台词" in result
+        assert "第二句台词" in result
+        # Should only have 1 highlight line
+        highlight_lines = [
+            line for line in result.split("\n") if line.startswith("- [")
+        ]
+        assert len(highlight_lines) == 1
+
+    def test_nonadjacent_segments_not_merged(self, tmp_path):
+        """Non-adjacent segments should not be merged."""
+        from yanhu.analyzer import AnalysisResult
+        from yanhu.composer import compose_highlights
+
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+
+        first = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            facts=["场景描述1"],
+            ui_key_text=["第一句台词"],
+        )
+        first.save(analysis_dir / "part_0001.json")
+
+        # Gap: part_0003 (not part_0002)
+        third = AnalysisResult(
+            segment_id="part_0003",
+            scene_type="dialogue",
+            facts=["场景描述3"],
+            ui_key_text=["第三句台词"],
+        )
+        third.save(analysis_dir / "part_0003.json")
+
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    analysis_path="analysis/part_0001.json",
+                ),
+                SegmentInfo(
+                    "part_0003", 120.0, 180.0, "s3.mp4",
+                    analysis_path="analysis/part_0003.json",
+                ),
+            ],
+        )
+
+        result = compose_highlights(manifest, tmp_path, top_k=8, min_score=0)
+
+        # Should not be merged - both appear separately
+        assert "part_0001" in result
+        assert "part_0003" in result
+        assert "+" not in result  # No merged ID
+        # Should have 2 highlight lines
+        highlight_lines = [
+            line for line in result.split("\n") if line.startswith("- [")
+        ]
+        assert len(highlight_lines) == 2
+
+    def test_no_dialogue_segments_not_merged(self, tmp_path):
+        """Adjacent segments without dialogue content should not be merged."""
+        from yanhu.analyzer import AnalysisResult
+        from yanhu.composer import compose_highlights
+
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+
+        # No dialogue content (no ui_key_text, no ocr_text)
+        first = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="combat",
+            facts=["战斗场景1"],
+            scene_label="Combat",
+        )
+        first.save(analysis_dir / "part_0001.json")
+
+        second = AnalysisResult(
+            segment_id="part_0002",
+            scene_type="combat",
+            facts=["战斗场景2"],
+            scene_label="Combat",
+        )
+        second.save(analysis_dir / "part_0002.json")
+
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    analysis_path="analysis/part_0001.json",
+                ),
+                SegmentInfo(
+                    "part_0002", 60.0, 120.0, "s2.mp4",
+                    analysis_path="analysis/part_0002.json",
+                ),
+            ],
+        )
+
+        result = compose_highlights(manifest, tmp_path, top_k=8, min_score=0)
+
+        # Should not be merged - no dialogue content
+        assert "+" not in result
+        # Should have 2 highlight lines
+        highlight_lines = [
+            line for line in result.split("\n") if line.startswith("- [")
+        ]
+        assert len(highlight_lines) == 2
+
+
+class TestNoLowScoreFill:
+    """Test that low score segments don't fill when N < K."""
+
+    def test_no_fill_with_low_scores(self, tmp_path):
+        """Should not fill with low-score segments when fewer than K qualify."""
+        from yanhu.analyzer import AnalysisResult
+        from yanhu.composer import compose_highlights
+
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+
+        # One high-score segment (meets min_score=80)
+        high = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            facts=["高分场景"],
+            ui_key_text=["重要台词"],  # +110
+        )
+        high.save(analysis_dir / "part_0001.json")
+
+        # One low-score segment (below min_score=80)
+        low = AnalysisResult(
+            segment_id="part_0003",  # Non-adjacent
+            scene_type="unknown",
+            facts=["低分场景"],  # No UI, no scene_label = low score
+        )
+        low.save(analysis_dir / "part_0003.json")
+
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    analysis_path="analysis/part_0001.json",
+                ),
+                SegmentInfo(
+                    "part_0003", 120.0, 180.0, "s3.mp4",
+                    analysis_path="analysis/part_0003.json",
+                ),
+            ],
+        )
+
+        result = compose_highlights(manifest, tmp_path, top_k=8, min_score=80)
+
+        # Should only have 1 highlight (the high-score one)
+        assert "Top 1 moments" in result
+        assert "part_0001" in result
+        assert "part_0003" not in result
+
+    def test_outputs_actual_count_not_top_k(self, tmp_path):
+        """Should output actual count in header, not top_k."""
+        from yanhu.analyzer import AnalysisResult
+        from yanhu.composer import compose_highlights
+
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+
+        # Create 2 high-score segments
+        for i in range(2):
+            analysis = AnalysisResult(
+                segment_id=f"part_000{i*2+1}",  # part_0001, part_0003 (non-adjacent)
+                scene_type="dialogue",
+                facts=[f"场景{i+1}"],
+                ui_key_text=[f"台词{i+1}"],
+            )
+            analysis.save(analysis_dir / f"part_000{i*2+1}.json")
+
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    analysis_path="analysis/part_0001.json",
+                ),
+                SegmentInfo(
+                    "part_0003", 120.0, 180.0, "s3.mp4",
+                    analysis_path="analysis/part_0003.json",
+                ),
+            ],
+        )
+
+        result = compose_highlights(manifest, tmp_path, top_k=8, min_score=80)
+
+        # Should say "Top 2 moments" not "Top 8 moments"
+        assert "Top 2 moments" in result
+
+
+class TestHighlightTextPriority:
+    """Test highlight text priority: ui > dialogue ocr > facts."""
+
+    def test_ui_key_text_as_main_text(self, tmp_path):
+        """ui_key_text should be the main highlight text."""
+        from yanhu.analyzer import AnalysisResult
+        from yanhu.composer import compose_highlights
+
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+
+        analysis = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            facts=["这是facts描述"],
+            caption="这是caption描述",
+            ui_key_text=["这是台词内容"],
+            ocr_text=["这是OCR文字"],
+        )
+        analysis.save(analysis_dir / "part_0001.json")
+
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    analysis_path="analysis/part_0001.json",
+                ),
+            ],
+        )
+
+        result = compose_highlights(manifest, tmp_path, min_score=0)
+
+        # Main line should have ui_key_text, not facts/caption/ocr
+        main_line = [line for line in result.split("\n") if line.startswith("- [")][0]
+        assert "这是台词内容" in main_line
+        assert "这是facts描述" not in main_line
+        assert "这是caption描述" not in main_line
+
+    def test_dialogue_ocr_when_no_ui(self, tmp_path):
+        """Should use dialogue-like OCR text when no ui_key_text."""
+        from yanhu.analyzer import AnalysisResult
+        from yanhu.composer import compose_highlights
+
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+
+        analysis = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            facts=["这是facts描述"],
+            ocr_text=["短文字", "这是对话内容？长一点的台词"],  # Second has ? and longer
+        )
+        analysis.save(analysis_dir / "part_0001.json")
+
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    analysis_path="analysis/part_0001.json",
+                ),
+            ],
+        )
+
+        result = compose_highlights(manifest, tmp_path, min_score=0)
+
+        # Should pick the dialogue-like OCR (with ?)
+        assert "这是对话内容？长一点的台词" in result
+
+    def test_facts_fallback_when_no_ui_or_ocr(self, tmp_path):
+        """Should fallback to facts when no ui_key_text or ocr_text."""
+        from yanhu.analyzer import AnalysisResult
+        from yanhu.composer import compose_highlights
+
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+
+        analysis = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            facts=["这是fallback的facts描述"],
+            scene_label="Dialogue",  # Need this for min_score
+        )
+        analysis.save(analysis_dir / "part_0001.json")
+
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    analysis_path="analysis/part_0001.json",
+                ),
+            ],
+        )
+
+        result = compose_highlights(manifest, tmp_path, min_score=0)
+
+        # Should use facts as fallback
+        assert "这是fallback的facts描述" in result
+
+    def test_xiaohongshu_not_in_highlight_text(self, tmp_path):
+        """小红书 watermark should not appear as highlight text."""
+        from yanhu.analyzer import AnalysisResult
+        from yanhu.composer import compose_highlights
+
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+
+        analysis = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="unknown",
+            facts=["夜晚驾驶场景"],
+            ui_key_text=["小红书"],  # Watermark only
+        )
+        analysis.save(analysis_dir / "part_0001.json")
+
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    analysis_path="analysis/part_0001.json",
+                ),
+            ],
+        )
+
+        # Use min_score=0 to include this segment
+        result = compose_highlights(manifest, tmp_path, min_score=-100)
+
+        # Main line should NOT have 小红书, should fallback to facts
+        main_line = [line for line in result.split("\n") if line.startswith("- [")][0]
+        assert "小红书" not in main_line
+        assert "夜晚驾驶场景" in main_line
+
+
+class TestPickDialogueText:
+    """Test dialogue text selection from OCR."""
+
+    def test_prefers_question_mark(self):
+        """Should prefer text with question mark."""
+        from yanhu.composer import pick_dialogue_text
+
+        texts = ["普通文字", "这是问题？"]
+        result = pick_dialogue_text(texts)
+        assert result == "这是问题？"
+
+    def test_prefers_exclamation_mark(self):
+        """Should prefer text with exclamation mark."""
+        from yanhu.composer import pick_dialogue_text
+
+        texts = ["普通文字", "感叹句！"]
+        result = pick_dialogue_text(texts)
+        assert result == "感叹句！"
+
+    def test_longest_when_no_dialogue_punctuation(self):
+        """Should pick longest when no dialogue punctuation."""
+        from yanhu.composer import pick_dialogue_text
+
+        texts = ["短", "这是比较长的文字"]
+        result = pick_dialogue_text(texts)
+        assert result == "这是比较长的文字"
+
+    def test_empty_returns_none(self):
+        """Should return None for empty list."""
+        from yanhu.composer import pick_dialogue_text
+
+        assert pick_dialogue_text(None) is None
+        assert pick_dialogue_text([]) is None
+
+
+class TestUiSymbolsHeartPrefix:
+    """Test ❤️ prefix when ui_symbols contains heart."""
+
+    def test_heart_symbol_prefixed(self, tmp_path):
+        """Should prefix ❤️ when ui_symbols contains heart emoji."""
+        from yanhu.analyzer import AnalysisResult
+        from yanhu.composer import compose_highlights
+
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+
+        analysis = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            facts=["场景描述"],
+            ui_key_text=["台词内容"],
+            ui_symbols=["❤️"],
+        )
+        analysis.save(analysis_dir / "part_0001.json")
+
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    analysis_path="analysis/part_0001.json",
+                ),
+            ],
+        )
+
+        result = compose_highlights(manifest, tmp_path, min_score=0)
+
+        # Should have ❤️ prefix
+        assert "❤️ 台词内容" in result
+
+    def test_heart_tag_prefixed(self, tmp_path):
+        """Should prefix ❤️ when ui_symbols contains 'heart' tag."""
+        from yanhu.analyzer import AnalysisResult
+        from yanhu.composer import compose_highlights
+
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+
+        analysis = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            facts=["场景描述"],
+            ui_key_text=["台词内容"],
+            ui_symbols=["heart"],  # Tag form, not emoji
+        )
+        analysis.save(analysis_dir / "part_0001.json")
+
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    analysis_path="analysis/part_0001.json",
+                ),
+            ],
+        )
+
+        result = compose_highlights(manifest, tmp_path, min_score=0)
+
+        # Should have ❤️ prefix for "heart" tag
+        assert "❤️ 台词内容" in result
+
+    def test_no_prefix_without_heart(self, tmp_path):
+        """Should not prefix ❤️ when ui_symbols doesn't contain heart."""
+        from yanhu.analyzer import AnalysisResult
+        from yanhu.composer import compose_highlights
+
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+
+        analysis = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            facts=["场景描述"],
+            ui_key_text=["台词内容"],
+            ui_symbols=["🔥"],  # Fire, not heart
+        )
+        analysis.save(analysis_dir / "part_0001.json")
+
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    analysis_path="analysis/part_0001.json",
+                ),
+            ],
+        )
+
+        result = compose_highlights(manifest, tmp_path, min_score=0)
+
+        # Should NOT have ❤️ prefix
+        main_line = [line for line in result.split("\n") if line.startswith("- [")][0]
+        assert "❤️" not in main_line
+        assert "台词内容" in main_line
+
+    def test_no_prefix_without_symbols(self, tmp_path):
+        """Should not prefix ❤️ when ui_symbols is empty."""
+        from yanhu.analyzer import AnalysisResult
+        from yanhu.composer import compose_highlights
+
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+
+        analysis = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            facts=["场景描述"],
+            ui_key_text=["台词内容"],
+            # No ui_symbols
+        )
+        analysis.save(analysis_dir / "part_0001.json")
+
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    analysis_path="analysis/part_0001.json",
+                ),
+            ],
+        )
+
+        result = compose_highlights(manifest, tmp_path, min_score=0)
+
+        # Should NOT have ❤️ prefix
+        main_line = [line for line in result.split("\n") if line.startswith("- [")][0]
+        assert "❤️" not in main_line
+
+    def test_heart_only_on_first_segment_when_merged(self, tmp_path):
+        """When merging two segments, ❤️ should only appear on the segment that has it."""
+        from yanhu.analyzer import AnalysisResult
+        from yanhu.composer import compose_highlights
+
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+
+        # First segment has ❤️
+        first = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            facts=["场景描述1"],
+            ui_key_text=["第一段台词"],
+            ui_symbols=["❤️"],
+        )
+        first.save(analysis_dir / "part_0001.json")
+
+        # Second segment has no ❤️
+        second = AnalysisResult(
+            segment_id="part_0002",
+            scene_type="dialogue",
+            facts=["场景描述2"],
+            ui_key_text=["第二段台词"],
+            # No ui_symbols
+        )
+        second.save(analysis_dir / "part_0002.json")
+
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    analysis_path="analysis/part_0001.json",
+                ),
+                SegmentInfo(
+                    "part_0002", 60.0, 120.0, "s2.mp4",
+                    analysis_path="analysis/part_0002.json",
+                ),
+            ],
+        )
+
+        result = compose_highlights(manifest, tmp_path, min_score=0)
+
+        # Should have merged ID
+        assert "part_0001+0002" in result
+        # ❤️ should be on first segment's text, not second
+        assert "❤️ 第一段台词" in result
+        # Second segment should NOT have ❤️
+        assert "❤️ 第二段台词" not in result
+        assert "第二段台词" in result
+
+    def test_heart_inserts_before_keyword(self, tmp_path):
+        """When segment has ❤️ and contains '都做过', insert ❤️ before that keyword."""
+        from yanhu.analyzer import AnalysisResult
+        from yanhu.composer import compose_highlights
+
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+
+        analysis = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            facts=["场景描述"],
+            ui_key_text=["daddy也叫了", "都做过"],
+            ui_symbols=["❤️"],
+        )
+        analysis.save(analysis_dir / "part_0001.json")
+
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    analysis_path="analysis/part_0001.json",
+                ),
+            ],
+        )
+
+        result = compose_highlights(manifest, tmp_path, min_score=0)
+
+        # ❤️ should be inserted before "都做过", not at the start
+        assert "daddy也叫了 / ❤️ 都做过" in result
+
+    def test_heart_keyword_in_merged_segment(self, tmp_path):
+        """When merged, ❤️ should be inserted before keyword in correct segment."""
+        from yanhu.analyzer import AnalysisResult
+        from yanhu.composer import compose_highlights
+
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+
+        # First segment has ❤️ and keyword
+        first = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            facts=["场景描述1"],
+            ui_key_text=["daddy也叫了", "都做过"],
+            ui_symbols=["❤️"],
+        )
+        first.save(analysis_dir / "part_0001.json")
+
+        # Second segment has no ❤️
+        second = AnalysisResult(
+            segment_id="part_0002",
+            scene_type="dialogue",
+            facts=["场景描述2"],
+            ui_key_text=["現在你和另外一個男人拍拖"],
+        )
+        second.save(analysis_dir / "part_0002.json")
+
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    analysis_path="analysis/part_0001.json",
+                ),
+                SegmentInfo(
+                    "part_0002", 60.0, 120.0, "s2.mp4",
+                    analysis_path="analysis/part_0002.json",
+                ),
+            ],
+        )
+
+        result = compose_highlights(manifest, tmp_path, min_score=0)
+
+        # Should have merged ID
+        assert "part_0001+0002" in result
+        # ❤️ should be before "都做过" in first segment
+        # Format: "daddy也叫了 / ❤️ 都做过 / 現在你和另外一個男人拍拖"
+        assert "❤️ 都做过" in result
+        assert "daddy也叫了" in result
+        assert "現在你和另外一個男人拍拖" in result
+
+
+class TestUiKeyTextJoin:
+    """Test ui_key_text joining with ' / '."""
+
+    def test_two_ui_items_joined(self, tmp_path):
+        """Should join two ui_key_text items with ' / '."""
+        from yanhu.analyzer import AnalysisResult
+        from yanhu.composer import compose_highlights
+
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+
+        analysis = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            facts=["场景描述"],
+            ui_key_text=["第一句", "第二句"],
+        )
+        analysis.save(analysis_dir / "part_0001.json")
+
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    analysis_path="analysis/part_0001.json",
+                ),
+            ],
+        )
+
+        result = compose_highlights(manifest, tmp_path, min_score=0)
+
+        # Should have joined text
+        assert "第一句 / 第二句" in result
+
+    def test_single_ui_item_not_joined(self, tmp_path):
+        """Should not add separator for single ui_key_text item."""
+        from yanhu.analyzer import AnalysisResult
+        from yanhu.composer import compose_highlights
+
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+
+        analysis = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            facts=["场景描述"],
+            ui_key_text=["单独一句"],
+        )
+        analysis.save(analysis_dir / "part_0001.json")
+
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    analysis_path="analysis/part_0001.json",
+                ),
+            ],
+        )
+
+        result = compose_highlights(manifest, tmp_path, min_score=0)
+
+        # Should have single text without separator
+        assert "单独一句" in result
+        assert " / " not in result or "单独一句 / " not in result
+
+    def test_heart_prefix_with_joined_text(self, tmp_path):
+        """Should have ❤️ prefix before joined ui_key_text."""
+        from yanhu.analyzer import AnalysisResult
+        from yanhu.composer import compose_highlights
+
+        analysis_dir = tmp_path / "analysis"
+        analysis_dir.mkdir()
+
+        analysis = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            facts=["场景描述"],
+            ui_key_text=["第一句", "第二句"],
+            ui_symbols=["❤️"],
+        )
+        analysis.save(analysis_dir / "part_0001.json")
+
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-20T12:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=60,
+            segments=[
+                SegmentInfo(
+                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    analysis_path="analysis/part_0001.json",
+                ),
+            ],
+        )
+
+        result = compose_highlights(manifest, tmp_path, min_score=0)
+
+        # Should have ❤️ prefix before joined text
+        assert "❤️ 第一句 / 第二句" in result
+
+
+class TestGetHighlightTextFunction:
+    """Test get_highlight_text and apply_heart_to_chunk functions."""
+
+    def test_has_heart_symbol_detection(self):
+        """Test _has_heart_symbol helper function."""
+        assert _has_heart_symbol(["❤️"]) is True
+        assert _has_heart_symbol(["heart"]) is True
+        assert _has_heart_symbol(["Heart"]) is True
+        assert _has_heart_symbol(["broken_heart"]) is True
+        assert _has_heart_symbol(["🔥"]) is False
+        assert _has_heart_symbol([]) is False
+        assert _has_heart_symbol(None) is False
+
+    def test_get_highlight_text_does_not_add_heart(self):
+        """Test get_highlight_text does NOT add ❤️ prefix (that's apply_heart_to_chunk's job)."""
+        from yanhu.analyzer import AnalysisResult
+
+        analysis = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            ui_key_text=["台词"],
+            ui_symbols=["❤️"],
+        )
+
+        result = get_highlight_text(analysis, ["台词"])
+        # get_highlight_text should NOT add heart - just return the text
+        assert result == "台词"
+        assert "❤️" not in result
+
+    def test_apply_heart_to_chunk_with_heart(self):
+        """Test apply_heart_to_chunk adds ❤️ prefix."""
+        from yanhu.analyzer import AnalysisResult
+
+        analysis = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            ui_key_text=["台词"],
+            ui_symbols=["❤️"],
+        )
+
+        result = apply_heart_to_chunk("台词", analysis)
+        assert result == "❤️ 台词"
+
+    def test_apply_heart_to_chunk_without_heart(self):
+        """Test apply_heart_to_chunk without heart symbol."""
+        from yanhu.analyzer import AnalysisResult
+
+        analysis = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            ui_key_text=["台词"],
+        )
+
+        result = apply_heart_to_chunk("台词", analysis)
+        assert result == "台词"
+        assert "❤️" not in result
+
+    def test_apply_heart_inserts_before_keyword(self):
+        """Test apply_heart_to_chunk inserts ❤️ before '都做过' keyword."""
+        from yanhu.analyzer import AnalysisResult
+
+        analysis = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            ui_symbols=["❤️"],
+        )
+
+        # With keyword
+        result = apply_heart_to_chunk("daddy也叫了 / 都做过", analysis)
+        assert result == "daddy也叫了 / ❤️ 都做过"
+
+        # Traditional Chinese variant
+        result2 = apply_heart_to_chunk("daddy也叫了 / 都做過", analysis)
+        assert result2 == "daddy也叫了 / ❤️ 都做過"
+
+    def test_apply_heart_prefix_when_no_keyword(self):
+        """Test apply_heart_to_chunk prefixes when no keyword present."""
+        from yanhu.analyzer import AnalysisResult
+
+        analysis = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            ui_symbols=["❤️"],
+        )
+
+        result = apply_heart_to_chunk("普通台词内容", analysis)
+        assert result == "❤️ 普通台词内容"

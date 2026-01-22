@@ -1478,14 +1478,15 @@ class TestDynamicMaxFrames:
 
     def test_dynamic_upgrade_when_subtitle_detected(self, tmp_path):
         """Should upgrade max_frames when subtitles detected."""
-        from yanhu.claude_client import ClaudeResponse
 
         # Create a mock analyzer that returns dialogue with ocr_text
         class SubtitleMockAnalyzer:
             def __init__(self):
                 self.calls = []
 
-            def analyze_segment(self, segment, session_dir, max_frames, max_facts=3, detail_level="L1"):
+            def analyze_segment(
+                self, segment, session_dir, max_frames, max_facts=3, detail_level="L1"
+            ):
                 self.calls.append((segment.id, max_frames))
                 return AnalysisResult(
                     segment_id=segment.id,
@@ -1502,7 +1503,7 @@ class TestDynamicMaxFrames:
         # Use custom analyzer directly in analyze_session logic
         mock_analyzer = SubtitleMockAnalyzer()
 
-        from yanhu.analyzer import _has_subtitle_content, generate_analysis_path
+        from yanhu.analyzer import _has_subtitle_content
 
         # Process manually to test the upgrade logic
         segment = manifest.segments[0]
@@ -1652,7 +1653,7 @@ class TestVerbatimPreservation:
 
     def test_ocr_text_verbatim(self, tmp_path):
         """ocr_text should be kept verbatim, not normalized."""
-        from yanhu.claude_client import ClaudeResponse, MockClaudeClient
+        from yanhu.claude_client import ClaudeResponse
 
         # Create mock that returns text with potential OCR error
         class VerbatimMockClient:
@@ -1723,7 +1724,8 @@ class TestVerbatimPreservation:
 
     def test_ocr_items_text_verbatim(self, tmp_path):
         """ocr_items.text should be kept verbatim, not normalized."""
-        from yanhu.claude_client import ClaudeResponse, OcrItem as ClaudeOcrItem
+        from yanhu.claude_client import ClaudeResponse
+        from yanhu.claude_client import OcrItem as ClaudeOcrItem
 
         class VerbatimMockClient:
             def analyze_frames(self, frame_paths, **kwargs):
