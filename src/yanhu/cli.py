@@ -707,6 +707,17 @@ def align(
     type=int,
     help="Override max facts for auto-run analysis (overrides preset)",
 )
+@click.option(
+    "--segment-duration",
+    type=int,
+    help="Explicit segment duration in seconds for auto-run (overrides strategy)",
+)
+@click.option(
+    "--segment-strategy",
+    type=click.Choice(["auto", "short", "medium", "long"], case_sensitive=False),
+    default="auto",
+    help="Auto-run segment strategy: auto (adaptive), short (5s), medium (15s), long (30s)",
+)
 def watch(
     raw_dir: tuple[str, ...],
     queue_dir: str,
@@ -720,6 +731,8 @@ def watch(
     preset: str,
     max_frames: int | None,
     max_facts: int | None,
+    segment_duration: int | None,
+    segment_strategy: str,
 ):
     """Watch directories for new video files and queue them.
 
@@ -802,6 +815,8 @@ def watch(
             preset=preset,
             max_frames=max_frames,
             max_facts=max_facts,
+            segment_duration=segment_duration,
+            segment_strategy=segment_strategy,
         )
 
         try:
@@ -922,6 +937,17 @@ def watch(
     type=click.Choice(["int8", "float16", "float32"], case_sensitive=False),
     help="Override whisper compute type (overrides preset)",
 )
+@click.option(
+    "--segment-duration",
+    type=int,
+    help="Explicit segment duration in seconds (overrides strategy)",
+)
+@click.option(
+    "--segment-strategy",
+    type=click.Choice(["auto", "short", "medium", "long"], case_sensitive=False),
+    default="auto",
+    help="Segment duration strategy: auto (adaptive), short (5s), medium (15s), long (30s)",
+)
 def run_queue_cmd(
     queue_dir: str,
     output_dir: str,
@@ -934,6 +960,8 @@ def run_queue_cmd(
     max_facts: int | None,
     transcribe_model: str | None,
     transcribe_compute: str | None,
+    segment_duration: int | None,
+    segment_strategy: str,
 ):
     """Process pending jobs from the queue.
 
@@ -970,6 +998,8 @@ def run_queue_cmd(
         max_facts=max_facts,
         transcribe_model=transcribe_model,
         transcribe_compute=transcribe_compute,
+        segment_duration=segment_duration,
+        segment_strategy=segment_strategy,
     )
 
     click.echo(f"Queue file: {config.queue_file}")

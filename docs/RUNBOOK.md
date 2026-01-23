@@ -212,6 +212,90 @@ yanhu run-queue --preset quality --transcribe-model base --limit 1
 yanhu run-queue --preset fast --max-frames 10 --max-facts 8 --limit 1
 ```
 
+### 4d. 分片长度策略（Segment Duration Strategy）
+
+**背景**：分片长度直接影响信息密度。短视频（如 44s 的 actor_clip）使用默认 60s 分片会导致只有 1 个片段，ASR/OCR 关键字/emoji 可能被聚合到单个 facts 中，降低可读性。
+
+**影响**：
+- **信息密度**：更短的分片 → 更多段落 → 更细粒度的 timeline
+- **关键字捕获**：5s 分片可捕获 "都做过/❤️/daddy也叫了" 等短时对话
+- **处理成本**：更多分片 → 更多 API 调用（可用 `--max-frames` 控制每段成本）
+
+**Auto 策略（默认）**：
+
+根据视频时长自动选择分片长度：
+- **≤3 分钟**（180s）：使用 **5s** 分片（短视频、精彩片段）
+- **≤15 分钟**（900s）：使用 **15s** 分片（中等时长录像）
+- **>15 分钟**：使用 **30s** 分片（长时完整录像）
+
+**使用方式**：
+
+```bash
+# 方式一：使用 auto 策略（默认，自动适配）
+yanhu run-queue --limit 1
+# 44s 视频 → 5s 分片（9 个片段）
+# 600s 视频 → 15s 分片（40 个片段）
+# 3600s 视频 → 30s 分片（120 个片段）
+
+# 方式二：显式指定策略
+yanhu run-queue --segment-strategy short --limit 1  # 强制 5s
+yanhu run-queue --segment-strategy medium --limit 1 # 强制 15s
+yanhu run-queue --segment-strategy long --limit 1   # 强制 30s
+
+# 方式三：显式指定秒数（覆盖策略）
+yanhu run-queue --segment-duration 10 --limit 1
+
+# 方式四：auto-run 指定策略
+yanhu watch -r ~/Videos/raw --once --auto-run --segment-strategy short
+
+# 方式五：结合 preset + 分片策略
+yanhu run-queue --preset quality --segment-strategy short --limit 1
+```
+
+**参数说明**：
+- `--segment-strategy [auto|short|medium|long]`：选择策略（默认 auto）
+  - `auto`：根据视频时长自动选择（推荐）
+  - `short`：强制 5s 分片（适合精彩片段）
+  - `medium`：强制 15s 分片（平衡选择）
+  - `long`：强制 30s 分片（长时录像）
+- `--segment-duration N`：显式指定秒数，覆盖策略
+
+**查看使用的参数**：
+
+```bash
+# 查看某个 session 使用的分片参数
+cat sessions/<session_id>/manifest.json | jq '.segment_duration'
+
+# 查看 job 记录的 run_config
+cat sessions/_queue/pending.jsonl | jq '.outputs.run_config | {segment_duration, segment_strategy}'
+```
+
+**典型场景**：
+
+```bash
+# 场景 1：短视频精彩片段（actor_clip 44s）
+yanhu watch -r ~/clips --once --auto-run --segment-strategy auto
+# → 自动使用 5s 分片，捕获 "都做过/❤️/daddy也叫了"
+
+# 场景 2：测试不同分片长度对比
+yanhu run-queue --session <id> --segment-duration 5 --force  # 生成 session_id_v2
+yanhu run-queue --session <id> --segment-duration 15 --force # 生成 session_id_v3
+# 对比 timeline.md 信息密度
+
+# 场景 3：长时录像（1 小时）使用 auto
+yanhu watch -r ~/longplay --once --auto-run --segment-strategy auto
+# → 自动使用 30s 分片，平衡粒度和成本
+
+# 场景 4：指定秒数微调
+yanhu run-queue --segment-duration 8 --limit 1
+```
+
+**推荐设置**：
+- **短视频/精彩片段**（<3 分钟）：使用 `auto` 或 `short`（5s）
+- **中等录像**（3-15 分钟）：使用 `auto`（自动 15s）
+- **长时录像**（>15 分钟）：使用 `auto`（自动 30s）或 `long`（30s）
+- **自定义需求**：使用 `--segment-duration` 显式指定
+
 ### 5. 多目录监控（Multi-dir）
 
 支持多个 `--raw-dir`，同一文件换目录后可再次入队：

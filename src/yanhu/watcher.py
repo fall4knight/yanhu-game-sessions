@@ -862,6 +862,15 @@ def process_job(
             error=f"Raw video not found: {job.raw_path}",
         )
 
+    # Determine segment duration based on strategy
+    segment_duration = determine_segment_duration(
+        video_path=raw_path,
+        strategy=run_config.get("segment_strategy", "auto"),
+        explicit_duration=run_config.get("segment_duration"),
+    )
+    strategy_name = run_config.get("segment_strategy", "auto")
+    print(f"  Segment duration: {segment_duration}s (strategy: {strategy_name})")
+
     try:
         # Step 1: Ingest
         game = job.get_game()
@@ -877,7 +886,7 @@ def process_job(
             session_id=session_id,
             source_video=raw_path,
             source_video_local=str(source_local),  # Already relative from copy_source_video
-            segment_duration=60,
+            segment_duration=segment_duration,  # Use adaptive duration
             source_metadata=source_metadata,
         )
         manifest.save(session_dir)
@@ -982,6 +991,94 @@ PRESETS = {
     },
 }
 
+# Segment duration strategies (seconds)
+SEGMENT_STRATEGIES = {
+    "short": 5,  # High information density, good for short clips
+    "medium": 15,  # Balanced, good for medium-length videos
+    "long": 30,  # Traditional, good for long sessions
+}
+
+
+def get_video_duration(video_path: Path) -> float:
+    """Get video duration in seconds using ffprobe.
+
+    Args:
+        video_path: Path to video file
+
+    Returns:
+        Duration in seconds, or 0 if cannot determine
+    """
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(video_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return float(result.stdout.strip())
+    except (subprocess.TimeoutExpired, ValueError, FileNotFoundError):
+        pass
+    return 0
+
+
+def determine_segment_duration(
+    video_path: Path,
+    strategy: str = "auto",
+    explicit_duration: int | None = None,
+) -> int:
+    """Determine segment duration based on strategy and video length.
+
+    Auto strategy (adaptive based on video duration):
+    - <= 3 min (180s): 5s segments (high density for short clips)
+    - <= 15 min (900s): 15s segments (balanced)
+    - > 15 min: 30s segments (efficient for long sessions)
+
+    Args:
+        video_path: Path to video file
+        strategy: "auto", "short", "medium", or "long"
+        explicit_duration: If provided, overrides strategy
+
+    Returns:
+        Segment duration in seconds
+    """
+    # Explicit duration takes precedence
+    if explicit_duration is not None:
+        return explicit_duration
+
+    # Named strategies
+    if strategy in SEGMENT_STRATEGIES:
+        return SEGMENT_STRATEGIES[strategy]
+
+    # Auto strategy: adapt to video length
+    if strategy == "auto":
+        duration = get_video_duration(video_path)
+        if duration == 0:
+            # Fallback to medium if can't determine
+            return 15
+
+        # Adaptive thresholds
+        if duration <= 180:  # <= 3 minutes
+            return 5
+        elif duration <= 900:  # <= 15 minutes
+            return 15
+        else:  # > 15 minutes
+            return 30
+
+    # Unknown strategy: default to medium
+    return 15
+
 
 def get_preset_config(preset_name: str) -> dict:
     """Get configuration for a preset.
@@ -1026,6 +1123,9 @@ class RunQueueConfig:
     transcribe_compute: str | None = None
     transcribe_beam_size: int | None = None
     transcribe_vad_filter: bool | None = None
+    # Segment strategy (adaptive duration)
+    segment_duration: int | None = None  # Explicit duration in seconds
+    segment_strategy: str = "auto"  # "auto", "short", "medium", "long"
 
     @property
     def queue_file(self) -> Path:
@@ -1062,6 +1162,8 @@ class RunQueueConfig:
         # Add metadata
         preset_config["preset"] = self.preset
         preset_config["source_mode"] = self.source_mode
+        preset_config["segment_duration"] = self.segment_duration
+        preset_config["segment_strategy"] = self.segment_strategy
 
         return preset_config
 
