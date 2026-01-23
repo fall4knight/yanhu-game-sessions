@@ -871,6 +871,10 @@ def process_job(
     strategy_name = run_config.get("segment_strategy", "auto")
     print(f"  Segment duration: {segment_duration}s (strategy: {strategy_name})")
 
+    # Initialize transcribe_stats in case of early error
+    from yanhu.transcriber import TranscribeStats
+    transcribe_stats = TranscribeStats()
+
     try:
         # Step 1: Ingest
         game = job.get_game()
@@ -912,7 +916,49 @@ def process_job(
         )
 
         # Step 5: Transcribe (params from run_config)
-        transcribe_session(
+        # Progress callback for transcribe
+        import time
+
+        transcribe_start_time = time.time()
+        last_progress_log = [0]  # Mutable to track in closure
+
+        def transcribe_progress_callback(
+            seg_id: str, status: str, result, stats
+        ) -> None:
+            """Log transcribe progress."""
+            if status == "done" and result:
+                item_count = len(result.asr_items) if result.asr_items else 0
+                if item_count > 0:
+                    print(f"    {seg_id}: {item_count} items")
+                else:
+                    print(f"    {seg_id}: empty")
+            elif status == "cached":
+                print(f"    {seg_id}: cached")
+            elif status == "error":
+                print(f"    {seg_id}: error")
+            elif status in ("limit_reached", "duration_limit_reached"):
+                msg = (
+                    f"  Transcribe limit reached: {stats.processed}/{stats.total} "
+                    f"segments processed"
+                )
+                print(msg)
+            # Log progress summary every 5 segments
+            if stats and stats.processed > 0 and stats.processed % 5 == 0:
+                if stats.processed != last_progress_log[0]:
+                    elapsed = time.time() - transcribe_start_time
+                    progress_msg = (
+                        f"  Progress: {stats.processed}/{stats.total} segments, "
+                        f"elapsed {elapsed:.1f}s"
+                    )
+                    print(progress_msg)
+                    last_progress_log[0] = stats.processed
+
+        transcribe_limit = run_config.get("transcribe_limit")
+        # Convert 0 to None (0 means no limit)
+        if transcribe_limit == 0:
+            transcribe_limit = None
+
+        transcribe_stats = transcribe_session(
             manifest=manifest,
             session_dir=session_dir,
             backend=run_config.get("transcribe_backend", "whisper_local"),
@@ -920,6 +966,9 @@ def process_job(
             compute_type=run_config.get("transcribe_compute", "int8"),
             beam_size=run_config.get("transcribe_beam_size", 1),
             vad_filter=run_config.get("transcribe_vad_filter", True),
+            limit=transcribe_limit,
+            max_total_seconds=run_config.get("transcribe_max_seconds"),
+            on_progress=transcribe_progress_callback,
             force=force,
         )
 
@@ -930,30 +979,31 @@ def process_job(
 
         # Step 7: Validate outputs
         valid, error_msg = validate_outputs(session_dir)
+
+        # Prepare outputs with transcribe stats
+        outputs = {
+            "session_dir": str(session_dir),
+            "timeline": str(session_dir / "timeline.md"),
+            "overview": str(session_dir / "overview.md"),
+            "highlights": str(session_dir / "highlights.md"),
+            "run_config": run_config,  # Record parameters used
+            "transcribe_processed": transcribe_stats.processed,
+            "transcribe_total": transcribe_stats.total,
+            "transcribe_limited": transcribe_stats.skipped_limit > 0,
+        }
+
         if not valid:
             return JobResult(
                 success=False,
                 session_id=session_id,
                 error=f"Output validation failed: {error_msg}",
-                outputs={
-                    "session_dir": str(session_dir),
-                    "timeline": str(session_dir / "timeline.md"),
-                    "overview": str(session_dir / "overview.md"),
-                    "highlights": str(session_dir / "highlights.md"),
-                    "run_config": run_config,  # Record parameters used
-                },
+                outputs=outputs,
             )
 
         return JobResult(
             success=True,
             session_id=session_id,
-            outputs={
-                "session_dir": str(session_dir),
-                "timeline": str(session_dir / "timeline.md"),
-                "overview": str(session_dir / "overview.md"),
-                "highlights": str(session_dir / "highlights.md"),
-                "run_config": run_config,  # Record parameters used
-            },
+            outputs=outputs,
         )
 
     except Exception as e:
@@ -976,6 +1026,8 @@ PRESETS = {
         "transcribe_compute": "int8",
         "transcribe_beam_size": 1,
         "transcribe_vad_filter": True,
+        "transcribe_limit": None,  # No limit by default
+        "transcribe_max_seconds": None,  # No duration limit by default
     },
     "quality": {
         # Analysis parameters
@@ -988,6 +1040,8 @@ PRESETS = {
         "transcribe_compute": "float32",
         "transcribe_beam_size": 5,
         "transcribe_vad_filter": True,
+        "transcribe_limit": None,  # No limit by default
+        "transcribe_max_seconds": None,  # No duration limit by default
     },
 }
 
@@ -1123,6 +1177,8 @@ class RunQueueConfig:
     transcribe_compute: str | None = None
     transcribe_beam_size: int | None = None
     transcribe_vad_filter: bool | None = None
+    transcribe_limit: int | None = None  # Max segments to transcribe (0 = no limit)
+    transcribe_max_seconds: float | None = None  # Max total duration to transcribe
     # Segment strategy (adaptive duration)
     segment_duration: int | None = None  # Explicit duration in seconds
     segment_strategy: str = "auto"  # "auto", "short", "medium", "long"
@@ -1158,6 +1214,10 @@ class RunQueueConfig:
             preset_config["transcribe_beam_size"] = self.transcribe_beam_size
         if self.transcribe_vad_filter is not None:
             preset_config["transcribe_vad_filter"] = self.transcribe_vad_filter
+        if self.transcribe_limit is not None:
+            preset_config["transcribe_limit"] = self.transcribe_limit
+        if self.transcribe_max_seconds is not None:
+            preset_config["transcribe_max_seconds"] = self.transcribe_max_seconds
 
         # Add metadata
         preset_config["preset"] = self.preset

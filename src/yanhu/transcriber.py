@@ -549,7 +549,9 @@ class TranscribeStats:
     processed: int = 0
     skipped_cache: int = 0
     skipped_filter: int = 0
+    skipped_limit: int = 0  # Skipped due to limit constraints
     errors: int = 0
+    total: int = 0  # Total segments considered
 
 
 def merge_asr_to_analysis(
@@ -602,8 +604,9 @@ def transcribe_session(
     max_seconds: int | None = None,
     force: bool = False,
     limit: int | None = None,
+    max_total_seconds: float | None = None,
     segments: list[str] | None = None,
-    on_progress: Callable[[str, str, AsrResult | None], None] | None = None,
+    on_progress: Callable[[str, str, AsrResult | None, TranscribeStats | None], None] | None = None,
     # Whisper-specific options
     model_size: str = "base",
     language: str | None = None,
@@ -621,8 +624,10 @@ def transcribe_session(
         max_seconds: Optional limit on audio duration per segment
         force: Re-transcribe even if ASR data exists
         limit: Only process first N segments
+        max_total_seconds: Optional limit on total transcription duration
+            (stops when cumulative duration exceeds this)
         segments: Optional list of segment IDs to process
-        on_progress: Callback(segment_id, status, result)
+        on_progress: Callback(segment_id, status, result, stats) - called after each segment
         model_size: Whisper model size (for whisper_local)
         language: Language code (for whisper_local, None = auto)
         vad_filter: Enable VAD filter (for whisper_local)
@@ -644,16 +649,29 @@ def transcribe_session(
         beam_size=beam_size,
     )
     stats = TranscribeStats()
+    stats.total = len(manifest.segments)
+    cumulative_duration = 0.0  # Track total transcribed duration
 
     for i, segment in enumerate(manifest.segments):
-        # Apply limit
+        # Apply segment count limit
         if limit is not None and i >= limit:
+            # Mark remaining segments as skipped due to limit
+            stats.skipped_limit = stats.total - i
+            if on_progress:
+                on_progress("", "limit_reached", None, stats)
             break
 
         # Apply filter
         if segments is not None and segment.id not in segments:
             stats.skipped_filter += 1
             continue
+
+        # Apply total duration limit
+        if max_total_seconds is not None and cumulative_duration >= max_total_seconds:
+            stats.skipped_limit = stats.total - i
+            if on_progress:
+                on_progress("", "duration_limit_reached", None, stats)
+            break
 
         # Check cache
         analysis_path = session_dir / "analysis" / f"{segment.id}.json"
@@ -664,7 +682,7 @@ def transcribe_session(
                 if "asr_items" in data or "asr_error" in data:
                     stats.skipped_cache += 1
                     if on_progress:
-                        on_progress(segment.id, "cached", None)
+                        on_progress(segment.id, "cached", None, stats)
                     continue
             except (json.JSONDecodeError, OSError):
                 pass
@@ -679,11 +697,14 @@ def transcribe_session(
             if result.asr_error:
                 stats.errors += 1
                 if on_progress:
-                    on_progress(segment.id, "error", result)
+                    on_progress(segment.id, "error", result, stats)
             else:
                 stats.processed += 1
+                # Update cumulative duration
+                segment_duration = segment.end_time - segment.start_time
+                cumulative_duration += segment_duration
                 if on_progress:
-                    on_progress(segment.id, "done", result)
+                    on_progress(segment.id, "done", result, stats)
 
         except Exception as e:
             stats.errors += 1
@@ -694,6 +715,6 @@ def transcribe_session(
             )
             merge_asr_to_analysis(error_result, analysis_path, segment)
             if on_progress:
-                on_progress(segment.id, "error", error_result)
+                on_progress(segment.id, "error", error_result, stats)
 
     return stats

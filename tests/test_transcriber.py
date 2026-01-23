@@ -461,7 +461,7 @@ class TestTranscribeSession:
         manifest = self._create_test_manifest(tmp_path, num_segments=1)
         progress_calls = []
 
-        def on_progress(segment_id, status, result):
+        def on_progress(segment_id, status, result, stats):
             progress_calls.append((segment_id, status))
 
         transcribe_session(manifest, tmp_path, backend="mock", on_progress=on_progress)

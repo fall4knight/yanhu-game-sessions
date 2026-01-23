@@ -708,6 +708,16 @@ def align(
     help="Override max facts for auto-run analysis (overrides preset)",
 )
 @click.option(
+    "--transcribe-limit",
+    type=int,
+    help="Auto-run: max segments to transcribe (0=no limit, default: no limit)",
+)
+@click.option(
+    "--transcribe-max-seconds",
+    type=float,
+    help="Auto-run: max total duration to transcribe in seconds (default: no limit)",
+)
+@click.option(
     "--segment-duration",
     type=int,
     help="Explicit segment duration in seconds for auto-run (overrides strategy)",
@@ -731,6 +741,8 @@ def watch(
     preset: str,
     max_frames: int | None,
     max_facts: int | None,
+    transcribe_limit: int | None,
+    transcribe_max_seconds: float | None,
     segment_duration: int | None,
     segment_strategy: str,
 ):
@@ -815,6 +827,8 @@ def watch(
             preset=preset,
             max_frames=max_frames,
             max_facts=max_facts,
+            transcribe_limit=transcribe_limit,
+            transcribe_max_seconds=transcribe_max_seconds,
             segment_duration=segment_duration,
             segment_strategy=segment_strategy,
         )
@@ -938,6 +952,16 @@ def watch(
     help="Override whisper compute type (overrides preset)",
 )
 @click.option(
+    "--transcribe-limit",
+    type=int,
+    help="Max segments to transcribe (0=no limit, default: no limit)",
+)
+@click.option(
+    "--transcribe-max-seconds",
+    type=float,
+    help="Max total duration to transcribe in seconds (default: no limit)",
+)
+@click.option(
     "--segment-duration",
     type=int,
     help="Explicit segment duration in seconds (overrides strategy)",
@@ -960,6 +984,8 @@ def run_queue_cmd(
     max_facts: int | None,
     transcribe_model: str | None,
     transcribe_compute: str | None,
+    transcribe_limit: int | None,
+    transcribe_max_seconds: float | None,
     segment_duration: int | None,
     segment_strategy: str,
 ):
@@ -998,6 +1024,8 @@ def run_queue_cmd(
         max_facts=max_facts,
         transcribe_model=transcribe_model,
         transcribe_compute=transcribe_compute,
+        transcribe_limit=transcribe_limit,
+        transcribe_max_seconds=transcribe_max_seconds,
         segment_duration=segment_duration,
         segment_strategy=segment_strategy,
     )

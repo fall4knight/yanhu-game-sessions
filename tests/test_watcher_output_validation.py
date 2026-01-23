@@ -133,7 +133,8 @@ class TestOutputValidation:
                     segment.analysis_path = "analysis/part_0001.json"
 
         def mock_transcribe_session(manifest, session_dir, **kwargs):
-            pass
+            from yanhu.transcriber import TranscribeStats
+            return TranscribeStats(processed=1, total=1)
 
         monkeypatch.setattr("yanhu.segmenter.segment_video", mock_segment_video)
         monkeypatch.setattr("yanhu.extractor.extract_frames", mock_extract_frames)
@@ -217,7 +218,8 @@ class TestOutputValidation:
                     segment.analysis_path = "analysis/part_0001.json"
 
         def mock_transcribe_session(manifest, session_dir, **kwargs):
-            pass
+            from yanhu.transcriber import TranscribeStats
+            return TranscribeStats(processed=1, total=1)
 
         monkeypatch.setattr("yanhu.segmenter.segment_video", mock_segment_video)
         monkeypatch.setattr("yanhu.extractor.extract_frames", mock_extract_frames)
