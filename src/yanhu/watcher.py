@@ -429,6 +429,7 @@ class ScanResult:
     found: int = 0
     queued: int = 0
     skipped: int = 0
+    queued_jobs: list[QueueJob] = field(default_factory=list)  # Jobs queued this scan
 
 
 def scan_directory(config: WatcherConfig, handler: VideoHandler) -> ScanResult:
@@ -439,7 +440,7 @@ def scan_directory(config: WatcherConfig, handler: VideoHandler) -> ScanResult:
         handler: VideoHandler instance with state
 
     Returns:
-        ScanResult with counts
+        ScanResult with counts and list of queued jobs
     """
     result = ScanResult()
 
@@ -456,6 +457,7 @@ def scan_directory(config: WatcherConfig, handler: VideoHandler) -> ScanResult:
             job = handler.on_created(path, raw_dir=raw_dir)
             if job:
                 result.queued += 1
+                result.queued_jobs.append(job)
             else:
                 result.skipped += 1
 
@@ -477,7 +479,7 @@ def scan_once(
         on_queued: Optional callback(job) called for each queued job
 
     Returns:
-        ScanResult with counts
+        ScanResult with counts and list of queued jobs
     """
     handler = VideoHandler(config)
     result = ScanResult()
@@ -495,6 +497,7 @@ def scan_once(
             job = handler.on_created(path, raw_dir=raw_dir)
             if job:
                 result.queued += 1
+                result.queued_jobs.append(job)
                 if on_queued:
                     on_queued(job)
             else:
@@ -522,7 +525,8 @@ def start_polling(
         config: Watcher configuration
         interval: Seconds between scans
         on_queued: Optional callback(job) called for each queued job
-        on_scan_complete: Optional callback(queued_count) called after each scan
+        on_scan_complete: Optional callback(queued_jobs: list) called after each scan
+
     """
     import time
 
@@ -541,10 +545,10 @@ def start_polling(
                 print(
                     f"Scan: found={result.found}, queued={result.queued}, skipped={result.skipped}"
                 )
-            # Call on_scan_complete callback with queued count
+            # Call on_scan_complete callback with queued jobs list
             if on_scan_complete:
                 try:
-                    on_scan_complete(result.queued)
+                    on_scan_complete(result.queued_jobs)
                 except Exception as e:
                     print(f"Warning: on_scan_complete callback failed: {e}")
             time.sleep(interval)
@@ -565,7 +569,7 @@ def start_watcher(
     Args:
         config: Watcher configuration
         on_queued: Optional callback(job) called for each queued job
-        on_batch_queued: Optional callback(count) called after file(s) queued
+        on_batch_queued: Optional callback(queued_jobs: list) called after file(s) queued
 
     Raises:
         ImportError: If watchdog is not installed
@@ -600,10 +604,10 @@ def start_watcher(
                 print(f"Queued: {path.name} (game={job.suggested_game or 'unknown'})")
                 if on_queued:
                     on_queued(job)
-                # Trigger batch callback for each queued file
+                # Trigger batch callback with single-element list
                 if on_batch_queued:
                     try:
-                        on_batch_queued(1)
+                        on_batch_queued([job])
                     except Exception as e:
                         print(f"Warning: on_batch_queued callback failed: {e}")
 
@@ -740,23 +744,24 @@ def process_job(
         game = job.get_game()
         tag = job.get_tag()
         session_id = generate_session_id(game, tag)
-        session_dir = create_session_directory(output_dir, session_id)
+        # CRITICAL: create_session_directory args are (session_id, output_dir)
+        session_dir = create_session_directory(session_id, output_dir)
         source_local = copy_source_video(raw_path, session_dir)
         manifest = create_manifest(
             session_id=session_id,
-            source_video=str(raw_path),
-            source_video_local=str(source_local.relative_to(session_dir)),
+            source_video=raw_path,
+            source_video_local=str(source_local),  # Already relative from copy_source_video
             segment_duration=60,
         )
-        manifest.save(session_dir / "manifest.json")
+        manifest.save(session_dir)
 
         # Step 2: Segment
         segment_video(manifest, session_dir)
-        manifest.save(session_dir / "manifest.json")
+        manifest.save(session_dir)
 
         # Step 3: Extract frames
         extract_frames(manifest, session_dir, frames_per_segment=6)
-        manifest.save(session_dir / "manifest.json")
+        manifest.save(session_dir)
 
         # Step 4: Analyze (conservative params)
         analyze_session(
@@ -812,6 +817,7 @@ class RunQueueConfig:
     dry_run: bool = False
     force: bool = False
     queue_filename: str = "pending.jsonl"
+    raw_path_filter: set[str] | None = None  # Only process jobs with these raw_paths
 
     @property
     def queue_file(self) -> Path:
@@ -852,6 +858,12 @@ def run_queue(
     pending = get_pending_jobs(config.queue_file)
     if not pending:
         return result
+
+    # Filter by raw_path if specified (CRITICAL: only process specified jobs)
+    if config.raw_path_filter:
+        pending = [job for job in pending if job.raw_path in config.raw_path_filter]
+        if not pending:
+            return result
 
     # Limit to N jobs
     jobs_to_process = pending[: config.limit]

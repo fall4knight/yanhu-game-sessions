@@ -736,13 +736,20 @@ def watch(
     def on_queued(job):
         click.echo(f"Queued: {Path(job.raw_path).name} (game={job.suggested_game or 'unknown'})")
 
-    def trigger_auto_run(queued_count: int):
-        """Trigger auto-run if enabled and jobs were queued."""
-        if not auto_run or queued_count == 0:
+    def trigger_auto_run(queued_jobs: list):
+        """Trigger auto-run if enabled and jobs were queued.
+
+        Args:
+            queued_jobs: List of QueueJob objects queued in this scan
+        """
+        if not auto_run or not queued_jobs:
             return
 
         click.echo("")
-        click.echo(f"Auto-run triggered ({queued_count} new jobs queued)...")
+        click.echo(f"Auto-run triggered ({len(queued_jobs)} new jobs queued)...")
+
+        # Extract raw_paths from queued jobs (CRITICAL: only process these jobs)
+        raw_path_filter = {job.raw_path for job in queued_jobs}
 
         run_config = RunQueueConfig(
             queue_dir=Path(queue_dir),
@@ -750,6 +757,7 @@ def watch(
             limit=auto_run_limit,
             dry_run=auto_run_dry_run,
             force=False,
+            raw_path_filter=raw_path_filter,
         )
 
         try:
@@ -784,8 +792,8 @@ def watch(
         click.echo(
             f"Scan complete: found={result.found}, queued={result.queued}, skipped={result.skipped}"
         )
-        # Trigger auto-run after scan completes
-        trigger_auto_run(result.queued)
+        # Trigger auto-run after scan completes (pass queued_jobs list)
+        trigger_auto_run(result.queued_jobs)
     elif interval is not None:
         # Poll mode
         click.echo(f"Starting watcher (polling mode, interval={interval}s)...")

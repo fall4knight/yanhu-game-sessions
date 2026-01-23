@@ -26,19 +26,21 @@ class TestAutoRunScanOnce:
         # Track auto-run callback invocations
         auto_run_calls = []
 
-        def mock_auto_run(queued_count: int):
-            auto_run_calls.append(queued_count)
+        def mock_auto_run(queued_jobs: list):
+            auto_run_calls.append(queued_jobs)
 
         # Scan with callback
         result = scan_once(config)
 
         # Manually call the callback (simulating CLI behavior)
-        if result.queued > 0:
-            mock_auto_run(result.queued)
+        if result.queued_jobs:
+            mock_auto_run(result.queued_jobs)
 
-        # Verify callback was called with correct count
+        # Verify callback was called with correct jobs
         assert len(auto_run_calls) == 1
-        assert auto_run_calls[0] == 2
+        assert len(auto_run_calls[0]) == 2
+        # Verify queued_jobs list contains actual jobs
+        assert all(hasattr(job, "raw_path") for job in auto_run_calls[0])
 
     def test_scan_once_auto_run_not_called_when_no_new_files(self, tmp_path):
         """Should not call auto-run when no files are queued."""
@@ -51,15 +53,15 @@ class TestAutoRunScanOnce:
         # Track callback calls
         auto_run_calls = []
 
-        def mock_auto_run(queued_count: int):
-            auto_run_calls.append(queued_count)
+        def mock_auto_run(queued_jobs: list):
+            auto_run_calls.append(queued_jobs)
 
         # Scan empty directory
         result = scan_once(config)
 
         # Only call callback if files were queued
-        if result.queued > 0:
-            mock_auto_run(result.queued)
+        if result.queued_jobs:
+            mock_auto_run(result.queued_jobs)
 
         # Callback should NOT be called
         assert len(auto_run_calls) == 0
@@ -76,21 +78,21 @@ class TestAutoRunScanOnce:
 
         auto_run_calls = []
 
-        def mock_auto_run(queued_count: int):
-            auto_run_calls.append(queued_count)
+        def mock_auto_run(queued_jobs: list):
+            auto_run_calls.append(queued_jobs)
 
         # First scan - should queue and trigger callback
         result1 = scan_once(config)
-        if result1.queued > 0:
-            mock_auto_run(result1.queued)
+        if result1.queued_jobs:
+            mock_auto_run(result1.queued_jobs)
 
         assert len(auto_run_calls) == 1
-        assert auto_run_calls[0] == 1
+        assert len(auto_run_calls[0]) == 1
 
         # Second scan - should skip (dedup) and NOT trigger callback
         result2 = scan_once(config)
-        if result2.queued > 0:
-            mock_auto_run(result2.queued)
+        if result2.queued_jobs:
+            mock_auto_run(result2.queued_jobs)
 
         # Still only 1 call (second scan queued nothing)
         assert len(auto_run_calls) == 1
@@ -112,8 +114,8 @@ class TestAutoRunPolling:
 
         scan_complete_calls = []
 
-        def mock_scan_complete(queued_count: int):
-            scan_complete_calls.append(queued_count)
+        def mock_scan_complete(queued_jobs: list):
+            scan_complete_calls.append(queued_jobs)
 
         # Mock time.sleep to prevent actual polling
         sleep_calls = []
@@ -135,9 +137,9 @@ class TestAutoRunPolling:
         except KeyboardInterrupt:
             pass
 
-        # Callback should be called once with queued count
+        # Callback should be called once with queued jobs list
         assert len(scan_complete_calls) == 1
-        assert scan_complete_calls[0] == 1
+        assert len(scan_complete_calls[0]) == 1
 
     def test_polling_auto_run_callback_error_handled(self, tmp_path, monkeypatch, capsys):
         """Should handle callback errors gracefully without stopping polling."""
@@ -149,7 +151,7 @@ class TestAutoRunPolling:
 
         config = WatcherConfig(raw_dirs=[raw_dir], queue_dir=queue_dir)
 
-        def failing_callback(queued_count: int):
+        def failing_callback(queued_jobs: list):
             raise RuntimeError("Callback failed!")
 
         # Mock sleep to stop after first iteration
@@ -261,14 +263,100 @@ class TestAutoRunIntegration:
 
         callback_invocations = []
 
-        def track_callback(queued_count: int):
-            callback_invocations.append(queued_count)
+        def track_callback(queued_jobs: list):
+            callback_invocations.append(queued_jobs)
 
         # Scan and trigger
         result = scan_once(config)
-        if result.queued > 0:
-            track_callback(result.queued)
+        if result.queued_jobs:
+            track_callback(result.queued_jobs)
 
-        # Verify exactly one invocation with correct count
+        # Verify exactly one invocation with correct jobs list
         assert len(callback_invocations) == 1
-        assert callback_invocations[0] == 2
+        assert len(callback_invocations[0]) == 2
+
+    def test_auto_run_only_processes_new_jobs(self, tmp_path, monkeypatch):
+        """CRITICAL: Should only process newly queued jobs, not old pending jobs."""
+        from yanhu.watcher import QueueJob, run_queue, write_queue
+
+        queue_dir = tmp_path / "queue"
+        output_dir = tmp_path / "output"
+
+        # Create queue with 1 old pending job (file doesn't exist)
+        old_job = QueueJob(
+            created_at="2026-01-22T09:00:00",
+            raw_path=str(tmp_path / "old_video.mp4"),
+            status="pending",
+        )
+
+        # Create queue with 1 new pending job (file doesn't exist either, but should be attempted)
+        new_job = QueueJob(
+            created_at="2026-01-22T10:00:00",
+            raw_path=str(tmp_path / "new_video.mp4"),
+            status="pending",
+        )
+
+        write_queue([old_job, new_job], queue_dir / "pending.jsonl")
+
+        # Track which jobs were processed
+        processed_jobs = []
+
+        def mock_process_job(job, output_dir, force):
+            from yanhu.watcher import JobResult
+
+            processed_jobs.append(job.raw_path)
+            return JobResult(success=False, error="Mocked - file not found")
+
+        monkeypatch.setattr("yanhu.watcher.process_job", mock_process_job)
+
+        # Run with raw_path_filter (simulating auto-run with only new job)
+        config = RunQueueConfig(
+            queue_dir=queue_dir,
+            output_dir=output_dir,
+            limit=10,
+            dry_run=False,
+            raw_path_filter={new_job.raw_path},  # Only process new job
+        )
+
+        result = run_queue(config)
+
+        # Should process only 1 job (the new one)
+        assert result.processed == 1
+        assert len(processed_jobs) == 1
+        assert processed_jobs[0] == new_job.raw_path
+        # Old job should NOT be processed
+        assert old_job.raw_path not in processed_jobs
+
+    def test_auto_run_filter_with_no_matches(self, tmp_path):
+        """Should handle empty filter results gracefully."""
+        from yanhu.watcher import QueueJob, run_queue, write_queue
+
+        queue_dir = tmp_path / "queue"
+        output_dir = tmp_path / "output"
+
+        # Create queue with jobs
+        jobs = [
+            QueueJob(
+                created_at="2026-01-22T10:00:00",
+                raw_path=str(tmp_path / f"video{i}.mp4"),
+                status="pending",
+            )
+            for i in range(2)
+        ]
+        write_queue(jobs, queue_dir / "pending.jsonl")
+
+        # Run with filter that doesn't match any jobs
+        config = RunQueueConfig(
+            queue_dir=queue_dir,
+            output_dir=output_dir,
+            limit=10,
+            dry_run=False,
+            raw_path_filter={str(tmp_path / "nonexistent.mp4")},
+        )
+
+        result = run_queue(config)
+
+        # Should process 0 jobs
+        assert result.processed == 0
+        assert result.succeeded == 0
+        assert result.failed == 0
