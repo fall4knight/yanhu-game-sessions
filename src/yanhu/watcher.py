@@ -812,6 +812,7 @@ def process_job(
     output_dir: Path,
     force: bool = False,
     source_mode: str = "link",
+    run_config: dict | None = None,
 ) -> JobResult:
     """Process a single job through the pipeline.
 
@@ -819,8 +820,8 @@ def process_job(
     1. ingest: link/copy video, create manifest
     2. segment: split into segments
     3. extract: extract frames
-    4. analyze: run Claude vision (conservative params)
-    5. transcribe: run whisper_local (conservative params)
+    4. analyze: run Claude vision (params from run_config)
+    5. transcribe: run whisper_local (params from run_config)
     6. compose: generate timeline/overview/highlights
     7. validate: verify outputs exist and are non-empty
 
@@ -829,10 +830,17 @@ def process_job(
         output_dir: Output directory for sessions
         force: Force reprocessing even if cached
         source_mode: "link" (hardlink/symlink, default) or "copy"
+        run_config: Configuration dict with processing parameters (from preset)
+                   If None, uses default fast preset
 
     Returns:
         JobResult with success/failure and details
     """
+    # Use default fast preset if no config provided
+    if run_config is None:
+        run_config = get_preset_config("fast")
+        run_config["preset"] = "fast"
+        run_config["source_mode"] = source_mode
     from yanhu.analyzer import analyze_session
     from yanhu.composer import write_highlights, write_overview, write_timeline
     from yanhu.extractor import extract_frames
@@ -883,24 +891,26 @@ def process_job(
         extract_frames(manifest, session_dir, frames_per_segment=6)
         manifest.save(session_dir)
 
-        # Step 4: Analyze (conservative params)
+        # Step 4: Analyze (params from run_config)
         analyze_session(
             manifest=manifest,
             session_dir=session_dir,
             backend="claude",
-            max_frames=3,
-            detail_level="L1",
-            max_facts=3,
+            max_frames=run_config.get("max_frames", 3),
+            detail_level=run_config.get("detail_level", "L1"),
+            max_facts=run_config.get("max_facts", 3),
             force=force,
         )
 
-        # Step 5: Transcribe (conservative params)
+        # Step 5: Transcribe (params from run_config)
         transcribe_session(
             manifest=manifest,
             session_dir=session_dir,
-            backend="whisper_local",
-            model_size="base",
-            compute_type="int8",
+            backend=run_config.get("transcribe_backend", "whisper_local"),
+            model_size=run_config.get("transcribe_model", "base"),
+            compute_type=run_config.get("transcribe_compute", "int8"),
+            beam_size=run_config.get("transcribe_beam_size", 1),
+            vad_filter=run_config.get("transcribe_vad_filter", True),
             force=force,
         )
 
@@ -921,6 +931,7 @@ def process_job(
                     "timeline": str(session_dir / "timeline.md"),
                     "overview": str(session_dir / "overview.md"),
                     "highlights": str(session_dir / "highlights.md"),
+                    "run_config": run_config,  # Record parameters used
                 },
             )
 
@@ -932,6 +943,7 @@ def process_job(
                 "timeline": str(session_dir / "timeline.md"),
                 "overview": str(session_dir / "overview.md"),
                 "highlights": str(session_dir / "highlights.md"),
+                "run_config": run_config,  # Record parameters used
             },
         )
 
@@ -940,6 +952,54 @@ def process_job(
             success=False,
             error=str(e),
         )
+
+
+# Preset configurations for processing quality vs speed tradeoffs
+PRESETS = {
+    "fast": {
+        # Analysis parameters
+        "max_frames": 3,
+        "max_facts": 3,
+        "detail_level": "L1",
+        # Transcribe parameters
+        "transcribe_backend": "whisper_local",
+        "transcribe_model": "base",
+        "transcribe_compute": "int8",
+        "transcribe_beam_size": 1,
+        "transcribe_vad_filter": True,
+    },
+    "quality": {
+        # Analysis parameters
+        "max_frames": 6,
+        "max_facts": 5,
+        "detail_level": "L1",
+        # Transcribe parameters
+        "transcribe_backend": "whisper_local",
+        "transcribe_model": "small",
+        "transcribe_compute": "float32",
+        "transcribe_beam_size": 5,
+        "transcribe_vad_filter": True,
+    },
+}
+
+
+def get_preset_config(preset_name: str) -> dict:
+    """Get configuration for a preset.
+
+    Args:
+        preset_name: Name of preset ("fast" or "quality")
+
+    Returns:
+        Dict of configuration parameters
+
+    Raises:
+        ValueError: If preset_name is not recognized
+    """
+    if preset_name not in PRESETS:
+        raise ValueError(
+            f"Unknown preset: {preset_name}. Must be one of: {list(PRESETS.keys())}"
+        )
+    return PRESETS[preset_name].copy()
 
 
 @dataclass
@@ -954,11 +1014,56 @@ class RunQueueConfig:
     queue_filename: str = "pending.jsonl"
     raw_path_filter: set[str] | None = None  # Only process jobs with these raw_paths
     source_mode: str = "link"  # "link" (default: hardlink/symlink) or "copy"
+    # Preset and override parameters
+    preset: str = "fast"  # Preset name: "fast" or "quality"
+    # Analysis overrides (None means use preset value)
+    max_frames: int | None = None
+    max_facts: int | None = None
+    detail_level: str | None = None
+    # Transcribe overrides (None means use preset value)
+    transcribe_backend: str | None = None
+    transcribe_model: str | None = None
+    transcribe_compute: str | None = None
+    transcribe_beam_size: int | None = None
+    transcribe_vad_filter: bool | None = None
 
     @property
     def queue_file(self) -> Path:
         """Full path to the queue file."""
         return self.queue_dir / self.queue_filename
+
+    def resolve_config(self) -> dict:
+        """Resolve final configuration by merging preset with overrides.
+
+        Returns:
+            Dict of all parameters to use for processing
+        """
+        # Start with preset
+        preset_config = get_preset_config(self.preset)
+
+        # Override with explicit parameters if provided
+        if self.max_frames is not None:
+            preset_config["max_frames"] = self.max_frames
+        if self.max_facts is not None:
+            preset_config["max_facts"] = self.max_facts
+        if self.detail_level is not None:
+            preset_config["detail_level"] = self.detail_level
+        if self.transcribe_backend is not None:
+            preset_config["transcribe_backend"] = self.transcribe_backend
+        if self.transcribe_model is not None:
+            preset_config["transcribe_model"] = self.transcribe_model
+        if self.transcribe_compute is not None:
+            preset_config["transcribe_compute"] = self.transcribe_compute
+        if self.transcribe_beam_size is not None:
+            preset_config["transcribe_beam_size"] = self.transcribe_beam_size
+        if self.transcribe_vad_filter is not None:
+            preset_config["transcribe_vad_filter"] = self.transcribe_vad_filter
+
+        # Add metadata
+        preset_config["preset"] = self.preset
+        preset_config["source_mode"] = self.source_mode
+
+        return preset_config
 
 
 @dataclass
@@ -990,6 +1095,9 @@ def run_queue(
     """
     result = RunQueueResult()
 
+    # Resolve configuration (preset + overrides)
+    run_config = config.resolve_config()
+
     # Read pending jobs
     pending = get_pending_jobs(config.queue_file)
     if not pending:
@@ -1020,7 +1128,11 @@ def run_queue(
 
         # Process the job
         job_result = process_job(
-            job, config.output_dir, force=config.force, source_mode=config.source_mode
+            job,
+            config.output_dir,
+            force=config.force,
+            source_mode=config.source_mode,
+            run_config=run_config,
         )
         result.processed += 1
 

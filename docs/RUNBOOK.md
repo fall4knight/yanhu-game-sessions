@@ -143,6 +143,75 @@ yanhu watch -r ~/Videos/raw --once --default-game gnosia
 - 可读性：session_id 包含完整文件名 stem，易识别来源
 - 向后兼容：老 job 无 P3 字段仍可正常处理
 
+### 4c. 处理质量 Presets（速度 vs 质量）
+
+**背景**：不同场景对处理速度和质量要求不同。Preset 预设了参数组合。
+
+**Preset 对比**：
+
+| Preset | max-frames | max-facts | whisper model | compute | beam | 适用场景 |
+|--------|-----------|-----------|---------------|---------|------|---------|
+| `fast` (默认) | 3 | 3 | base | int8 | 1 | 快速预览、测试 |
+| `quality` | 6 | 5 | small | float32 | 5 | 正式分析、存档 |
+
+**使用方式**：
+
+```bash
+# 方式一：使用 fast preset（默认，快速）
+yanhu run-queue --limit 1
+
+# 方式二：使用 quality preset（质量优先）
+yanhu run-queue --preset quality --limit 1
+
+# 方式三：preset + 单独覆盖参数
+yanhu run-queue --preset fast --max-frames 5 --limit 1
+
+# 方式四：auto-run 指定 preset
+yanhu watch -r ~/Videos/raw --once --auto-run --preset quality
+```
+
+**参数说明**：
+- `--preset [fast|quality]`：选择预设（默认 fast）
+- `--max-frames N`：覆盖每段最大帧数
+- `--max-facts N`：覆盖每段最大事实数
+- `--transcribe-model [tiny|base|small|medium]`：覆盖 whisper 模型
+- `--transcribe-compute [int8|float16|float32]`：覆盖计算精度
+
+**查看使用的参数**：
+
+处理完成后，`job.outputs.run_config` 记录了实际使用的全部参数：
+
+```bash
+# 查看某个 session 使用的参数
+cat sessions/_queue/pending.jsonl | jq '.outputs.run_config'
+# 输出示例：
+# {
+#   "preset": "quality",
+#   "max_frames": 6,
+#   "max_facts": 5,
+#   "transcribe_model": "small",
+#   "transcribe_compute": "float32",
+#   "transcribe_beam_size": 5,
+#   ...
+# }
+```
+
+**典型场景**：
+
+```bash
+# 场景 1：快速测试单个视频（用 fast）
+yanhu watch -r ~/test --once --auto-run --preset fast
+
+# 场景 2：正式处理重要录像（用 quality）
+yanhu watch -r ~/important --once --auto-run --preset quality --auto-run-limit 3
+
+# 场景 3：quality preset 但降低 whisper 开销
+yanhu run-queue --preset quality --transcribe-model base --limit 1
+
+# 场景 4：自定义参数组合
+yanhu run-queue --preset fast --max-frames 10 --max-facts 8 --limit 1
+```
+
 ### 5. 多目录监控（Multi-dir）
 
 支持多个 `--raw-dir`，同一文件换目录后可再次入队：

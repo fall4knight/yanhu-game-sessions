@@ -691,6 +691,22 @@ def align(
     default="unknown",
     help="Default game name for queued videos (default: unknown, P3: no guessing)",
 )
+@click.option(
+    "--preset",
+    type=click.Choice(["fast", "quality"], case_sensitive=False),
+    default="fast",
+    help="Auto-run processing preset: fast (default) or quality (auto-run only)",
+)
+@click.option(
+    "--max-frames",
+    type=int,
+    help="Override max frames for auto-run analysis (overrides preset)",
+)
+@click.option(
+    "--max-facts",
+    type=int,
+    help="Override max facts for auto-run analysis (overrides preset)",
+)
 def watch(
     raw_dir: tuple[str, ...],
     queue_dir: str,
@@ -701,6 +717,9 @@ def watch(
     auto_run_dry_run: bool,
     output_dir: str,
     default_game: str,
+    preset: str,
+    max_frames: int | None,
+    max_facts: int | None,
 ):
     """Watch directories for new video files and queue them.
 
@@ -780,6 +799,9 @@ def watch(
             dry_run=auto_run_dry_run,
             force=False,
             raw_path_filter=raw_path_filter,
+            preset=preset,
+            max_frames=max_frames,
+            max_facts=max_facts,
         )
 
         try:
@@ -874,23 +896,63 @@ def watch(
     default="link",
     help="Source video mode: link (hardlink/symlink, default) or copy",
 )
+@click.option(
+    "--preset",
+    type=click.Choice(["fast", "quality"], case_sensitive=False),
+    default="fast",
+    help="Processing preset: fast (default, quick) or quality (slower, better)",
+)
+@click.option(
+    "--max-frames",
+    type=int,
+    help="Override max frames per segment for analysis (overrides preset)",
+)
+@click.option(
+    "--max-facts",
+    type=int,
+    help="Override max facts per segment for analysis (overrides preset)",
+)
+@click.option(
+    "--transcribe-model",
+    type=click.Choice(["tiny", "base", "small", "medium"], case_sensitive=False),
+    help="Override whisper model size (overrides preset)",
+)
+@click.option(
+    "--transcribe-compute",
+    type=click.Choice(["int8", "float16", "float32"], case_sensitive=False),
+    help="Override whisper compute type (overrides preset)",
+)
 def run_queue_cmd(
-    queue_dir: str, output_dir: str, limit: int, dry_run: bool, force: bool, source_mode: str
+    queue_dir: str,
+    output_dir: str,
+    limit: int,
+    dry_run: bool,
+    force: bool,
+    source_mode: str,
+    preset: str,
+    max_frames: int | None,
+    max_facts: int | None,
+    transcribe_model: str | None,
+    transcribe_compute: str | None,
 ):
     """Process pending jobs from the queue.
 
     Reads pending jobs from pending.jsonl and runs them through the
     full pipeline (ingest → segment → extract → analyze → transcribe → compose).
 
-    Uses conservative parameters:
-      - max-frames=3, max-facts=3
-      - whisper_local model-size=base, compute=int8
+    Presets:
+      - fast (default): max-frames=3, max-facts=3, whisper base/int8
+      - quality: max-frames=6, max-facts=5, whisper small/float32
 
     Examples:
 
       yanhu run-queue --dry-run
 
       yanhu run-queue --limit 3
+
+      yanhu run-queue --preset quality --limit 1
+
+      yanhu run-queue --preset fast --max-frames 5 --limit 1
 
       yanhu run-queue --queue-dir sessions/_queue --limit 1 --force
     """
@@ -903,6 +965,11 @@ def run_queue_cmd(
         dry_run=dry_run,
         force=force,
         source_mode=source_mode,
+        preset=preset,
+        max_frames=max_frames,
+        max_facts=max_facts,
+        transcribe_model=transcribe_model,
+        transcribe_compute=transcribe_compute,
     )
 
     click.echo(f"Queue file: {config.queue_file}")
