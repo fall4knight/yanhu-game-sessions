@@ -686,6 +686,11 @@ def align(
     type=click.Path(file_okay=False, dir_okay=True),
     help="Output directory for auto-run processing (default: sessions)",
 )
+@click.option(
+    "--default-game",
+    default="unknown",
+    help="Default game name for queued videos (default: unknown, P3: no guessing)",
+)
 def watch(
     raw_dir: tuple[str, ...],
     queue_dir: str,
@@ -695,6 +700,7 @@ def watch(
     auto_run_limit: int,
     auto_run_dry_run: bool,
     output_dir: str,
+    default_game: str,
 ):
     """Watch directories for new video files and queue them.
 
@@ -735,6 +741,7 @@ def watch(
     config = WatcherConfig(
         raw_dirs=raw_dirs,
         queue_dir=Path(queue_dir),
+        default_game=default_game,  # P3: pass explicit default game
     )
 
     dirs_str = ", ".join(str(d) for d in config.raw_dirs)

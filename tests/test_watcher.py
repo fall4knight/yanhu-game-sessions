@@ -155,7 +155,7 @@ class TestCreateJobFromPath:
     """Test create_job_from_path function."""
 
     def test_creates_job_with_path(self, tmp_path):
-        """Should create job with absolute path."""
+        """Should create job with absolute path (P3: default game, no guessing)."""
         video = tmp_path / "gnosia_run01.mp4"
         video.touch()
 
@@ -163,8 +163,14 @@ class TestCreateJobFromPath:
 
         assert job.raw_path == str(video.resolve())
         assert job.status == "pending"
-        assert job.suggested_game == "gnosia"
+        # P3: Should use default "unknown", not guess "gnosia"
+        assert job.suggested_game == "unknown"
         assert job.created_at is not None
+        # P3: Should have new fields
+        assert job.raw_filename == "gnosia_run01.mp4"
+        assert job.raw_stem == "gnosia_run01"
+        assert job.suggested_tag is not None
+        assert "__" in job.suggested_tag
 
     def test_created_at_is_iso_format(self, tmp_path):
         """Should use ISO format for created_at."""

@@ -420,6 +420,8 @@ yanhu-game-sessions/
 | 2026-01-22 | M8: Documentation | Done | README quickstart, RUNBOOK 全流程+实战+verify gate; 内部使用闭环 |
 | 2026-01-22 | Highlights Scoring Fix | Done | Fixed score_segment() to reward facts (+50 base +10/item) and caption (+20); verified all 6 tasks pass including whisper_local |
 | 2026-01-22 | M7: Watcher (v0.3) | Done | Auto-run: --auto-run + limit + dry-run; on_scan_complete/on_batch_queued callbacks; 8 auto-run tests; RUNBOOK safety warnings |
+| 2026-01-23 | P2.1: Source Observability | Done | SourceMetadata dataclass: source_mode, inodes, link_count, fallback_error; copy_source_video验证hardlink/symlink/copy; yanhu-verify task A; 14 new tests, 550 total |
+| 2026-01-23 | P3: Naming Strategy | Done | No hardcoded actor/game guessing; tag = stem__hash8 (避免同前缀混淆); --default-game CLI flag (默认unknown); QueueJob增raw_filename/raw_stem/suggested_tag; 18 P3 tests, 568 total |
 
 ---
 

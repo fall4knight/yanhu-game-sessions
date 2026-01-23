@@ -108,6 +108,41 @@ yanhu watch -r ~/Videos/raw --once --auto-run
 yanhu watch -r ~/Videos/raw --interval 60 --auto-run
 ```
 
+### 4b. P3 命名策略（v0.1+）
+
+**背景**：避免硬编码 actor/game 猜测，避免文件前缀相同导致 session 可读性差。
+
+**变更**：
+- `suggested_game`：默认不猜测，使用 `--default-game`（默认 `unknown`）
+- `tag`：默认用文件名（去扩展名）+ 8位短哈希，避免同前缀混淆
+  - 例如：`actor_clip_副本.MP4` → `tag=actor_clip_副本__a1b2c3d4`
+- `session_id`：仍用 `timestamp + game + tag`（可读且不覆盖）
+
+**示例**：
+
+```bash
+# 方式一：使用默认 game=unknown（P3 推荐）
+yanhu watch -r ~/Videos/raw --once
+
+# 入队的 job 会有：
+# - suggested_game: "unknown"
+# - suggested_tag: "video_clip__a1b2c3d4" (文件名 + hash)
+# - session_id: "2026-01-23_12-30-00_unknown_video_clip__a1b2c3d4"
+
+# 方式二：自定义默认 game
+yanhu watch -r ~/Videos/raw --once --default-game gnosia
+
+# 入队的 job 会有：
+# - suggested_game: "gnosia"
+# - session_id: "2026-01-23_12-30-00_gnosia_video_clip__a1b2c3d4"
+```
+
+**优势**：
+- 无硬编码：不会错误地从文件名提取"actor"/"gnosia"等
+- 唯一性：同前缀文件（如 `clip.mp4`, `clip_副本.mp4`）生成不同 tag
+- 可读性：session_id 包含完整文件名 stem，易识别来源
+- 向后兼容：老 job 无 P3 字段仍可正常处理
+
 ### 5. 多目录监控（Multi-dir）
 
 支持多个 `--raw-dir`，同一文件换目录后可再次入队：

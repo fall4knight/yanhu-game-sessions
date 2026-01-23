@@ -137,8 +137,12 @@ class QueueJob:
     created_at: str  # ISO format timestamp
     raw_path: str  # Absolute path to the video file
     status: str = "pending"  # pending, processing, done, failed
-    suggested_game: str | None = None  # Optional game name hint
+    suggested_game: str | None = None  # Optional game name hint (P3: from --default-game)
     raw_dir: str | None = None  # Source directory (for multi-dir debugging)
+    # P3: Naming strategy fields
+    raw_filename: str | None = None  # Filename with extension (backward compat)
+    raw_stem: str | None = None  # Filename without extension (backward compat)
+    suggested_tag: str | None = None  # Auto-generated tag with hash (backward compat)
     # Additional fields for run-queue
     game: str | None = None  # Explicit game name (overrides suggested_game)
     tag: str | None = None  # Run tag (e.g., "run01")
@@ -157,6 +161,12 @@ class QueueJob:
             result["suggested_game"] = self.suggested_game
         if self.raw_dir is not None:
             result["raw_dir"] = self.raw_dir
+        if self.raw_filename is not None:
+            result["raw_filename"] = self.raw_filename
+        if self.raw_stem is not None:
+            result["raw_stem"] = self.raw_stem
+        if self.suggested_tag is not None:
+            result["suggested_tag"] = self.suggested_tag
         if self.game is not None:
             result["game"] = self.game
         if self.tag is not None:
@@ -178,6 +188,9 @@ class QueueJob:
             status=data.get("status", "pending"),
             suggested_game=data.get("suggested_game"),
             raw_dir=data.get("raw_dir"),
+            raw_filename=data.get("raw_filename"),
+            raw_stem=data.get("raw_stem"),
+            suggested_tag=data.get("suggested_tag"),
             game=data.get("game"),
             tag=data.get("tag"),
             session_id=data.get("session_id"),
@@ -199,8 +212,8 @@ class QueueJob:
         return self.game or self.suggested_game or "unknown"
 
     def get_tag(self) -> str:
-        """Get tag, with fallback to 'run01'."""
-        return self.tag or "run01"
+        """Get tag, with fallback to suggested_tag or 'run01'."""
+        return self.tag or self.suggested_tag or "run01"
 
 
 def is_video_file(path: Path) -> bool:
@@ -213,6 +226,33 @@ def is_video_file(path: Path) -> bool:
         True if the file has a supported video extension
     """
     return path.suffix.lower() in VIDEO_EXTENSIONS
+
+
+def generate_tag_from_filename(filename: str) -> str:
+    """Generate a unique tag from filename using stem + short hash.
+
+    P3: Avoids hardcoded actor/game names and prevents confusion from
+    files with same prefix.
+
+    Args:
+        filename: Full filename with extension
+
+    Returns:
+        Tag in format: <stem>__<hash8>
+        Example: "actor_clip_副本.MP4" -> "actor_clip_副本__a1b2c3d4"
+    """
+    import hashlib
+
+    # Get stem (filename without extension)
+    stem = Path(filename).stem
+
+    # Generate deterministic 8-char hash from full filename
+    # Use MD5 for speed (not security-critical)
+    hash_obj = hashlib.md5(filename.encode("utf-8"))
+    short_hash = hash_obj.hexdigest()[:8]
+
+    # Combine stem with hash
+    return f"{stem}__{short_hash}"
 
 
 def guess_game_from_filename(filename: str) -> str | None:
@@ -258,22 +298,34 @@ def guess_game_from_filename(filename: str) -> str | None:
     return None
 
 
-def create_job_from_path(video_path: Path, raw_dir: Path | None = None) -> QueueJob:
+def create_job_from_path(
+    video_path: Path,
+    raw_dir: Path | None = None,
+    default_game: str = "unknown",
+) -> QueueJob:
     """Create a queue job from a video file path.
+
+    P3: Uses default_game instead of guessing, generates tag with hash
+    to avoid confusion from files with same prefix.
 
     Args:
         video_path: Path to the video file
         raw_dir: Optional source directory (for multi-dir debugging)
+        default_game: Default game name (P3: avoids hardcoded guessing)
 
     Returns:
         QueueJob instance
     """
+    filename = video_path.name
     return QueueJob(
         created_at=datetime.now().isoformat(),
         raw_path=str(video_path.resolve()),
         status="pending",
-        suggested_game=guess_game_from_filename(video_path.name),
+        suggested_game=default_game,  # P3: use explicit default, no guessing
         raw_dir=str(raw_dir.resolve()) if raw_dir else None,
+        raw_filename=filename,  # P3: store for reference
+        raw_stem=video_path.stem,  # P3: stem for tag generation
+        suggested_tag=generate_tag_from_filename(filename),  # P3: stem + hash
     )
 
 
@@ -339,6 +391,7 @@ class WatcherConfig:
     queue_dir: Path  # Directory for queue files
     queue_filename: str = "pending.jsonl"
     state_filename: str = "state.json"
+    default_game: str = "unknown"  # P3: default game name (avoids guessing)
 
     @property
     def queue_file(self) -> Path:
@@ -412,8 +465,8 @@ class VideoHandler:
         self._state.mark_seen(file_hash)
         save_state(self._state, self.config.state_file)
 
-        # Create and queue the job
-        job = create_job_from_path(path, raw_dir=raw_dir)
+        # Create and queue the job (P3: pass default_game from config)
+        job = create_job_from_path(path, raw_dir=raw_dir, default_game=self.config.default_game)
         append_job_to_queue(job, self.config.queue_file)
         return job
 
