@@ -195,7 +195,7 @@ class TestAutoRunIntegration:
         write_queue(jobs, queue_dir / "pending.jsonl")
 
         # Mock process_job to avoid actual processing
-        def mock_process_job(job, output_dir, force):
+        def mock_process_job(job, output_dir, **kwargs):
             from yanhu.watcher import JobResult
 
             return JobResult(success=False, error="Mocked - file not found")
@@ -301,7 +301,7 @@ class TestAutoRunIntegration:
         # Track which jobs were processed
         processed_jobs = []
 
-        def mock_process_job(job, output_dir, force):
+        def mock_process_job(job, output_dir, **kwargs):
             from yanhu.watcher import JobResult
 
             processed_jobs.append(job.raw_path)

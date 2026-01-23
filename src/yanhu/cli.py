@@ -41,7 +41,15 @@ def main():
 @click.option("--tag", "-t", required=True, help="Run tag (e.g., run01, session02)")
 @click.option("--output-dir", "-o", default="sessions", help="Output directory (default: sessions)")
 @click.option("--segment-duration", "-d", default=60, help="Segment duration in seconds")
-def ingest(video: str, game: str, tag: str, output_dir: str, segment_duration: int):
+@click.option(
+    "--source-mode",
+    type=click.Choice(["link", "copy"], case_sensitive=False),
+    default="link",
+    help="Source video mode: link (hardlink/symlink, default) or copy",
+)
+def ingest(
+    video: str, game: str, tag: str, output_dir: str, segment_duration: int, source_mode: str
+):
     """Ingest a video file and create a new session.
 
     Creates session directory, copies source video, and writes manifest.
@@ -57,9 +65,15 @@ def ingest(video: str, game: str, tag: str, output_dir: str, segment_duration: i
     session_dir = create_session_directory(session_id, output_path)
     click.echo(f"Session directory: {session_dir}")
 
-    # Copy source video
-    click.echo(f"Copying source video: {video_path.name}")
-    source_local = copy_source_video(video_path, session_dir)
+    # Link or copy source video
+    if source_mode == "link":
+        click.echo(f"Linking source video: {video_path.name}")
+    else:
+        click.echo(f"Copying source video: {video_path.name}")
+    source_local, source_metadata = copy_source_video(video_path, session_dir, mode=source_mode)
+    click.echo(f"  Mode: {source_metadata.source_mode}")
+    if source_metadata.source_fallback_error:
+        click.echo(f"  {source_metadata.source_fallback_error}")
 
     # Create and save manifest
     manifest = create_manifest(
@@ -67,6 +81,7 @@ def ingest(video: str, game: str, tag: str, output_dir: str, segment_duration: i
         source_video=video_path,
         source_video_local=str(source_local),
         segment_duration=segment_duration,
+        source_metadata=source_metadata,
     )
     manifest_path = manifest.save(session_dir)
     click.echo(f"Manifest saved: {manifest_path}")
@@ -846,7 +861,15 @@ def watch(
     is_flag=True,
     help="Force reprocessing even if cached",
 )
-def run_queue_cmd(queue_dir: str, output_dir: str, limit: int, dry_run: bool, force: bool):
+@click.option(
+    "--source-mode",
+    type=click.Choice(["link", "copy"], case_sensitive=False),
+    default="link",
+    help="Source video mode: link (hardlink/symlink, default) or copy",
+)
+def run_queue_cmd(
+    queue_dir: str, output_dir: str, limit: int, dry_run: bool, force: bool, source_mode: str
+):
     """Process pending jobs from the queue.
 
     Reads pending jobs from pending.jsonl and runs them through the
@@ -872,6 +895,7 @@ def run_queue_cmd(queue_dir: str, output_dir: str, limit: int, dry_run: bool, fo
         limit=limit,
         dry_run=dry_run,
         force=force,
+        source_mode=source_mode,
     )
 
     click.echo(f"Queue file: {config.queue_file}")

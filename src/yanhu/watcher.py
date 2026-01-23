@@ -589,16 +589,41 @@ def start_watcher(
     class WatchdogHandler(FileSystemEventHandler):
         def __init__(self, video_handler: VideoHandler):
             self.video_handler = video_handler
+            # Debounce: track recently processed paths with timestamps
+            # Format: {str(path): timestamp}
+            self._recent_events: dict[str, float] = {}
+            self._debounce_window = 1.0  # seconds
 
         def on_created(self, event):
             if event.is_directory:
                 return
             path = Path(event.src_path)
+
+            # Debounce: skip if same path was processed within window
+            import time
+
+            path_str = str(path.resolve())
+            now = time.time()
+            if path_str in self._recent_events:
+                last_time = self._recent_events[path_str]
+                if now - last_time < self._debounce_window:
+                    return  # Skip duplicate event within debounce window
+            self._recent_events[path_str] = now
+
+            # Clean up old entries (keep last 100)
+            if len(self._recent_events) > 100:
+                cutoff = now - self._debounce_window * 2
+                self._recent_events = {
+                    p: t for p, t in self._recent_events.items() if t > cutoff
+                }
+
             # Find which raw_dir this file belongs to
             raw_dir = None
             parent_str = str(path.parent.resolve())
             if parent_str in dir_to_raw_dir:
                 raw_dir = dir_to_raw_dir[parent_str]
+
+            # Only print and trigger callbacks if actually queued
             job = self.video_handler.on_created(path, raw_dir=raw_dir)
             if job:
                 print(f"Queued: {path.name} (game={job.suggested_game or 'unknown'})")
@@ -695,25 +720,62 @@ class JobResult:
     outputs: dict | None = None
 
 
+def validate_outputs(session_dir: Path) -> tuple[bool, str]:
+    """Validate that session outputs exist and are non-empty.
+
+    Args:
+        session_dir: Path to session directory
+
+    Returns:
+        Tuple of (success, error_message). error_message is empty if success.
+    """
+    # Check required files exist
+    required_files = ["overview.md", "timeline.md", "highlights.md"]
+    for filename in required_files:
+        filepath = session_dir / filename
+        if not filepath.exists():
+            return False, f"Missing required output: {filename}"
+
+    # Validate highlights.md has at least one highlight entry
+    highlights_path = session_dir / "highlights.md"
+    highlights_content = highlights_path.read_text(encoding="utf-8")
+    if "- [" not in highlights_content:
+        return False, "highlights.md contains no highlight entries (no '- [' line found)"
+
+    # Validate timeline.md has content (segments or quotes)
+    timeline_path = session_dir / "timeline.md"
+    timeline_content = timeline_path.read_text(encoding="utf-8")
+    if "### part_" not in timeline_content and "- quote:" not in timeline_content:
+        return (
+            False,
+            "timeline.md contains no segment or quote content (no '### part_' or '- quote:' found)",
+        )
+
+    return True, ""
+
+
 def process_job(
     job: QueueJob,
     output_dir: Path,
     force: bool = False,
+    source_mode: str = "link",
 ) -> JobResult:
     """Process a single job through the pipeline.
 
     Pipeline steps:
-    1. ingest: copy video, create manifest
+    1. ingest: link/copy video, create manifest
     2. segment: split into segments
     3. extract: extract frames
     4. analyze: run Claude vision (conservative params)
     5. transcribe: run whisper_local (conservative params)
     6. compose: generate timeline/overview/highlights
+    7. validate: verify outputs exist and are non-empty
 
     Args:
         job: The job to process
         output_dir: Output directory for sessions
         force: Force reprocessing even if cached
+        source_mode: "link" (hardlink/symlink, default) or "copy"
 
     Returns:
         JobResult with success/failure and details
@@ -746,17 +808,22 @@ def process_job(
         session_id = generate_session_id(game, tag)
         # CRITICAL: create_session_directory args are (session_id, output_dir)
         session_dir = create_session_directory(session_id, output_dir)
-        source_local = copy_source_video(raw_path, session_dir)
+        source_local, source_metadata = copy_source_video(raw_path, session_dir, mode=source_mode)
+        print(f"  Source mode: {source_metadata.source_mode}")
+        if source_metadata.source_fallback_error:
+            print(f"  {source_metadata.source_fallback_error}")
         manifest = create_manifest(
             session_id=session_id,
             source_video=raw_path,
             source_video_local=str(source_local),  # Already relative from copy_source_video
             segment_duration=60,
+            source_metadata=source_metadata,
         )
         manifest.save(session_dir)
 
         # Step 2: Segment
-        segment_video(manifest, session_dir)
+        segment_infos = segment_video(manifest, session_dir)
+        manifest.segments = segment_infos
         manifest.save(session_dir)
 
         # Step 3: Extract frames
@@ -789,6 +856,21 @@ def process_job(
         write_overview(manifest, session_dir)
         write_highlights(manifest, session_dir)
 
+        # Step 7: Validate outputs
+        valid, error_msg = validate_outputs(session_dir)
+        if not valid:
+            return JobResult(
+                success=False,
+                session_id=session_id,
+                error=f"Output validation failed: {error_msg}",
+                outputs={
+                    "session_dir": str(session_dir),
+                    "timeline": str(session_dir / "timeline.md"),
+                    "overview": str(session_dir / "overview.md"),
+                    "highlights": str(session_dir / "highlights.md"),
+                },
+            )
+
         return JobResult(
             success=True,
             session_id=session_id,
@@ -818,6 +900,7 @@ class RunQueueConfig:
     force: bool = False
     queue_filename: str = "pending.jsonl"
     raw_path_filter: set[str] | None = None  # Only process jobs with these raw_paths
+    source_mode: str = "link"  # "link" (default: hardlink/symlink) or "copy"
 
     @property
     def queue_file(self) -> Path:
@@ -883,7 +966,9 @@ def run_queue(
         update_job_status(config.queue_file, job.raw_path, "processing")
 
         # Process the job
-        job_result = process_job(job, config.output_dir, config.force)
+        job_result = process_job(
+            job, config.output_dir, force=config.force, source_mode=config.source_mode
+        )
         result.processed += 1
 
         if job_result.success:

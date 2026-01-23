@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-from yanhu.manifest import Manifest, SegmentInfo, create_manifest
+from yanhu.manifest import Manifest, SegmentInfo, SourceMetadata, create_manifest
 
 
 class TestSegmentInfo:
@@ -172,3 +172,199 @@ class TestManifestPathRelativization:
         for seg in manifest.segments:
             assert not seg.video_path.startswith("/")
             assert seg.video_path.startswith("segments/")
+
+
+class TestSourceMetadata:
+    """Test SourceMetadata data structure (P2.1 observability)."""
+
+    def test_to_dict_hardlink(self):
+        """Should serialize hardlink metadata correctly."""
+        metadata = SourceMetadata(
+            source_mode="hardlink",
+            source_inode_raw=12345,
+            source_inode_session=12345,
+            source_link_count=2,
+        )
+        d = metadata.to_dict()
+        assert d["source_mode"] == "hardlink"
+        assert d["source_inode_raw"] == 12345
+        assert d["source_inode_session"] == 12345
+        assert d["source_link_count"] == 2
+        assert "source_fallback_error" not in d
+        assert "source_symlink_target" not in d
+
+    def test_to_dict_symlink(self):
+        """Should serialize symlink metadata correctly."""
+        metadata = SourceMetadata(
+            source_mode="symlink",
+            source_inode_raw=12345,
+            source_inode_session=67890,
+            source_link_count=1,
+            source_fallback_error="Hardlink failed (EXDEV), used symlink",
+            source_symlink_target="/absolute/path/to/video.mp4",
+        )
+        d = metadata.to_dict()
+        assert d["source_mode"] == "symlink"
+        assert d["source_inode_raw"] == 12345
+        assert d["source_inode_session"] == 67890
+        assert d["source_link_count"] == 1
+        assert d["source_fallback_error"] == "Hardlink failed (EXDEV), used symlink"
+        assert d["source_symlink_target"] == "/absolute/path/to/video.mp4"
+
+    def test_to_dict_copy(self):
+        """Should serialize copy metadata correctly."""
+        fallback_msg = (
+            "Hardlink failed (EXDEV), symlink failed (errno 1), "
+            "used copy (disk usage doubled)"
+        )
+        metadata = SourceMetadata(
+            source_mode="copy",
+            source_inode_raw=12345,
+            source_inode_session=99999,
+            source_link_count=1,
+            source_fallback_error=fallback_msg,
+        )
+        d = metadata.to_dict()
+        assert d["source_mode"] == "copy"
+        assert d["source_inode_raw"] == 12345
+        assert d["source_inode_session"] == 99999
+        assert d["source_link_count"] == 1
+        assert "Hardlink failed" in d["source_fallback_error"]
+        assert "source_symlink_target" not in d
+
+    def test_from_dict_roundtrip(self):
+        """Should deserialize from dict correctly."""
+        original = SourceMetadata(
+            source_mode="symlink",
+            source_inode_raw=111,
+            source_inode_session=222,
+            source_link_count=1,
+            source_fallback_error="test error",
+            source_symlink_target="/path/to/target",
+        )
+        d = original.to_dict()
+        restored = SourceMetadata.from_dict(d)
+        assert restored.source_mode == original.source_mode
+        assert restored.source_inode_raw == original.source_inode_raw
+        assert restored.source_inode_session == original.source_inode_session
+        assert restored.source_link_count == original.source_link_count
+        assert restored.source_fallback_error == original.source_fallback_error
+        assert restored.source_symlink_target == original.source_symlink_target
+
+
+class TestManifestWithSourceMetadata:
+    """Test Manifest with source_metadata field."""
+
+    def test_manifest_with_source_metadata(self):
+        """Should include source_metadata in serialization."""
+        metadata = SourceMetadata(
+            source_mode="hardlink",
+            source_inode_raw=12345,
+            source_inode_session=12345,
+            source_link_count=2,
+        )
+        manifest = create_manifest(
+            session_id="test",
+            source_video=Path("/videos/game.mp4"),
+            source_video_local="source/game.mp4",
+            segment_duration=60,
+            source_metadata=metadata,
+        )
+        assert manifest.source_metadata is not None
+        assert manifest.source_metadata.source_mode == "hardlink"
+        assert manifest.source_metadata.source_inode_raw == 12345
+
+    def test_manifest_to_dict_includes_source_metadata(self):
+        """Should serialize source_metadata to dict."""
+        metadata = SourceMetadata(
+            source_mode="copy",
+            source_inode_raw=111,
+            source_inode_session=222,
+            source_link_count=1,
+        )
+        manifest = Manifest(
+            session_id="test",
+            created_at="2026-01-23T00:00:00",
+            source_video="/videos/game.mp4",
+            source_video_local="source/game.mp4",
+            segment_duration_seconds=60,
+            segments=[],
+            source_metadata=metadata,
+        )
+        d = manifest.to_dict()
+        assert "source_metadata" in d
+        assert d["source_metadata"]["source_mode"] == "copy"
+        assert d["source_metadata"]["source_inode_raw"] == 111
+        assert d["source_metadata"]["source_inode_session"] == 222
+
+    def test_manifest_from_dict_with_source_metadata(self):
+        """Should deserialize source_metadata from dict."""
+        d = {
+            "session_id": "test",
+            "created_at": "2026-01-23T00:00:00",
+            "source_video": "/videos/game.mp4",
+            "source_video_local": "source/game.mp4",
+            "segment_duration_seconds": 60,
+            "segments": [],
+            "source_metadata": {
+                "source_mode": "symlink",
+                "source_inode_raw": 333,
+                "source_inode_session": 444,
+                "source_link_count": 1,
+                "source_symlink_target": "/path/to/video.mp4",
+            },
+        }
+        manifest = Manifest.from_dict(d)
+        assert manifest.source_metadata is not None
+        assert manifest.source_metadata.source_mode == "symlink"
+        assert manifest.source_metadata.source_inode_raw == 333
+        assert manifest.source_metadata.source_inode_session == 444
+        assert manifest.source_metadata.source_symlink_target == "/path/to/video.mp4"
+
+    def test_manifest_without_source_metadata(self):
+        """Should handle legacy manifests without source_metadata."""
+        d = {
+            "session_id": "test",
+            "created_at": "2026-01-23T00:00:00",
+            "source_video": "/videos/game.mp4",
+            "source_video_local": "source/game.mp4",
+            "segment_duration_seconds": 60,
+            "segments": [],
+        }
+        manifest = Manifest.from_dict(d)
+        assert manifest.source_metadata is None
+
+    def test_manifest_save_load_with_source_metadata(self, tmp_path):
+        """Should save and load source_metadata correctly."""
+        session_dir = tmp_path / "test_session"
+        session_dir.mkdir()
+
+        metadata = SourceMetadata(
+            source_mode="hardlink",
+            source_inode_raw=12345,
+            source_inode_session=12345,
+            source_link_count=2,
+        )
+        manifest = create_manifest(
+            session_id="test",
+            source_video=Path("/videos/game.mp4"),
+            source_video_local="source/game.mp4",
+            segment_duration=60,
+            source_metadata=metadata,
+        )
+
+        # Save
+        manifest_path = manifest.save(session_dir)
+        assert manifest_path.exists()
+
+        # Verify JSON contains source_metadata
+        with open(manifest_path) as f:
+            data = json.load(f)
+        assert "source_metadata" in data
+        assert data["source_metadata"]["source_mode"] == "hardlink"
+
+        # Load
+        loaded = Manifest.load(session_dir)
+        assert loaded.source_metadata is not None
+        assert loaded.source_metadata.source_mode == "hardlink"
+        assert loaded.source_metadata.source_inode_raw == 12345

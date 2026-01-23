@@ -47,7 +47,39 @@ Do NOT proceed with claude backend commands if either check fails.
 
 ## Verification Tasks
 
-A) L1 Claude Vision analysis correctness:
+A) Source video observability (P2.1):
+- Check manifest contains source_metadata:
+  ```bash
+  cat sessions/<sid>/manifest.json | jq '.source_metadata'
+  ```
+- Assert fields exist: source_mode, source_inode_raw, source_inode_session, source_link_count
+- Verify with stat (use platform-appropriate stat command):
+  ```bash
+  # macOS: stat -f, Linux: stat -c
+  # Get raw video inode
+  stat -f "%i" <raw_video_path> || stat -c "%i" <raw_video_path>
+  # Get session source inode and link count
+  stat -f "%i %l" sessions/<sid>/source/<video_name> || stat -c "%i %h" sessions/<sid>/source/<video_name>
+  # Check if symlink
+  ls -l sessions/<sid>/source/<video_name> | grep -q '^l' && echo "SYMLINK" || echo "NOT_SYMLINK"
+  # If symlink, get target
+  readlink sessions/<sid>/source/<video_name>
+  ```
+- Assert based on source_mode:
+  - **hardlink**: source_inode_raw == source_inode_session AND source_link_count >= 2
+  - **symlink**: ls -l shows 'l' at start AND source_symlink_target matches readlink output
+  - **copy**: source_inode_raw != source_inode_session AND source_link_count >= 1
+- If source_fallback_error exists, verify it contains expected errno (EXDEV/EPERM/EACCES) or fallback description
+- Print full source_metadata for inspection
+- **FAIL** if:
+  - source_metadata is missing
+  - source_mode is not one of: hardlink, symlink, copy
+  - hardlink mode but inode_raw != inode_session
+  - hardlink mode but link_count < 2
+  - symlink mode but readlink fails or target doesn't match source_symlink_target
+  - Actual file type doesn't match source_mode
+
+B) L1 Claude Vision analysis correctness:
 - Run:
   ```bash
   bash -lc 'set -a; source .env; set +a; source .venv/bin/activate && yanhu analyze --session <sid> --backend claude --segments <seg> --detail-level L1 --max-facts 3 --max-frames 3 --force'
@@ -64,7 +96,7 @@ A) L1 Claude Vision analysis correctness:
   ```
 - Assert timeline contains facts[0] and includes "- change:" line for that segment.
 
-B) Timeline pollution check (always run after compose):
+C) Timeline pollution check (always run after compose):
 - Check that timeline.md does NOT contain JSON fragments:
   ```bash
   grep -E '^\s*>\s*\{' sessions/<sid>/timeline.md && echo "POLLUTED" || echo "CLEAN"
@@ -79,7 +111,7 @@ B) Timeline pollution check (always run after compose):
     yanhu compose --session <sid>
   ```
 
-C) Highlights check (always run after compose):
+D) Highlights check (always run after compose):
 - Check that highlights.md exists and contains at least one highlight item:
   ```bash
   [ -f sessions/<sid>/highlights.md ] && grep -c '^\- \[' sessions/<sid>/highlights.md || echo "0"
@@ -94,7 +126,7 @@ C) Highlights check (always run after compose):
     yanhu compose --session <sid>
   ```
 
-D) ASR transcription check (mock backend, no cloud key required):
+E) ASR transcription check (mock backend, no cloud key required):
 - Run:
   ```bash
   source .venv/bin/activate && yanhu transcribe --session <sid> --backend mock --force
@@ -110,7 +142,7 @@ D) ASR transcription check (mock backend, no cloud key required):
   ```
 - Assert timeline contains "- asr:" line for segments with asr_items
 
-E) ASR timestamp validation:
+F) ASR timestamp validation:
 - Read analysis JSON and verify:
   ```python
   for i, item in enumerate(asr_items):
@@ -120,7 +152,7 @@ E) ASR timestamp validation:
   ```
 - If validation fails, **FAIL** and print the specific violation.
 
-F) ASR whisper_local backend check (requires faster-whisper installed):
+G) ASR whisper_local backend check (requires faster-whisper installed):
 - Prerequisites:
   - Check faster-whisper is installed: `pip show faster-whisper`
   - If not installed, skip this check with note: "faster-whisper not installed, skipping"
