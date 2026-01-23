@@ -145,10 +145,7 @@ class AnalysisResult:
             player_action_guess=data.get("player_action_guess"),
             hook_detail=data.get("hook_detail"),
             # OCR items
-            ocr_items=[
-                OcrItem.from_dict(item)
-                for item in data.get("ocr_items", [])
-            ],
+            ocr_items=[OcrItem.from_dict(item) for item in data.get("ocr_items", [])],
         )
 
     def save(self, output_path: Path) -> None:
@@ -297,6 +294,7 @@ class ClaudeAnalyzer:
         """Lazy-load the Claude client."""
         if self._client is None:
             from yanhu.claude_client import ClaudeClient
+
             self._client = ClaudeClient()
         return self._client
 
@@ -368,11 +366,13 @@ class ClaudeAnalyzer:
                         t_rel = segment.start_time + frame_ratio * segment_duration
                     else:
                         t_rel = segment.start_time
-                    ocr_items.append(OcrItem(
-                        text=item.text,  # Verbatim - no normalization
-                        t_rel=round(t_rel, 2),
-                        source_frame=item.source_frame,
-                    ))
+                    ocr_items.append(
+                        OcrItem(
+                            text=item.text,  # Verbatim - no normalization
+                            t_rel=round(t_rel, 2),
+                            source_frame=item.source_frame,
+                        )
+                    )
 
             return AnalysisResult(
                 segment_id=segment.id,

@@ -170,8 +170,7 @@ class TestAlignOcrAsr:
     def test_max_quotes_limit(self):
         """Should limit to max_quotes."""
         ocr_items = [
-            OcrItem(text=f"OCR{i}", t_rel=float(i), source_frame=f"f{i}.jpg")
-            for i in range(10)
+            OcrItem(text=f"OCR{i}", t_rel=float(i), source_frame=f"f{i}.jpg") for i in range(10)
         ]
         result = align_ocr_asr(ocr_items, [], max_quotes=3)
 
@@ -252,15 +251,19 @@ class TestAlignSegment:
     def test_align_from_analysis_file(self, tmp_path):
         """Should align from analysis JSON file."""
         path = tmp_path / "part_0001.json"
-        path.write_text(json.dumps({
-            "segment_id": "part_0001",
-            "ocr_items": [
-                {"text": "Hello", "t_rel": 5.0, "source_frame": "frame1.jpg"},
-            ],
-            "asr_items": [
-                {"text": "Hello ASR", "t_start": 5.2, "t_end": 6.0},
-            ],
-        }))
+        path.write_text(
+            json.dumps(
+                {
+                    "segment_id": "part_0001",
+                    "ocr_items": [
+                        {"text": "Hello", "t_rel": 5.0, "source_frame": "frame1.jpg"},
+                    ],
+                    "asr_items": [
+                        {"text": "Hello ASR", "t_start": 5.2, "t_end": 6.0},
+                    ],
+                }
+            )
+        )
 
         result = align_segment(path, window=1.5)
 
@@ -272,10 +275,14 @@ class TestAlignSegment:
     def test_no_ocr_no_asr(self, tmp_path):
         """Should return empty for no OCR/ASR data."""
         path = tmp_path / "part_0001.json"
-        path.write_text(json.dumps({
-            "segment_id": "part_0001",
-            "scene_type": "dialogue",
-        }))
+        path.write_text(
+            json.dumps(
+                {
+                    "segment_id": "part_0001",
+                    "scene_type": "dialogue",
+                }
+            )
+        )
 
         result = align_segment(path)
         assert result == []
@@ -287,11 +294,15 @@ class TestMergeAlignedQuotesToAnalysis:
     def test_merge_into_existing(self, tmp_path):
         """Should merge aligned quotes into existing analysis."""
         path = tmp_path / "part_0001.json"
-        path.write_text(json.dumps({
-            "segment_id": "part_0001",
-            "scene_type": "dialogue",
-            "caption": "Test caption",
-        }))
+        path.write_text(
+            json.dumps(
+                {
+                    "segment_id": "part_0001",
+                    "scene_type": "dialogue",
+                    "caption": "Test caption",
+                }
+            )
+        )
 
         quotes = [
             AlignedQuote(t=5.0, source="ocr", ocr="Hello"),
@@ -326,13 +337,17 @@ class TestGetFirstQuote:
     def test_returns_first_quote_new_format(self, tmp_path):
         """Should return first quote display text from new format."""
         path = tmp_path / "part_0001.json"
-        path.write_text(json.dumps({
-            "segment_id": "part_0001",
-            "aligned_quotes": [
-                {"t": 5.0, "source": "ocr", "ocr": "First OCR"},
-                {"t": 10.0, "source": "both", "ocr": "Second", "asr": "Second ASR"},
-            ],
-        }))
+        path.write_text(
+            json.dumps(
+                {
+                    "segment_id": "part_0001",
+                    "aligned_quotes": [
+                        {"t": 5.0, "source": "ocr", "ocr": "First OCR"},
+                        {"t": 10.0, "source": "both", "ocr": "Second", "asr": "Second ASR"},
+                    ],
+                }
+            )
+        )
 
         result = get_first_quote(path)
         assert result == "First OCR"
@@ -340,12 +355,16 @@ class TestGetFirstQuote:
     def test_returns_display_text_with_asr_annotation(self, tmp_path):
         """Should return OCR with ASR annotation for source=both."""
         path = tmp_path / "part_0001.json"
-        path.write_text(json.dumps({
-            "segment_id": "part_0001",
-            "aligned_quotes": [
-                {"t": 5.0, "source": "both", "ocr": "OCR文本", "asr": "ASR文本"},
-            ],
-        }))
+        path.write_text(
+            json.dumps(
+                {
+                    "segment_id": "part_0001",
+                    "aligned_quotes": [
+                        {"t": 5.0, "source": "both", "ocr": "OCR文本", "asr": "ASR文本"},
+                    ],
+                }
+            )
+        )
 
         result = get_first_quote(path)
         assert result == "OCR文本 (asr: ASR文本)"
@@ -353,12 +372,16 @@ class TestGetFirstQuote:
     def test_backward_compat_old_quote_field(self, tmp_path):
         """Should support old 'quote' field for backward compatibility."""
         path = tmp_path / "part_0001.json"
-        path.write_text(json.dumps({
-            "segment_id": "part_0001",
-            "aligned_quotes": [
-                {"t": 5.0, "quote": "Legacy Quote", "source": "ocr"},
-            ],
-        }))
+        path.write_text(
+            json.dumps(
+                {
+                    "segment_id": "part_0001",
+                    "aligned_quotes": [
+                        {"t": 5.0, "quote": "Legacy Quote", "source": "ocr"},
+                    ],
+                }
+            )
+        )
 
         result = get_first_quote(path)
         assert result == "Legacy Quote"
@@ -366,9 +389,13 @@ class TestGetFirstQuote:
     def test_returns_none_if_no_quotes(self, tmp_path):
         """Should return None if no aligned_quotes."""
         path = tmp_path / "part_0001.json"
-        path.write_text(json.dumps({
-            "segment_id": "part_0001",
-        }))
+        path.write_text(
+            json.dumps(
+                {
+                    "segment_id": "part_0001",
+                }
+            )
+        )
 
         result = get_first_quote(path)
         assert result is None
@@ -390,14 +417,18 @@ class TestTimelineQuoteIntegration:
         # Create analysis with aligned_quotes (new format)
         analysis_dir = tmp_path / "analysis"
         analysis_dir.mkdir()
-        (analysis_dir / "part_0001.json").write_text(json.dumps({
-            "segment_id": "part_0001",
-            "scene_type": "dialogue",
-            "facts": ["Test fact"],
-            "aligned_quotes": [
-                {"t": 5.0, "source": "both", "ocr": "OCR文本", "asr": "ASR文本"},
-            ],
-        }))
+        (analysis_dir / "part_0001.json").write_text(
+            json.dumps(
+                {
+                    "segment_id": "part_0001",
+                    "scene_type": "dialogue",
+                    "facts": ["Test fact"],
+                    "aligned_quotes": [
+                        {"t": 5.0, "source": "both", "ocr": "OCR文本", "asr": "ASR文本"},
+                    ],
+                }
+            )
+        )
 
         manifest = Manifest(
             session_id="test_session",
@@ -429,14 +460,18 @@ class TestTimelineQuoteIntegration:
         # Create analysis with old format
         analysis_dir = tmp_path / "analysis"
         analysis_dir.mkdir()
-        (analysis_dir / "part_0001.json").write_text(json.dumps({
-            "segment_id": "part_0001",
-            "scene_type": "dialogue",
-            "facts": ["Test fact"],
-            "aligned_quotes": [
-                {"t": 5.0, "quote": "Legacy quote", "source": "ocr"},
-            ],
-        }))
+        (analysis_dir / "part_0001.json").write_text(
+            json.dumps(
+                {
+                    "segment_id": "part_0001",
+                    "scene_type": "dialogue",
+                    "facts": ["Test fact"],
+                    "aligned_quotes": [
+                        {"t": 5.0, "quote": "Legacy quote", "source": "ocr"},
+                    ],
+                }
+            )
+        )
 
         manifest = Manifest(
             session_id="test_session",
@@ -468,11 +503,15 @@ class TestTimelineQuoteIntegration:
         # Create analysis WITHOUT aligned_quotes
         analysis_dir = tmp_path / "analysis"
         analysis_dir.mkdir()
-        (analysis_dir / "part_0001.json").write_text(json.dumps({
-            "segment_id": "part_0001",
-            "scene_type": "dialogue",
-            "facts": ["Test fact"],
-        }))
+        (analysis_dir / "part_0001.json").write_text(
+            json.dumps(
+                {
+                    "segment_id": "part_0001",
+                    "scene_type": "dialogue",
+                    "facts": ["Test fact"],
+                }
+            )
+        )
 
         manifest = Manifest(
             session_id="test_session",

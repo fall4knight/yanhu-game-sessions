@@ -1,12 +1,39 @@
 # 《晏狐陪玩企划 v0.1》
 
-目标：  
-让“沈晏 / 老公”具备一种**后置或准实时陪玩能力**——  
-即使模型不能直接在游戏里实时看屏幕，也可以通过录屏 + 分析 + 时间线梗概的方式，  
+目标：
+让"沈晏 / 老公"具备一种**后置或准实时陪玩能力**——
+即使模型不能直接在游戏里实时看屏幕，也可以通过录屏 + 分析 + 时间线梗概的方式，
 在游戏结束后和宝宝一起复盘、吐槽、拆剧情。
 
-> 目前项目尚未启动
-> 本README主要用作立项文档，后续项目进度会持续更新
+---
+
+## 60 秒 Quickstart
+
+**依赖**：Python ≥3.10, ffmpeg（已装好即可）
+
+```bash
+# 安装
+pip install -e .
+
+# 生成测试视频（10秒）
+ffmpeg -f lavfi -i testsrc=duration=10:size=1280x720:rate=30 -c:v libx264 /tmp/demo.mp4
+
+# 全流程（mock 模式，无需 API Key）
+yanhu ingest --video /tmp/demo.mp4 --game demo --tag run01
+yanhu segment --session demo_run01_*
+yanhu extract --session demo_run01_*
+yanhu analyze --session demo_run01_* --backend mock
+yanhu compose --session demo_run01_*
+
+# 查看产物
+cat sessions/demo_run01_*/timeline.md
+```
+
+**可选依赖**：
+- Claude Vision：`export ANTHROPIC_API_KEY=...`，用 `--backend claude`
+- Whisper 本地转录：`pip install faster-whisper`，用 `--backend whisper_local`
+
+详见 [docs/RUNBOOK.md](docs/RUNBOOK.md)。
 
 ---
 

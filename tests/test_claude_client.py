@@ -449,8 +449,7 @@ class TestFakeClaudeClientRetryBehavior:
         bad_json_1 = "Invalid JSON 1"
         bad_json_2 = '{"incomplete": true'  # Missing closing brace
         good_json = (
-            '{"scene_type": "cutscene", "ocr_text": [], '
-            '"facts": ["过场动画"], "caption": "CG播放"}'
+            '{"scene_type": "cutscene", "ocr_text": [], "facts": ["过场动画"], "caption": "CG播放"}'
         )
 
         fake_client = FakeClaudeClient([bad_json_1, bad_json_2, good_json])
@@ -491,8 +490,7 @@ class TestFakeClaudeClientRetryBehavior:
     def test_first_attempt_good_json_no_retry(self):
         """Should not retry when first attempt succeeds."""
         good_json = (
-            '{"scene_type": "menu", "ocr_text": [], '
-            '"facts": ["菜单界面"], "caption": "主菜单"}'
+            '{"scene_type": "menu", "ocr_text": [], "facts": ["菜单界面"], "caption": "主菜单"}'
         )
         extra_response = "Should not be consumed"
 
@@ -702,7 +700,7 @@ class TestOcrItemsParsing:
         """FakeClaudeClient should parse ocr_items correctly."""
         from yanhu.claude_client import FakeClaudeClient
 
-        json_response = '''{
+        json_response = """{
             "scene_type": "dialogue",
             "ocr_text": ["公主不见踪影", "只留一支素雅的步摇"],
             "ocr_items": [
@@ -712,10 +710,11 @@ class TestOcrItemsParsing:
             "facts": ["有字幕"],
             "caption": "公主场景",
             "confidence": "high"
-        }'''
+        }"""
 
         fake_client = FakeClaudeClient([json_response])
         from pathlib import Path
+
         response = fake_client.analyze_frames([Path("/fake/frame.jpg")])
 
         assert response.ocr_items is not None
@@ -729,17 +728,18 @@ class TestOcrItemsParsing:
         """FakeClaudeClient should handle empty ocr_items."""
         from yanhu.claude_client import FakeClaudeClient
 
-        json_response = '''{
+        json_response = """{
             "scene_type": "cutscene",
             "ocr_text": [],
             "ocr_items": [],
             "facts": ["无字幕"],
             "caption": "过场动画",
             "confidence": "high"
-        }'''
+        }"""
 
         fake_client = FakeClaudeClient([json_response])
         from pathlib import Path
+
         response = fake_client.analyze_frames([Path("/fake/frame.jpg")])
 
         assert response.ocr_items is None or response.ocr_items == []
@@ -748,16 +748,17 @@ class TestOcrItemsParsing:
         """FakeClaudeClient should handle missing ocr_items (backward compat)."""
         from yanhu.claude_client import FakeClaudeClient
 
-        json_response = '''{
+        json_response = """{
             "scene_type": "dialogue",
             "ocr_text": ["some text"],
             "facts": ["有字幕"],
             "caption": "场景",
             "confidence": "high"
-        }'''
+        }"""
 
         fake_client = FakeClaudeClient([json_response])
         from pathlib import Path
+
         response = fake_client.analyze_frames([Path("/fake/frame.jpg")])
 
         # Should not error, ocr_items should be None or empty

@@ -188,8 +188,12 @@ def extract(session: str, output_dir: str, frames_per_segment: int):
 @click.option("--backend", "-b", default="mock", type=click.Choice(["mock", "claude"]))
 @click.option("--max-frames", "-n", default=3, help="Max frames per segment (default: 3)")
 @click.option("--max-facts", default=3, help="Max facts per segment (default: 3)")
-@click.option("--detail-level", default="L1", type=click.Choice(["L0", "L1"]),
-              help="L0=basic, L1=enhanced with scene_label/what_changed (default: L1)")
+@click.option(
+    "--detail-level",
+    default="L1",
+    type=click.Choice(["L0", "L1"]),
+    help="L0=basic, L1=enhanced with scene_label/what_changed (default: L1)",
+)
 @click.option("--force", "-f", is_flag=True, help="Re-analyze even if analysis exists")
 @click.option("--dry-run", is_flag=True, help="Show stats without running analysis")
 @click.option("--limit", "-l", type=int, help="Only process first N segments")
@@ -338,9 +342,12 @@ def analyze(
 @click.option("--language", default=None, help="Language code (zh/en/yue), default=auto")
 @click.option("--vad-filter/--no-vad-filter", default=True, help="Enable VAD filter")
 @click.option("--device", default="cpu", help="Device (cpu/cuda/auto)")
-@click.option("--compute-type", default="int8",
-              type=click.Choice(["int8", "float16", "float32"]),
-              help="Quantization type (default: int8)")
+@click.option(
+    "--compute-type",
+    default="int8",
+    type=click.Choice(["int8", "float16", "float32"]),
+    help="Quantization type (default: int8)",
+)
 @click.option("--beam-size", default=5, type=int, help="Beam size for decoding (default: 5)")
 def transcribe(
     session: str,
@@ -582,6 +589,7 @@ def align(
         # Check cache
         if not force:
             import json
+
             try:
                 with open(analysis_path, encoding="utf-8") as f:
                     data = json.load(f)
@@ -616,9 +624,10 @@ def align(
 @click.option(
     "--raw-dir",
     "-r",
+    multiple=True,
     required=True,
     type=click.Path(exists=True, file_okay=False, dir_okay=True),
-    help="Directory to watch for new video files",
+    help="Directory to watch (can be specified multiple times)",
 )
 @click.option(
     "--queue-dir",
@@ -627,29 +636,288 @@ def align(
     type=click.Path(file_okay=False, dir_okay=True),
     help="Directory for queue files (default: sessions/_queue)",
 )
-def watch(raw_dir: str, queue_dir: str):
-    """Watch a directory for new video files and queue them.
+@click.option(
+    "--once",
+    is_flag=True,
+    help="Scan directories once and exit (no continuous watching)",
+)
+@click.option(
+    "--interval",
+    "-i",
+    type=int,
+    default=None,
+    help="Poll interval in seconds (mutually exclusive with watchdog mode)",
+)
+@click.option(
+    "--auto-run",
+    is_flag=True,
+    help="Auto-process queued jobs after detection (WARNING: may consume API tokens)",
+)
+@click.option(
+    "--auto-run-limit",
+    type=int,
+    default=1,
+    help="Max jobs to process per auto-run trigger (default: 1)",
+)
+@click.option(
+    "--auto-run-dry-run",
+    is_flag=True,
+    help="Auto-run in dry-run mode (print jobs without processing)",
+)
+@click.option(
+    "--output-dir",
+    "-o",
+    default="sessions",
+    type=click.Path(file_okay=False, dir_okay=True),
+    help="Output directory for auto-run processing (default: sessions)",
+)
+def watch(
+    raw_dir: tuple[str, ...],
+    queue_dir: str,
+    once: bool,
+    interval: int | None,
+    auto_run: bool,
+    auto_run_limit: int,
+    auto_run_dry_run: bool,
+    output_dir: str,
+):
+    """Watch directories for new video files and queue them.
 
-    Monitors raw_dir for new .mp4/.mkv/.mov files and adds them to
-    a processing queue (pending.jsonl). Does NOT trigger pipeline
-    processing - only queues files for later batch processing.
+    Monitors raw_dirs for new .mp4/.mkv/.mov files and adds them to
+    a processing queue (pending.jsonl).
 
-    Example:
-        yanhu watch --raw-dir ~/Videos/raw --queue-dir sessions/_queue
+    With --auto-run: Automatically processes queued jobs through the full
+    pipeline after detection. WARNING: This will consume API tokens!
+
+    Multiple directories: Use --raw-dir multiple times. Moving a file
+    from one dir to another will re-queue it (dedup key includes path).
+
+    Modes:
+      --once: Scan existing files once and exit
+      --interval N: Poll every N seconds (no watchdog dependency)
+      Default: Use watchdog for real-time monitoring (requires watchdog)
+
+    Examples:
+
+      yanhu watch -r ~/Videos/raw --once
+
+      yanhu watch -r ~/Videos/raw --once --auto-run
+
+      yanhu watch -r ~/Videos/raw --interval 30 --auto-run --auto-run-limit 2
+
+      yanhu watch -r ~/Videos/raw --auto-run --auto-run-dry-run
     """
-    from yanhu.watcher import WatcherConfig, start_watcher
+    from yanhu.watcher import (
+        RunQueueConfig,
+        WatcherConfig,
+        run_queue,
+        scan_once,
+        start_polling,
+        start_watcher,
+    )
 
+    raw_dirs = [Path(d) for d in raw_dir]
     config = WatcherConfig(
-        raw_dir=Path(raw_dir),
+        raw_dirs=raw_dirs,
         queue_dir=Path(queue_dir),
     )
 
-    click.echo("Starting watcher...")
-    click.echo(f"  Raw directory: {config.raw_dir}")
-    click.echo(f"  Queue file: {config.queue_file}")
+    dirs_str = ", ".join(str(d) for d in config.raw_dirs)
+    click.echo(f"Raw directories: [{dirs_str}]")
+    click.echo(f"Queue file: {config.queue_file}")
+    click.echo(f"State file: {config.state_file}")
+    if auto_run:
+        mode_str = "dry-run" if auto_run_dry_run else "enabled"
+        click.echo(f"Auto-run: {mode_str} (limit={auto_run_limit})")
+        if not auto_run_dry_run:
+            click.echo("  WARNING: Auto-run will consume API tokens!")
     click.echo("")
 
-    start_watcher(config)
+    def on_queued(job):
+        click.echo(f"Queued: {Path(job.raw_path).name} (game={job.suggested_game or 'unknown'})")
+
+    def trigger_auto_run(queued_count: int):
+        """Trigger auto-run if enabled and jobs were queued."""
+        if not auto_run or queued_count == 0:
+            return
+
+        click.echo("")
+        click.echo(f"Auto-run triggered ({queued_count} new jobs queued)...")
+
+        run_config = RunQueueConfig(
+            queue_dir=Path(queue_dir),
+            output_dir=Path(output_dir),
+            limit=auto_run_limit,
+            dry_run=auto_run_dry_run,
+            force=False,
+        )
+
+        try:
+            result = run_queue(
+                run_config,
+                on_job_start=lambda job: click.echo(f"  Processing: {Path(job.raw_path).name}"),
+                on_job_complete=lambda job, res: (
+                    click.echo(f"    ✓ Success: {res.session_id}")
+                    if res and res.success
+                    else click.echo(f"    ✗ Failed: {res.error if res else 'unknown'}")
+                    if res
+                    else click.echo("    - Dry-run")
+                ),
+            )
+
+            click.echo("")
+            click.echo("Auto-run complete!")
+            click.echo(f"  Processed: {result.processed}")
+            click.echo(f"  Succeeded: {result.succeeded}")
+            click.echo(f"  Failed: {result.failed}")
+            if auto_run_dry_run:
+                click.echo(f"  Skipped (dry-run): {result.skipped}")
+        except Exception as e:
+            click.echo(f"  ✗ Auto-run failed: {e}")
+            click.echo("  Watcher will continue running...")
+
+    if once:
+        # Scan once and exit
+        click.echo("Scanning directories (once mode)...")
+        result = scan_once(config, on_queued=on_queued)
+        click.echo("")
+        click.echo(
+            f"Scan complete: found={result.found}, queued={result.queued}, skipped={result.skipped}"
+        )
+        # Trigger auto-run after scan completes
+        trigger_auto_run(result.queued)
+    elif interval is not None:
+        # Poll mode
+        click.echo(f"Starting watcher (polling mode, interval={interval}s)...")
+        start_polling(
+            config,
+            interval,
+            on_queued=on_queued,
+            on_scan_complete=trigger_auto_run,
+        )
+    else:
+        # Watchdog mode (default)
+        click.echo("Starting watcher (watchdog mode)...")
+        start_watcher(
+            config,
+            on_queued=on_queued,
+            on_batch_queued=trigger_auto_run,
+        )
+
+
+@main.command("run-queue")
+@click.option(
+    "--queue-dir",
+    "-q",
+    default="sessions/_queue",
+    type=click.Path(file_okay=False, dir_okay=True),
+    help="Directory for queue files (default: sessions/_queue)",
+)
+@click.option(
+    "--output-dir",
+    "-o",
+    default="sessions",
+    type=click.Path(file_okay=False, dir_okay=True),
+    help="Output directory for sessions (default: sessions)",
+)
+@click.option(
+    "--limit",
+    "-l",
+    default=1,
+    type=int,
+    help="Max jobs to process (default: 1)",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Show pending jobs without processing",
+)
+@click.option(
+    "--force",
+    "-f",
+    is_flag=True,
+    help="Force reprocessing even if cached",
+)
+def run_queue_cmd(queue_dir: str, output_dir: str, limit: int, dry_run: bool, force: bool):
+    """Process pending jobs from the queue.
+
+    Reads pending jobs from pending.jsonl and runs them through the
+    full pipeline (ingest → segment → extract → analyze → transcribe → compose).
+
+    Uses conservative parameters:
+      - max-frames=3, max-facts=3
+      - whisper_local model-size=base, compute=int8
+
+    Examples:
+
+      yanhu run-queue --dry-run
+
+      yanhu run-queue --limit 3
+
+      yanhu run-queue --queue-dir sessions/_queue --limit 1 --force
+    """
+    from yanhu.watcher import RunQueueConfig, get_pending_jobs, run_queue
+
+    config = RunQueueConfig(
+        queue_dir=Path(queue_dir),
+        output_dir=Path(output_dir),
+        limit=limit,
+        dry_run=dry_run,
+        force=force,
+    )
+
+    click.echo(f"Queue file: {config.queue_file}")
+    click.echo(f"Output dir: {config.output_dir}")
+    click.echo(f"Limit: {limit}")
+    if dry_run:
+        click.echo("Mode: dry-run (no processing)")
+    if force:
+        click.echo("Force: enabled (ignoring cache)")
+    click.echo("")
+
+    # Check pending jobs
+    pending = get_pending_jobs(config.queue_file)
+    if not pending:
+        click.echo("No pending jobs in queue.")
+        return
+
+    click.echo(f"Pending jobs: {len(pending)}")
+    jobs_to_show = pending[: config.limit]
+    for i, job in enumerate(jobs_to_show, 1):
+        click.echo(f"  {i}. {job.raw_path}")
+        click.echo(f"     game={job.get_game()} tag={job.get_tag()}")
+    click.echo("")
+
+    if dry_run:
+        click.echo("Dry-run complete. No jobs processed.")
+        return
+
+    # Callbacks for progress
+    def on_start(job):
+        click.echo(f"Processing: {Path(job.raw_path).name}")
+        click.echo(f"  game={job.get_game()} tag={job.get_tag()}")
+
+    def on_complete(job, result):
+        if result is None:
+            return
+        if result.success:
+            click.echo(f"  Done: session_id={result.session_id}")
+            if result.outputs:
+                click.echo(f"  Outputs: {result.outputs.get('session_dir', '')}")
+        else:
+            click.echo(f"  Failed: {result.error}")
+        click.echo("")
+
+    # Run queue
+    result = run_queue(config, on_job_start=on_start, on_job_complete=on_complete)
+
+    # Summary
+    click.echo("Queue processing complete!")
+    click.echo(f"  Processed: {result.processed}")
+    click.echo(f"  Succeeded: {result.succeeded}")
+    click.echo(f"  Failed: {result.failed}")
+    if result.skipped:
+        click.echo(f"  Skipped (dry-run): {result.skipped}")
 
 
 if __name__ == "__main__":

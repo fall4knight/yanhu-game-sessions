@@ -92,10 +92,14 @@ def build_extract_frame_command(
     """
     return [
         "-y",  # overwrite output
-        "-ss", f"{timestamp:.3f}",  # seek to timestamp
-        "-i", str(input_path),
-        "-frames:v", "1",  # extract 1 frame
-        "-q:v", "2",  # high quality JPEG
+        "-ss",
+        f"{timestamp:.3f}",  # seek to timestamp
+        "-i",
+        str(input_path),
+        "-frames:v",
+        "1",  # extract 1 frame
+        "-q:v",
+        "2",  # high quality JPEG
         str(output_path),
     ]
 

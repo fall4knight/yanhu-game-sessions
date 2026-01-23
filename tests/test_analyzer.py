@@ -1011,15 +1011,15 @@ class TestAnalyzeSession:
         )
 
         for i in range(num_segments):
-            seg_id = f"part_{i+1:04d}"
+            seg_id = f"part_{i + 1:04d}"
             frames_dir = tmp_path / "frames" / seg_id
             frames_dir.mkdir(parents=True)
             # Create fake frame files
             frame_paths = []
             for j in range(3):
-                frame_path = frames_dir / f"frame_{j+1:04d}.jpg"
+                frame_path = frames_dir / f"frame_{j + 1:04d}.jpg"
                 frame_path.write_bytes(b"fake jpg")
-                frame_paths.append(f"frames/{seg_id}/frame_{j+1:04d}.jpg")
+                frame_paths.append(f"frames/{seg_id}/frame_{j + 1:04d}.jpg")
 
             segment = SegmentInfo(
                 id=seg_id,
@@ -1036,9 +1036,7 @@ class TestAnalyzeSession:
         """Dry run should return stats without creating files."""
         manifest = self._create_test_manifest(tmp_path)
 
-        stats = analyze_session(
-            manifest, tmp_path, "mock", dry_run=True
-        )
+        stats = analyze_session(manifest, tmp_path, "mock", dry_run=True)
 
         assert stats.api_calls == 3
         assert stats.processed == 0
@@ -1049,9 +1047,7 @@ class TestAnalyzeSession:
         """Limit should only process N segments."""
         manifest = self._create_test_manifest(tmp_path, num_segments=5)
 
-        stats = analyze_session(
-            manifest, tmp_path, "mock", limit=2
-        )
+        stats = analyze_session(manifest, tmp_path, "mock", limit=2)
 
         assert stats.processed == 2
         assert stats.skipped_filter == 3
@@ -1060,9 +1056,7 @@ class TestAnalyzeSession:
         """Segments filter should only process specified IDs."""
         manifest = self._create_test_manifest(tmp_path, num_segments=5)
 
-        stats = analyze_session(
-            manifest, tmp_path, "mock", segments=["part_0002", "part_0004"]
-        )
+        stats = analyze_session(manifest, tmp_path, "mock", segments=["part_0002", "part_0004"])
 
         assert stats.processed == 2
         assert stats.skipped_filter == 3
@@ -1133,9 +1127,7 @@ class TestAnalyzeSession:
         def on_progress(segment_id, status, result):
             progress_calls.append((segment_id, status))
 
-        analyze_session(
-            manifest, tmp_path, "mock", on_progress=on_progress
-        )
+        analyze_session(manifest, tmp_path, "mock", on_progress=on_progress)
 
         assert len(progress_calls) == 2
         assert ("part_0001", "done") in progress_calls
@@ -1182,14 +1174,14 @@ class TestAnalyzeSessionSegmentLists:
         )
 
         for i in range(num_segments):
-            seg_id = f"part_{i+1:04d}"
+            seg_id = f"part_{i + 1:04d}"
             frames_dir = tmp_path / "frames" / seg_id
             frames_dir.mkdir(parents=True)
             frame_paths = []
             for j in range(3):
-                frame_path = frames_dir / f"frame_{j+1:04d}.jpg"
+                frame_path = frames_dir / f"frame_{j + 1:04d}.jpg"
                 frame_path.write_bytes(b"fake jpg")
-                frame_paths.append(f"frames/{seg_id}/frame_{j+1:04d}.jpg")
+                frame_paths.append(f"frames/{seg_id}/frame_{j + 1:04d}.jpg")
 
             segment = SegmentInfo(
                 id=seg_id,
@@ -1227,8 +1219,7 @@ class TestAnalyzeSessionSegmentLists:
         manifest = self._create_test_manifest(tmp_path, num_segments=5)
 
         stats = analyze_session(
-            manifest, tmp_path, "mock", dry_run=True,
-            segments=["part_0002", "part_0004"]
+            manifest, tmp_path, "mock", dry_run=True, segments=["part_0002", "part_0004"]
         )
 
         assert stats.will_process == ["part_0002", "part_0004"]
@@ -1305,8 +1296,7 @@ class TestAnalyzeSessionSegmentLists:
 
         # Select only part_0002 and part_0004
         stats = analyze_session(
-            manifest, tmp_path, "mock", dry_run=True,
-            segments=["part_0002", "part_0004"]
+            manifest, tmp_path, "mock", dry_run=True, segments=["part_0002", "part_0004"]
         )
 
         # part_0002 is selected but cached, part_0004 is selected and will process
@@ -1456,24 +1446,26 @@ class TestDynamicMaxFrames:
             segments=[],
         )
         for i in range(num_segments):
-            seg_id = f"part_{i+1:04d}"
+            seg_id = f"part_{i + 1:04d}"
             seg_frames_dir = frames_dir / seg_id
             seg_frames_dir.mkdir()
             # Create 6 frame files
             frames = []
             for j in range(6):
-                frame_name = f"frame_{j+1:04d}.jpg"
+                frame_name = f"frame_{j + 1:04d}.jpg"
                 frame_path = seg_frames_dir / frame_name
                 frame_path.write_bytes(b"fake image data")
                 frames.append(f"frames/{seg_id}/{frame_name}")
 
-            manifest.segments.append(SegmentInfo(
-                id=seg_id,
-                start_time=i * 10.0,
-                end_time=(i + 1) * 10.0,
-                video_path=f"segments/{seg_id}.mp4",
-                frames=frames,
-            ))
+            manifest.segments.append(
+                SegmentInfo(
+                    id=seg_id,
+                    start_time=i * 10.0,
+                    end_time=(i + 1) * 10.0,
+                    video_path=f"segments/{seg_id}.mp4",
+                    frames=frames,
+                )
+            )
         return manifest
 
     def test_dynamic_upgrade_when_subtitle_detected(self, tmp_path):

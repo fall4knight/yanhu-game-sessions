@@ -283,6 +283,7 @@ yanhu-game-sessions/
   - [x] Show: facts[0] blockquote, change line, ui line, asr line, quote line
 - [x] Generate overview.md with session metadata
 - [x] Generate highlights.md with scored segments
+  - [x] Scoring algorithm: ui_key_text (+100 base +10/item), facts (+50 base +10/item), caption (+20), ocr_text (+10/item +1/10chars), scene_label weights, change keywords (+5/kw), watermark penalty (-50)
   - [x] Quote-first priority with aligned_quotes support
   - [x] Heart emoji binding from ui_symbols (inserts before "都做过" keyword)
   - [x] Adjacent segment merging (max 2 quotes when merged)
@@ -301,7 +302,7 @@ yanhu-game-sessions/
 
 **Scope**: Automatic file detection and queue management. Pipeline triggering deferred to v0.3.
 
-**Definition of Done**: New videos in `raw/` are detected and queued for later processing.
+**Definition of Done**: New videos in `raw/` are detected and queued for later processing. Queue consumer processes jobs sequentially.
 
 **Checklist** (v0.2 skeleton):
 - [x] Implement `watcher.py` using watchdog library (optional dependency)
@@ -310,8 +311,34 @@ yanhu-game-sessions/
   - [x] Queue persistence: append to `sessions/_queue/pending.jsonl`
 - [x] Filename parser for game detection (guess_game_from_filename)
 - [x] Add CLI command `yanhu watch --raw-dir <path> --queue-dir <path>`
-- [x] Write unit tests (32 tests, no real watchdog threads)
-- [ ] (v0.3) Trigger full pipeline on new file detection
+- [x] Queue consumer `run_queue()`
+  - [x] Extended QueueJob: game, tag, session_id, error, outputs fields
+  - [x] Status transitions: pending → processing → done/failed
+  - [x] process_job(): full pipeline (ingest → segment → extract → analyze → transcribe → compose)
+  - [x] Conservative params: max-frames=3, max-facts=3, whisper_local base/int8
+  - [x] Graceful failure: missing raw_path → status=failed + error message
+- [x] Add CLI command `yanhu run-queue --queue-dir --output-dir --limit --dry-run --force`
+- [x] Watcher reliability enhancements (M7.2)
+  - [x] Dedup: compute_file_key() using path+mtime+size hash
+  - [x] WatcherState: persist seen_hashes to state.json
+  - [x] Atomic write: state.json via temp file + rename
+  - [x] Append + flush for pending.jsonl durability
+  - [x] `--once` mode: scan directory once and exit
+  - [x] `--interval N` mode: poll every N seconds (no watchdog dependency)
+- [x] Multi raw-dir support (M7.3)
+  - [x] CLI: `--raw-dir` can be specified multiple times
+  - [x] Dedup key includes resolved path (different dirs = different keys)
+  - [x] QueueJob.raw_dir field tracks source directory
+  - [x] Same file moved to different dir can be re-queued
+- [x] Write unit tests (84 watcher tests, 515 total)
+- [x] (v0.3) Trigger full pipeline on new file detection (auto-run)
+  - [x] CLI params: --auto-run, --auto-run-limit, --auto-run-dry-run, --output-dir
+  - [x] scan_once: trigger run_queue after scan if queued > 0
+  - [x] start_polling: on_scan_complete callback for batch trigger
+  - [x] start_watcher: on_batch_queued callback for per-file trigger
+  - [x] Safety: auto-run failures don't stop watcher; errors logged to job
+  - [x] Tests: 8 auto-run tests (monkeypatch run_queue, verify limit/dry-run)
+  - [x] Docs: RUNBOOK auto-run examples with safety warnings
 - [ ] (v0.3) Add systemd/launchd service config for background running
 - [ ] (v0.3) Integration test with temp directory and real Observer
 
@@ -319,15 +346,18 @@ yanhu-game-sessions/
 
 ### Milestone 8: Documentation & Polish
 
-**Scope**: Complete user-facing documentation and developer guides.
+**Scope**: Minimal documentation closure for internal use.
 
-**Definition of Done**: README updated with usage instructions, demo GIF, and troubleshooting.
+**Definition of Done**: README has quickstart, RUNBOOK has full workflow.
 
-**Checklist**:
-- [ ] Write installation guide (ffmpeg, Python, API keys)
-- [ ] Add usage examples for each CLI command
-- [ ] Create sample output files for documentation
-- [ ] Add CONTRIBUTING.md with development setup
+**Checklist** (minimal closure):
+- [x] README: 60 秒 Quickstart（依赖 + 6 条命令）
+- [x] RUNBOOK: End-to-End Quickstart（ffmpeg testsrc + mock 全流程）
+- [x] RUNBOOK: Claude + whisper_local 实战流程（.env、dry-run、参数说明）
+- [x] RUNBOOK: Verify gate 常见 FAIL 及修复
+- [x] 强调 sessions/ 和 .env 不入 git
+- [ ] (Stretch) 创建 CONTRIBUTING.md
+- [ ] (Stretch) Demo GIF
 
 ---
 
@@ -386,8 +416,10 @@ yanhu-game-sessions/
 | 2026-01-21 | M4: ASR Transcription | Done | transcriber.py, whisper_local backend, asr_items写回, timeline展示 |
 | 2026-01-22 | M5: Quote+Summary | Done | aligner.py, aligned_quotes双字段, highlights quote+summary格式 |
 | 2026-01-22 | M6: Session Composition | Done | timeline/overview/highlights完整; quote优先, emoji绑定, 合并段限2条, watermark过滤, 431 tests |
-| 2026-01-22 | M7: Watcher (v0.2 skeleton) | Partial | watcher.py + CLI + queue persistence + 32 tests; pipeline trigger deferred to v0.3 |
-| - | M8: Documentation & Polish | Not Started | - |
+| 2026-01-22 | M7: Watcher (v0.2) | Done | M7.1: run-queue; M7.2: dedup+state; M7.3: multi raw-dir; 84 watcher tests, 515 total |
+| 2026-01-22 | M8: Documentation | Done | README quickstart, RUNBOOK 全流程+实战+verify gate; 内部使用闭环 |
+| 2026-01-22 | Highlights Scoring Fix | Done | Fixed score_segment() to reward facts (+50 base +10/item) and caption (+20); verified all 6 tasks pass including whisper_local |
+| 2026-01-22 | M7: Watcher (v0.3) | Done | Auto-run: --auto-run + limit + dry-run; on_scan_complete/on_batch_queued callbacks; 8 auto-run tests; RUNBOOK safety warnings |
 
 ---
 

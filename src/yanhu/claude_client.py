@@ -113,8 +113,7 @@ Output ONLY valid JSON:"""
                 import anthropic
             except ImportError:
                 raise ClaudeClientError(
-                    "anthropic package not installed. Install with:\n"
-                    "  pip install anthropic"
+                    "anthropic package not installed. Install with:\n  pip install anthropic"
                 )
             self._client = anthropic.Anthropic(api_key=self.api_key)
         return self._client
@@ -415,14 +414,16 @@ Output ONLY valid JSON:"""
         image_content = []
         for path in frame_paths:
             data, media_type = self._encode_image(path)
-            image_content.append({
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "media_type": media_type,
-                    "data": data,
-                },
-            })
+            image_content.append(
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": media_type,
+                        "data": data,
+                    },
+                }
+            )
 
         base_prompt = self._build_prompt(max_facts, detail_level)
 
@@ -454,7 +455,7 @@ Output ONLY valid JSON:"""
                 last_error = e
                 if attempt < max_retries:
                     # Exponential backoff: 1s, 2s
-                    wait_time = 2 ** attempt
+                    wait_time = 2**attempt
                     time.sleep(wait_time)
 
         # All retries failed
@@ -576,11 +577,13 @@ Output ONLY valid JSON:"""
                         frame_idx = item.get("frame_idx", 1)
                         # Create OcrItem with placeholder values
                         # (t_rel and source_frame will be set by analyzer)
-                        ocr_items.append(OcrItem(
-                            text=item["text"],
-                            t_rel=0.0,  # Will be calculated by analyzer
-                            source_frame=f"frame_{frame_idx:04d}.jpg",
-                        ))
+                        ocr_items.append(
+                            OcrItem(
+                                text=item["text"],
+                                t_rel=0.0,  # Will be calculated by analyzer
+                                source_frame=f"frame_{frame_idx:04d}.jpg",
+                            )
+                        )
 
             return ClaudeResponse(
                 scene_type=scene_type,
@@ -742,11 +745,13 @@ class FakeClaudeClient:
                 for item in raw_ocr_items:
                     if isinstance(item, dict) and "text" in item:
                         frame_idx = item.get("frame_idx", 1)
-                        ocr_items.append(OcrItem(
-                            text=item["text"],
-                            t_rel=0.0,
-                            source_frame=f"frame_{frame_idx:04d}.jpg",
-                        ))
+                        ocr_items.append(
+                            OcrItem(
+                                text=item["text"],
+                                t_rel=0.0,
+                                source_frame=f"frame_{frame_idx:04d}.jpg",
+                            )
+                        )
 
             return ClaudeResponse(
                 scene_type=scene_type,

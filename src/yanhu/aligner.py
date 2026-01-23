@@ -128,28 +128,34 @@ def align_ocr_asr(
         if best_asr_idx is not None:
             # Found matching ASR - preserve both texts
             matched_asr_indices.add(best_asr_idx)
-            aligned.append(AlignedQuote(
-                t=t_ocr,
-                source="both",
-                ocr=ocr.text,
-                asr=asr_items[best_asr_idx].text,
-            ))
+            aligned.append(
+                AlignedQuote(
+                    t=t_ocr,
+                    source="both",
+                    ocr=ocr.text,
+                    asr=asr_items[best_asr_idx].text,
+                )
+            )
         else:
             # No matching ASR - OCR only
-            aligned.append(AlignedQuote(
-                t=t_ocr,
-                source="ocr",
-                ocr=ocr.text,
-            ))
+            aligned.append(
+                AlignedQuote(
+                    t=t_ocr,
+                    source="ocr",
+                    ocr=ocr.text,
+                )
+            )
 
     # Phase 2: Add unmatched ASR items
     for i, asr in enumerate(asr_items):
         if i not in matched_asr_indices:
-            aligned.append(AlignedQuote(
-                t=asr.t_start,
-                source="asr",
-                asr=asr.text,
-            ))
+            aligned.append(
+                AlignedQuote(
+                    t=asr.t_start,
+                    source="asr",
+                    asr=asr.text,
+                )
+            )
 
     # Sort by timestamp
     aligned.sort(key=lambda q: q.t)

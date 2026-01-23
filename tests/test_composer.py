@@ -180,7 +180,10 @@ class TestComposeTimeline:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    "part_0001", 0.0, 60.0, "segments/s_part_0001.mp4",
+                    "part_0001",
+                    0.0,
+                    60.0,
+                    "segments/s_part_0001.mp4",
                     frames=["frames/part_0001/frame_0001.jpg", "frames/part_0001/frame_0002.jpg"],
                 ),
             ],
@@ -276,11 +279,17 @@ class TestComposeOverview:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    "part_0001", 0.0, 60.0, "segments/s_part_0001.mp4",
+                    "part_0001",
+                    0.0,
+                    60.0,
+                    "segments/s_part_0001.mp4",
                     frames=["f1.jpg", "f2.jpg"],
                 ),
                 SegmentInfo(
-                    "part_0002", 60.0, 120.0, "segments/s_part_0002.mp4",
+                    "part_0002",
+                    60.0,
+                    120.0,
+                    "segments/s_part_0002.mp4",
                     frames=["f3.jpg", "f4.jpg", "f5.jpg"],
                 ),
             ],
@@ -438,7 +447,10 @@ class TestComposeTimelineWithAnalysis:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    "part_0001", 0.0, 60.0, "segments/s_part_0001.mp4",
+                    "part_0001",
+                    0.0,
+                    60.0,
+                    "segments/s_part_0001.mp4",
                     analysis_path="analysis/part_0001.json",
                 ),
             ],
@@ -485,11 +497,17 @@ class TestComposeTimelineWithAnalysis:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    "part_0001", 0.0, 60.0, "segments/s_part_0001.mp4",
+                    "part_0001",
+                    0.0,
+                    60.0,
+                    "segments/s_part_0001.mp4",
                     analysis_path="analysis/part_0001.json",
                 ),
                 SegmentInfo(
-                    "part_0002", 60.0, 120.0, "segments/s_part_0002.mp4",
+                    "part_0002",
+                    60.0,
+                    120.0,
+                    "segments/s_part_0002.mp4",
                 ),
             ],
         )
@@ -525,7 +543,10 @@ class TestComposeTimelineL1Fields:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    "part_0001", 0.0, 60.0, "segments/s_part_0001.mp4",
+                    "part_0001",
+                    0.0,
+                    60.0,
+                    "segments/s_part_0001.mp4",
                     analysis_path="analysis/part_0001.json",
                 ),
             ],
@@ -557,7 +578,10 @@ class TestComposeTimelineL1Fields:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    "part_0001", 0.0, 60.0, "segments/s_part_0001.mp4",
+                    "part_0001",
+                    0.0,
+                    60.0,
+                    "segments/s_part_0001.mp4",
                     analysis_path="analysis/part_0001.json",
                 ),
             ],
@@ -589,7 +613,10 @@ class TestComposeTimelineL1Fields:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    "part_0001", 0.0, 60.0, "segments/s_part_0001.mp4",
+                    "part_0001",
+                    0.0,
+                    60.0,
+                    "segments/s_part_0001.mp4",
                     analysis_path="analysis/part_0001.json",
                 ),
             ],
@@ -626,7 +653,10 @@ class TestHasValidClaudeAnalysis:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    "part_0001", 0.0, 60.0, "segments/s_part_0001.mp4",
+                    "part_0001",
+                    0.0,
+                    60.0,
+                    "segments/s_part_0001.mp4",
                     analysis_path="analysis/part_0001.json",
                 ),
             ],
@@ -657,7 +687,10 @@ class TestHasValidClaudeAnalysis:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    "part_0001", 0.0, 60.0, "segments/s_part_0001.mp4",
+                    "part_0001",
+                    0.0,
+                    60.0,
+                    "segments/s_part_0001.mp4",
                     analysis_path="analysis/part_0001.json",
                 ),
             ],
@@ -688,7 +721,10 @@ class TestHasValidClaudeAnalysis:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    "part_0001", 0.0, 60.0, "segments/s_part_0001.mp4",
+                    "part_0001",
+                    0.0,
+                    60.0,
+                    "segments/s_part_0001.mp4",
                     analysis_path="analysis/part_0001.json",
                 ),
             ],
@@ -719,7 +755,10 @@ class TestHasValidClaudeAnalysis:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    "part_0001", 0.0, 60.0, "segments/s_part_0001.mp4",
+                    "part_0001",
+                    0.0,
+                    60.0,
+                    "segments/s_part_0001.mp4",
                     analysis_path="analysis/part_0001.json",
                 ),
             ],
@@ -736,7 +775,10 @@ class TestHasValidClaudeAnalysis:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    "part_0001", 0.0, 60.0, "segments/s_part_0001.mp4",
+                    "part_0001",
+                    0.0,
+                    60.0,
+                    "segments/s_part_0001.mp4",
                     # No analysis_path
                 ),
             ],
@@ -753,7 +795,10 @@ class TestHasValidClaudeAnalysis:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    "part_0001", 0.0, 60.0, "segments/s_part_0001.mp4",
+                    "part_0001",
+                    0.0,
+                    60.0,
+                    "segments/s_part_0001.mp4",
                     analysis_path="analysis/part_0001.json",  # File doesn't exist
                 ),
             ],
@@ -786,11 +831,17 @@ class TestHasValidClaudeAnalysis:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    "part_0001", 0.0, 60.0, "segments/s_part_0001.mp4",
+                    "part_0001",
+                    0.0,
+                    60.0,
+                    "segments/s_part_0001.mp4",
                     # No analysis_path
                 ),
                 SegmentInfo(
-                    "part_0002", 60.0, 120.0, "segments/s_part_0002.mp4",
+                    "part_0002",
+                    60.0,
+                    120.0,
+                    "segments/s_part_0002.mp4",
                     analysis_path="analysis/part_0002.json",
                 ),
             ],
@@ -890,7 +941,10 @@ class TestErrorHandlingInTimeline:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    "part_0001", 0.0, 60.0, "segments/s_part_0001.mp4",
+                    "part_0001",
+                    0.0,
+                    60.0,
+                    "segments/s_part_0001.mp4",
                     analysis_path="analysis/part_0001.json",
                 ),
             ],
@@ -981,7 +1035,10 @@ class TestErrorHandlingInTimeline:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    "part_0001", 0.0, 60.0, "segments/s_part_0001.mp4",
+                    "part_0001",
+                    0.0,
+                    60.0,
+                    "segments/s_part_0001.mp4",
                     analysis_path="analysis/part_0001.json",
                 ),
             ],
@@ -1113,12 +1170,12 @@ class TestComposeHighlights:
 
         for i in range(5):
             analysis = AnalysisResult(
-                segment_id=f"part_000{i+1}",
+                segment_id=f"part_000{i + 1}",
                 scene_type="dialogue",
-                facts=[f"描述{i+1}"],
+                facts=[f"描述{i + 1}"],
                 ui_key_text=[f"UI文字{i}"] if i >= 3 else [],  # 4,5 have ui_key_text
             )
-            analysis.save(analysis_dir / f"part_000{i+1}.json")
+            analysis.save(analysis_dir / f"part_000{i + 1}.json")
 
         manifest = Manifest(
             session_id="test_session",
@@ -1128,8 +1185,11 @@ class TestComposeHighlights:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    f"part_000{i+1}", i * 60.0, (i + 1) * 60.0, f"segments/s_{i+1}.mp4",
-                    analysis_path=f"analysis/part_000{i+1}.json",
+                    f"part_000{i + 1}",
+                    i * 60.0,
+                    (i + 1) * 60.0,
+                    f"segments/s_{i + 1}.mp4",
+                    analysis_path=f"analysis/part_000{i + 1}.json",
                 )
                 for i in range(5)
             ],
@@ -1142,9 +1202,7 @@ class TestComposeHighlights:
         # The merged segment should appear as "part_0004+0005"
         assert "part_0004" in result  # Will appear in merged ID
         # Count highlight lines
-        highlight_lines = [
-            line for line in result.split("\n") if line.startswith("- [")
-        ]
+        highlight_lines = [line for line in result.split("\n") if line.startswith("- [")]
         assert len(highlight_lines) == 3
 
     def test_highlights_sorted_by_time(self, tmp_path):
@@ -1174,15 +1232,24 @@ class TestComposeHighlights:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    "part_0001",
+                    0.0,
+                    60.0,
+                    "s1.mp4",
                     analysis_path="analysis/part_0001.json",
                 ),
                 SegmentInfo(
-                    "part_0003", 120.0, 180.0, "s3.mp4",
+                    "part_0003",
+                    120.0,
+                    180.0,
+                    "s3.mp4",
                     analysis_path="analysis/part_0003.json",
                 ),
                 SegmentInfo(
-                    "part_0005", 240.0, 300.0, "s5.mp4",
+                    "part_0005",
+                    240.0,
+                    300.0,
+                    "s5.mp4",
                     analysis_path="analysis/part_0005.json",
                 ),
             ],
@@ -1223,7 +1290,10 @@ class TestComposeHighlights:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    "part_0001", 125.0, 185.0, "s1.mp4",
+                    "part_0001",
+                    125.0,
+                    185.0,
+                    "s1.mp4",
                     analysis_path="analysis/part_0001.json",
                 ),
             ],
@@ -1258,7 +1328,10 @@ class TestComposeHighlights:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    "part_0001",
+                    0.0,
+                    60.0,
+                    "s1.mp4",
                     analysis_path="analysis/part_0001.json",
                 ),
             ],
@@ -1298,7 +1371,10 @@ class TestComposeHighlights:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    "part_0001",
+                    0.0,
+                    60.0,
+                    "s1.mp4",
                     analysis_path="analysis/part_0001.json",
                 ),
             ],
@@ -1341,11 +1417,17 @@ class TestComposeHighlights:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    "part_0001",
+                    0.0,
+                    60.0,
+                    "s1.mp4",
                     analysis_path="analysis/part_0001.json",
                 ),
                 SegmentInfo(
-                    "part_0002", 60.0, 120.0, "s2.mp4",
+                    "part_0002",
+                    60.0,
+                    120.0,
+                    "s2.mp4",
                     analysis_path="analysis/part_0002.json",
                 ),
             ],
@@ -1539,11 +1621,17 @@ class TestScoreSegmentWatermarks:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    "part_0001",
+                    0.0,
+                    60.0,
+                    "s1.mp4",
                     analysis_path="analysis/part_0001.json",
                 ),
                 SegmentInfo(
-                    "part_0002", 60.0, 120.0, "s2.mp4",
+                    "part_0002",
+                    60.0,
+                    120.0,
+                    "s2.mp4",
                     analysis_path="analysis/part_0002.json",
                 ),
             ],
@@ -1595,11 +1683,17 @@ class TestMinScoreThreshold:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    "part_0001",
+                    0.0,
+                    60.0,
+                    "s1.mp4",
                     analysis_path="analysis/part_0001.json",
                 ),
                 SegmentInfo(
-                    "part_0002", 60.0, 120.0, "s2.mp4",
+                    "part_0002",
+                    60.0,
+                    120.0,
+                    "s2.mp4",
                     analysis_path="analysis/part_0002.json",
                 ),
             ],
@@ -1631,13 +1725,13 @@ class TestMinScoreThreshold:
         for i in range(5):
             score_boost = (i + 1) * 30  # 30, 60, 90, 120, 150
             analysis = AnalysisResult(
-                segment_id=f"part_000{i+1}",
+                segment_id=f"part_000{i + 1}",
                 scene_type="dialogue" if score_boost >= 90 else "unknown",
-                facts=[f"描述{i+1}"],
+                facts=[f"描述{i + 1}"],
                 scene_label="Dialogue" if score_boost >= 90 else None,
                 ui_key_text=[f"UI{i}"] if score_boost >= 120 else [],
             )
-            analysis.save(analysis_dir / f"part_000{i+1}.json")
+            analysis.save(analysis_dir / f"part_000{i + 1}.json")
 
         manifest = Manifest(
             session_id="test_session",
@@ -1647,8 +1741,11 @@ class TestMinScoreThreshold:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    f"part_000{i+1}", i * 60.0, (i + 1) * 60.0, f"s{i+1}.mp4",
-                    analysis_path=f"analysis/part_000{i+1}.json",
+                    f"part_000{i + 1}",
+                    i * 60.0,
+                    (i + 1) * 60.0,
+                    f"s{i + 1}.mp4",
+                    analysis_path=f"analysis/part_000{i + 1}.json",
                 )
                 for i in range(5)
             ],
@@ -1657,9 +1754,7 @@ class TestMinScoreThreshold:
         result = compose_highlights(manifest, tmp_path, top_k=2, min_score=100)
 
         # Count highlight lines - should be <= 2
-        highlight_lines = [
-            line for line in result.split("\n") if line.startswith("- [")
-        ]
+        highlight_lines = [line for line in result.split("\n") if line.startswith("- [")]
         assert len(highlight_lines) <= 2
 
 
@@ -1702,11 +1797,17 @@ class TestUiDeduplication:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    "part_0001",
+                    0.0,
+                    60.0,
+                    "s1.mp4",
                     analysis_path="analysis/part_0001.json",
                 ),
                 SegmentInfo(
-                    "part_0002", 60.0, 120.0, "s2.mp4",
+                    "part_0002",
+                    60.0,
+                    120.0,
+                    "s2.mp4",
                     analysis_path="analysis/part_0002.json",
                 ),
             ],
@@ -1754,11 +1855,17 @@ class TestUiDeduplication:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    "part_0001",
+                    0.0,
+                    60.0,
+                    "s1.mp4",
                     analysis_path="analysis/part_0001.json",
                 ),
                 SegmentInfo(
-                    "part_0003", 120.0, 180.0, "s3.mp4",
+                    "part_0003",
+                    120.0,
+                    180.0,
+                    "s3.mp4",
                     analysis_path="analysis/part_0003.json",
                 ),
             ],
@@ -1805,11 +1912,17 @@ class TestUiDeduplication:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    "part_0001",
+                    0.0,
+                    60.0,
+                    "s1.mp4",
                     analysis_path="analysis/part_0001.json",
                 ),
                 SegmentInfo(
-                    "part_0002", 60.0, 120.0, "s2.mp4",
+                    "part_0002",
+                    60.0,
+                    120.0,
+                    "s2.mp4",
                     analysis_path="analysis/part_0002.json",
                 ),
             ],
@@ -1858,11 +1971,17 @@ class TestAdjacentSegmentMerging:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    "part_0001",
+                    0.0,
+                    60.0,
+                    "s1.mp4",
                     analysis_path="analysis/part_0001.json",
                 ),
                 SegmentInfo(
-                    "part_0002", 60.0, 120.0, "s2.mp4",
+                    "part_0002",
+                    60.0,
+                    120.0,
+                    "s2.mp4",
                     analysis_path="analysis/part_0002.json",
                 ),
             ],
@@ -1876,9 +1995,7 @@ class TestAdjacentSegmentMerging:
         assert "第一句台词" in result
         assert "第二句台词" in result
         # Should only have 1 highlight line
-        highlight_lines = [
-            line for line in result.split("\n") if line.startswith("- [")
-        ]
+        highlight_lines = [line for line in result.split("\n") if line.startswith("- [")]
         assert len(highlight_lines) == 1
 
     def test_nonadjacent_segments_not_merged(self, tmp_path):
@@ -1914,11 +2031,17 @@ class TestAdjacentSegmentMerging:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    "part_0001",
+                    0.0,
+                    60.0,
+                    "s1.mp4",
                     analysis_path="analysis/part_0001.json",
                 ),
                 SegmentInfo(
-                    "part_0003", 120.0, 180.0, "s3.mp4",
+                    "part_0003",
+                    120.0,
+                    180.0,
+                    "s3.mp4",
                     analysis_path="analysis/part_0003.json",
                 ),
             ],
@@ -1931,9 +2054,7 @@ class TestAdjacentSegmentMerging:
         assert "part_0003" in result
         assert "+" not in result  # No merged ID
         # Should have 2 highlight lines
-        highlight_lines = [
-            line for line in result.split("\n") if line.startswith("- [")
-        ]
+        highlight_lines = [line for line in result.split("\n") if line.startswith("- [")]
         assert len(highlight_lines) == 2
 
     def test_no_dialogue_segments_not_merged(self, tmp_path):
@@ -1969,11 +2090,17 @@ class TestAdjacentSegmentMerging:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    "part_0001",
+                    0.0,
+                    60.0,
+                    "s1.mp4",
                     analysis_path="analysis/part_0001.json",
                 ),
                 SegmentInfo(
-                    "part_0002", 60.0, 120.0, "s2.mp4",
+                    "part_0002",
+                    60.0,
+                    120.0,
+                    "s2.mp4",
                     analysis_path="analysis/part_0002.json",
                 ),
             ],
@@ -1984,9 +2111,7 @@ class TestAdjacentSegmentMerging:
         # Should not be merged - no dialogue content
         assert "+" not in result
         # Should have 2 highlight lines
-        highlight_lines = [
-            line for line in result.split("\n") if line.startswith("- [")
-        ]
+        highlight_lines = [line for line in result.split("\n") if line.startswith("- [")]
         assert len(highlight_lines) == 2
 
 
@@ -2026,11 +2151,17 @@ class TestNoLowScoreFill:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    "part_0001",
+                    0.0,
+                    60.0,
+                    "s1.mp4",
                     analysis_path="analysis/part_0001.json",
                 ),
                 SegmentInfo(
-                    "part_0003", 120.0, 180.0, "s3.mp4",
+                    "part_0003",
+                    120.0,
+                    180.0,
+                    "s3.mp4",
                     analysis_path="analysis/part_0003.json",
                 ),
             ],
@@ -2054,12 +2185,12 @@ class TestNoLowScoreFill:
         # Create 2 high-score segments
         for i in range(2):
             analysis = AnalysisResult(
-                segment_id=f"part_000{i*2+1}",  # part_0001, part_0003 (non-adjacent)
+                segment_id=f"part_000{i * 2 + 1}",  # part_0001, part_0003 (non-adjacent)
                 scene_type="dialogue",
-                facts=[f"场景{i+1}"],
-                ui_key_text=[f"台词{i+1}"],
+                facts=[f"场景{i + 1}"],
+                ui_key_text=[f"台词{i + 1}"],
             )
-            analysis.save(analysis_dir / f"part_000{i*2+1}.json")
+            analysis.save(analysis_dir / f"part_000{i * 2 + 1}.json")
 
         manifest = Manifest(
             session_id="test_session",
@@ -2069,11 +2200,17 @@ class TestNoLowScoreFill:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    "part_0001",
+                    0.0,
+                    60.0,
+                    "s1.mp4",
                     analysis_path="analysis/part_0001.json",
                 ),
                 SegmentInfo(
-                    "part_0003", 120.0, 180.0, "s3.mp4",
+                    "part_0003",
+                    120.0,
+                    180.0,
+                    "s3.mp4",
                     analysis_path="analysis/part_0003.json",
                 ),
             ],
@@ -2114,7 +2251,10 @@ class TestHighlightTextPriority:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    "part_0001",
+                    0.0,
+                    60.0,
+                    "s1.mp4",
                     analysis_path="analysis/part_0001.json",
                 ),
             ],
@@ -2152,7 +2292,10 @@ class TestHighlightTextPriority:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    "part_0001",
+                    0.0,
+                    60.0,
+                    "s1.mp4",
                     analysis_path="analysis/part_0001.json",
                 ),
             ],
@@ -2187,7 +2330,10 @@ class TestHighlightTextPriority:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    "part_0001",
+                    0.0,
+                    60.0,
+                    "s1.mp4",
                     analysis_path="analysis/part_0001.json",
                 ),
             ],
@@ -2222,7 +2368,10 @@ class TestHighlightTextPriority:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    "part_0001",
+                    0.0,
+                    60.0,
+                    "s1.mp4",
                     analysis_path="analysis/part_0001.json",
                 ),
             ],
@@ -2300,7 +2449,10 @@ class TestUiSymbolsHeartPrefix:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    "part_0001",
+                    0.0,
+                    60.0,
+                    "s1.mp4",
                     analysis_path="analysis/part_0001.json",
                 ),
             ],
@@ -2336,7 +2488,10 @@ class TestUiSymbolsHeartPrefix:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    "part_0001",
+                    0.0,
+                    60.0,
+                    "s1.mp4",
                     analysis_path="analysis/part_0001.json",
                 ),
             ],
@@ -2372,7 +2527,10 @@ class TestUiSymbolsHeartPrefix:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    "part_0001",
+                    0.0,
+                    60.0,
+                    "s1.mp4",
                     analysis_path="analysis/part_0001.json",
                 ),
             ],
@@ -2410,7 +2568,10 @@ class TestUiSymbolsHeartPrefix:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    "part_0001",
+                    0.0,
+                    60.0,
+                    "s1.mp4",
                     analysis_path="analysis/part_0001.json",
                 ),
             ],
@@ -2458,11 +2619,17 @@ class TestUiSymbolsHeartPrefix:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    "part_0001",
+                    0.0,
+                    60.0,
+                    "s1.mp4",
                     analysis_path="analysis/part_0001.json",
                 ),
                 SegmentInfo(
-                    "part_0002", 60.0, 120.0, "s2.mp4",
+                    "part_0002",
+                    60.0,
+                    120.0,
+                    "s2.mp4",
                     analysis_path="analysis/part_0002.json",
                 ),
             ],
@@ -2503,7 +2670,10 @@ class TestUiSymbolsHeartPrefix:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    "part_0001",
+                    0.0,
+                    60.0,
+                    "s1.mp4",
                     analysis_path="analysis/part_0001.json",
                 ),
             ],
@@ -2549,11 +2719,17 @@ class TestUiSymbolsHeartPrefix:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    "part_0001",
+                    0.0,
+                    60.0,
+                    "s1.mp4",
                     analysis_path="analysis/part_0001.json",
                 ),
                 SegmentInfo(
-                    "part_0002", 60.0, 120.0, "s2.mp4",
+                    "part_0002",
+                    60.0,
+                    120.0,
+                    "s2.mp4",
                     analysis_path="analysis/part_0002.json",
                 ),
             ],
@@ -2597,7 +2773,10 @@ class TestUiKeyTextJoin:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    "part_0001",
+                    0.0,
+                    60.0,
+                    "s1.mp4",
                     analysis_path="analysis/part_0001.json",
                 ),
             ],
@@ -2632,7 +2811,10 @@ class TestUiKeyTextJoin:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    "part_0001",
+                    0.0,
+                    60.0,
+                    "s1.mp4",
                     analysis_path="analysis/part_0001.json",
                 ),
             ],
@@ -2669,7 +2851,10 @@ class TestUiKeyTextJoin:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    "part_0001",
+                    0.0,
+                    60.0,
+                    "s1.mp4",
                     analysis_path="analysis/part_0001.json",
                 ),
             ],
@@ -2792,9 +2977,7 @@ class TestHighlightQuoteWithAlignedQuotes:
                 {"t": 5.0, "source": "both", "ocr": "搞到最後", "asr": "搞到最後真的變成你爸爸"},
             ],
         }
-        (analysis_dir / "part_0001.json").write_text(
-            json.dumps(analysis_data, ensure_ascii=False)
-        )
+        (analysis_dir / "part_0001.json").write_text(json.dumps(analysis_data, ensure_ascii=False))
 
         manifest = Manifest(
             session_id="test_session",
@@ -2804,7 +2987,10 @@ class TestHighlightQuoteWithAlignedQuotes:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    "part_0001",
+                    0.0,
+                    60.0,
+                    "s1.mp4",
                     analysis_path="analysis/part_0001.json",
                 ),
             ],
@@ -2833,9 +3019,7 @@ class TestHighlightQuoteWithAlignedQuotes:
                 {"t": 5.0, "source": "ocr", "ocr": "只有OCR文本"},
             ],
         }
-        (analysis_dir / "part_0001.json").write_text(
-            json.dumps(analysis_data, ensure_ascii=False)
-        )
+        (analysis_dir / "part_0001.json").write_text(json.dumps(analysis_data, ensure_ascii=False))
 
         manifest = Manifest(
             session_id="test_session",
@@ -2845,7 +3029,10 @@ class TestHighlightQuoteWithAlignedQuotes:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    "part_0001",
+                    0.0,
+                    60.0,
+                    "s1.mp4",
                     analysis_path="analysis/part_0001.json",
                 ),
             ],
@@ -2880,7 +3067,10 @@ class TestHighlightQuoteWithAlignedQuotes:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    "part_0001",
+                    0.0,
+                    60.0,
+                    "s1.mp4",
                     analysis_path="analysis/part_0001.json",
                 ),
             ],
@@ -2911,9 +3101,7 @@ class TestHighlightSummaryLine:
             "what_changed": "字幕从搞到最後变为真成你爸了，镜头从清晰特写切换到黑白模糊画面",
             "ui_key_text": ["真成你爸了?"],
         }
-        (analysis_dir / "part_0001.json").write_text(
-            json.dumps(analysis_data, ensure_ascii=False)
-        )
+        (analysis_dir / "part_0001.json").write_text(json.dumps(analysis_data, ensure_ascii=False))
 
         manifest = Manifest(
             session_id="test_session",
@@ -2923,7 +3111,10 @@ class TestHighlightSummaryLine:
             segment_duration_seconds=60,
             segments=[
                 SegmentInfo(
-                    "part_0001", 0.0, 60.0, "s1.mp4",
+                    "part_0001",
+                    0.0,
+                    60.0,
+                    "s1.mp4",
                     analysis_path="analysis/part_0001.json",
                 ),
             ],

@@ -55,9 +55,12 @@ def get_video_duration(video_path: Path) -> float:
 
     cmd = [
         ffprobe_path,
-        "-v", "error",
-        "-show_entries", "format=duration",
-        "-of", "default=noprint_wrappers=1:nokey=1",
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
         str(video_path),
     ]
 

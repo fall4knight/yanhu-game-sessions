@@ -138,10 +138,7 @@ class MockAsrBackend:
             try:
                 with open(analysis_path, encoding="utf-8") as f:
                     data = json.load(f)
-                ocr_items = [
-                    OcrItem.from_dict(item)
-                    for item in data.get("ocr_items", [])
-                ]
+                ocr_items = [OcrItem.from_dict(item) for item in data.get("ocr_items", [])]
                 ui_key_text = data.get("ui_key_text", [])
             except (json.JSONDecodeError, KeyError):
                 pass
@@ -157,11 +154,13 @@ class MockAsrBackend:
                 t_start = ocr_item.t_rel
                 # Estimate duration: 2 seconds per item or until next item
                 t_end = min(t_start + 2.0, segment.end_time)
-                asr_items.append(AsrItem(
-                    text=ocr_item.text,
-                    t_start=round(t_start, 2),
-                    t_end=round(t_end, 2),
-                ))
+                asr_items.append(
+                    AsrItem(
+                        text=ocr_item.text,
+                        t_start=round(t_start, 2),
+                        t_end=round(t_end, 2),
+                    )
+                )
         elif ui_key_text:
             # Fall back to ui_key_text with evenly distributed timestamps
             num_items = len(ui_key_text)
@@ -169,18 +168,22 @@ class MockAsrBackend:
             for i, text in enumerate(ui_key_text):
                 t_start = segment.start_time + i * interval
                 t_end = min(t_start + interval, segment.end_time)
-                asr_items.append(AsrItem(
-                    text=text,
-                    t_start=round(t_start, 2),
-                    t_end=round(t_end, 2),
-                ))
+                asr_items.append(
+                    AsrItem(
+                        text=text,
+                        t_start=round(t_start, 2),
+                        t_end=round(t_end, 2),
+                    )
+                )
         else:
             # No OCR data available - create single placeholder
-            asr_items.append(AsrItem(
-                text="[无字幕]",
-                t_start=round(segment.start_time, 2),
-                t_end=round(segment.end_time, 2),
-            ))
+            asr_items.append(
+                AsrItem(
+                    text="[无字幕]",
+                    t_start=round(segment.start_time, 2),
+                    t_end=round(segment.end_time, 2),
+                )
+            )
 
         # Ensure monotonically increasing timestamps
         asr_items = _ensure_monotonic(asr_items)
@@ -262,12 +265,17 @@ class WhisperLocalBackend:
             # Extract audio using ffmpeg
             # -vn: no video, -ac 1: mono, -ar 16000: 16kHz, -f wav: WAV format
             cmd = [
-                "ffmpeg", "-y",
-                "-i", str(video_path),
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(video_path),
                 "-vn",
-                "-ac", "1",
-                "-ar", "16000",
-                "-f", "wav",
+                "-ac",
+                "1",
+                "-ar",
+                "16000",
+                "-f",
+                "wav",
                 str(audio_path),
             ]
             subprocess.run(
@@ -294,6 +302,7 @@ class WhisperLocalBackend:
         # Try faster-whisper first, fall back to openai-whisper
         try:
             from faster_whisper import WhisperModel
+
             self._model = WhisperModel(
                 self.model_size,
                 device=self.device,
@@ -306,6 +315,7 @@ class WhisperLocalBackend:
 
         try:
             import whisper
+
             self._model = whisper.load_model(self.model_size)
             self._backend_type = "openai_whisper"
             return None
@@ -368,9 +378,7 @@ class WhisperLocalBackend:
 
         # Transcribe
         try:
-            asr_items = self._transcribe_audio(
-                audio_path, segment.start_time, max_seconds
-            )
+            asr_items = self._transcribe_audio(audio_path, segment.start_time, max_seconds)
             # Ensure monotonic timestamps
             asr_items = _ensure_monotonic(asr_items)
             return AsrResult(
@@ -423,11 +431,13 @@ class WhisperLocalBackend:
                     break
                 text = seg.text.strip()
                 if text:  # Skip empty segments
-                    asr_items.append(AsrItem(
-                        text=text,
-                        t_start=round(segment_start + seg.start, 2),
-                        t_end=round(segment_start + seg.end, 2),
-                    ))
+                    asr_items.append(
+                        AsrItem(
+                            text=text,
+                            t_start=round(segment_start + seg.start, 2),
+                            t_end=round(segment_start + seg.end, 2),
+                        )
+                    )
         else:  # openai_whisper
             transcribe_opts: dict = {
                 "beam_size": self.beam_size,
@@ -444,11 +454,13 @@ class WhisperLocalBackend:
                     break
                 text = seg["text"].strip()
                 if text:  # Skip empty segments
-                    asr_items.append(AsrItem(
-                        text=text,
-                        t_start=round(segment_start + seg["start"], 2),
-                        t_end=round(segment_start + seg["end"], 2),
-                    ))
+                    asr_items.append(
+                        AsrItem(
+                            text=text,
+                            t_start=round(segment_start + seg["start"], 2),
+                            t_end=round(segment_start + seg["end"], 2),
+                        )
+                    )
 
         return asr_items
 
@@ -474,11 +486,13 @@ def _ensure_monotonic(items: list[AsrItem]) -> list[AsrItem]:
         # Ensure t_end >= t_start
         t_end = max(item.t_end, t_start + 0.1)
 
-        result.append(AsrItem(
-            text=item.text,
-            t_start=round(t_start, 2),
-            t_end=round(t_end, 2),
-        ))
+        result.append(
+            AsrItem(
+                text=item.text,
+                t_start=round(t_start, 2),
+                t_end=round(t_end, 2),
+            )
+        )
         prev_end = t_end
 
     return result
@@ -657,9 +671,7 @@ def transcribe_session(
 
         # Transcribe
         try:
-            result = asr_backend.transcribe_segment(
-                segment, session_dir, max_seconds
-            )
+            result = asr_backend.transcribe_segment(segment, session_dir, max_seconds)
 
             # Merge into analysis
             merge_asr_to_analysis(result, analysis_path, segment)

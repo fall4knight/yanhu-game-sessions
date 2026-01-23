@@ -10,12 +10,32 @@ from yanhu.analyzer import AnalysisResult
 from yanhu.manifest import Manifest, SegmentInfo
 
 # Platform watermark keywords to filter out from highlights
-PLATFORM_WATERMARKS = frozenset([
-    "小红书", "关注", "点赞", "收藏", "分享", "评论",
-    "关注我", "点赞收藏", "双击", "私信", "直播", "粉丝",
-    "抖音", "快手", "微博", "bilibili", "B站",
-    "喜欢", "转发", "投币", "充电", "一键三连",
-])
+PLATFORM_WATERMARKS = frozenset(
+    [
+        "小红书",
+        "关注",
+        "点赞",
+        "收藏",
+        "分享",
+        "评论",
+        "关注我",
+        "点赞收藏",
+        "双击",
+        "私信",
+        "直播",
+        "粉丝",
+        "抖音",
+        "快手",
+        "微博",
+        "bilibili",
+        "B站",
+        "喜欢",
+        "转发",
+        "投币",
+        "充电",
+        "一键三连",
+    ]
+)
 
 # Pattern for @username
 _USERNAME_PATTERN = re.compile(r"^@[\w\u4e00-\u9fff]+$")
@@ -203,9 +223,7 @@ def get_highlight_summary(analysis: AnalysisResult) -> str | None:
 
     # what_changed (truncated)
     if analysis.what_changed:
-        truncated_change = truncate_at_sentence_boundary(
-            analysis.what_changed, max_chars=40
-        )
+        truncated_change = truncate_at_sentence_boundary(analysis.what_changed, max_chars=40)
         parts.append(truncated_change)
 
     if parts:
@@ -348,6 +366,7 @@ def get_segment_asr_text(segment: SegmentInfo, session_dir: Path | None) -> str 
             try:
                 with open(analysis_file, encoding="utf-8") as f:
                     import json
+
                     data = json.load(f)
                 asr_items = data.get("asr_items", [])
                 if asr_items and len(asr_items) > 0:
@@ -371,6 +390,7 @@ def get_segment_quote(segment: SegmentInfo, session_dir: Path | None) -> str | N
     """
     if session_dir and segment.analysis_path:
         from yanhu.aligner import get_first_quote
+
         analysis_file = session_dir / segment.analysis_path
         return get_first_quote(analysis_file)
     return None
@@ -439,13 +459,15 @@ def compose_timeline(manifest: Manifest, session_dir: Path | None = None) -> str
         asr_text = get_segment_asr_text(seg, session_dir)
         quote_text = get_segment_quote(seg, session_dir)
 
-        lines.extend([
-            f"### {seg.id} ({time_range})",
-            "",
-            f"**Frames**: {frames_str}",
-            "",
-            f"> {description}",
-        ])
+        lines.extend(
+            [
+                f"### {seg.id} ({time_range})",
+                "",
+                f"**Frames**: {frames_str}",
+                "",
+                f"> {description}",
+            ]
+        )
 
         # Add L1 fields if present
         if what_changed:
@@ -716,6 +738,8 @@ def score_segment(analysis: AnalysisResult) -> int:
     - ui_key_text (filtered, non-watermark): +100 base + 10 per item
     - If ui_key_text only contains watermarks: -50 penalty
     - ocr_text count: +10 per item, +1 per 10 chars (medium weight)
+    - facts: +50 base + 10 per fact item (high weight for analyzed content)
+    - caption: +20 (medium weight for description)
     - scene_label Dialogue/Combat/Cutscene: +50/+40/+30 (medium-high weight)
     - what_changed contains change keywords: +5 per keyword (low weight)
 
@@ -746,6 +770,15 @@ def score_segment(analysis: AnalysisResult) -> int:
         # Bonus for text length
         total_chars = sum(len(t) for t in analysis.ocr_text)
         score += total_chars // 10
+
+    # facts: high weight (reward analyzed content even without UI/OCR)
+    if analysis.facts:
+        score += 50  # Base reward for having facts
+        score += len(analysis.facts) * 10  # Bonus per fact
+
+    # caption: medium weight (fallback description)
+    if analysis.caption:
+        score += 20
 
     # scene_label: medium-high weight
     scene_weights = {
@@ -948,9 +981,7 @@ def compose_highlights(
                 continue  # Skip duplicate
             seen_ui_keys.add(ui_key)
 
-        primary_selection.append(
-            (score, segment, analysis, filtered_ui, quote, summary)
-        )
+        primary_selection.append((score, segment, analysis, filtered_ui, quote, summary))
 
     # Sort primary selection by time for merging
     primary_selection.sort(key=lambda x: x[1].start_time)
@@ -997,25 +1028,29 @@ def compose_highlights(
                 # Merge summaries: prefer first, fallback to second
                 merged_summary = summary1 or summary2
 
-                merged_highlights.append(HighlightEntry(
-                    score=merged_score,
-                    segment_id=merged_id,
-                    start_time=seg1.start_time,
-                    quote=merged_quote,
-                    summary=merged_summary,
-                ))
+                merged_highlights.append(
+                    HighlightEntry(
+                        score=merged_score,
+                        segment_id=merged_id,
+                        start_time=seg1.start_time,
+                        quote=merged_quote,
+                        summary=merged_summary,
+                    )
+                )
                 i += 2  # Skip both segments
                 continue
 
         # No merge - add single segment (apply heart to its quote)
         final_quote = apply_heart_to_chunk(quote1, analysis1) if quote1 else None
-        merged_highlights.append(HighlightEntry(
-            score=score1,
-            segment_id=seg1.id,
-            start_time=seg1.start_time,
-            quote=final_quote,
-            summary=summary1,
-        ))
+        merged_highlights.append(
+            HighlightEntry(
+                score=score1,
+                segment_id=seg1.id,
+                start_time=seg1.start_time,
+                quote=final_quote,
+                summary=summary1,
+            )
+        )
         i += 1
 
     # Sort by score (descending) and take top-k

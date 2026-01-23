@@ -113,14 +113,18 @@ class TestMockAsrBackend:
         analysis_dir = tmp_path / "analysis"
         analysis_dir.mkdir()
         analysis_file = analysis_dir / "part_0001.json"
-        analysis_file.write_text(json.dumps({
-            "segment_id": "part_0001",
-            "scene_type": "dialogue",
-            "ocr_items": [
-                {"text": "Hello", "t_rel": 0.0, "source_frame": "frame_0001.jpg"},
-                {"text": "World", "t_rel": 2.0, "source_frame": "frame_0002.jpg"},
-            ],
-        }))
+        analysis_file.write_text(
+            json.dumps(
+                {
+                    "segment_id": "part_0001",
+                    "scene_type": "dialogue",
+                    "ocr_items": [
+                        {"text": "Hello", "t_rel": 0.0, "source_frame": "frame_0001.jpg"},
+                        {"text": "World", "t_rel": 2.0, "source_frame": "frame_0002.jpg"},
+                    ],
+                }
+            )
+        )
 
         segment = SegmentInfo(
             id="part_0001",
@@ -146,11 +150,15 @@ class TestMockAsrBackend:
         analysis_dir = tmp_path / "analysis"
         analysis_dir.mkdir()
         analysis_file = analysis_dir / "part_0001.json"
-        analysis_file.write_text(json.dumps({
-            "segment_id": "part_0001",
-            "scene_type": "dialogue",
-            "ui_key_text": ["Key text 1", "Key text 2"],
-        }))
+        analysis_file.write_text(
+            json.dumps(
+                {
+                    "segment_id": "part_0001",
+                    "scene_type": "dialogue",
+                    "ui_key_text": ["Key text 1", "Key text 2"],
+                }
+            )
+        )
 
         segment = SegmentInfo(
             id="part_0001",
@@ -188,15 +196,19 @@ class TestMockAsrBackend:
         analysis_dir = tmp_path / "analysis"
         analysis_dir.mkdir()
         analysis_file = analysis_dir / "part_0001.json"
-        analysis_file.write_text(json.dumps({
-            "segment_id": "part_0001",
-            "scene_type": "dialogue",
-            "ocr_items": [
-                {"text": "A", "t_rel": 0.0, "source_frame": "f1.jpg"},
-                {"text": "B", "t_rel": 1.0, "source_frame": "f2.jpg"},
-                {"text": "C", "t_rel": 2.0, "source_frame": "f3.jpg"},
-            ],
-        }))
+        analysis_file.write_text(
+            json.dumps(
+                {
+                    "segment_id": "part_0001",
+                    "scene_type": "dialogue",
+                    "ocr_items": [
+                        {"text": "A", "t_rel": 0.0, "source_frame": "f1.jpg"},
+                        {"text": "B", "t_rel": 1.0, "source_frame": "f2.jpg"},
+                        {"text": "C", "t_rel": 2.0, "source_frame": "f3.jpg"},
+                    ],
+                }
+            )
+        )
 
         segment = SegmentInfo(
             id="part_0001",
@@ -226,11 +238,15 @@ class TestMergeAsrToAnalysis:
         analysis_dir = tmp_path / "analysis"
         analysis_dir.mkdir()
         analysis_file = analysis_dir / "part_0001.json"
-        analysis_file.write_text(json.dumps({
-            "segment_id": "part_0001",
-            "scene_type": "dialogue",
-            "caption": "Existing caption",
-        }))
+        analysis_file.write_text(
+            json.dumps(
+                {
+                    "segment_id": "part_0001",
+                    "scene_type": "dialogue",
+                    "caption": "Existing caption",
+                }
+            )
+        )
 
         segment = SegmentInfo(
             id="part_0001",
@@ -353,13 +369,15 @@ class TestTranscribeSession:
             frames_dir.mkdir(parents=True)
             (frames_dir / "frame_0001.jpg").write_bytes(b"fake")
 
-            manifest.segments.append(SegmentInfo(
-                id=seg_id,
-                start_time=i * 10.0,
-                end_time=(i + 1) * 10.0,
-                video_path=f"segments/{seg_id}.mp4",
-                frames=[f"frames/{seg_id}/frame_0001.jpg"],
-            ))
+            manifest.segments.append(
+                SegmentInfo(
+                    id=seg_id,
+                    start_time=i * 10.0,
+                    end_time=(i + 1) * 10.0,
+                    video_path=f"segments/{seg_id}.mp4",
+                    frames=[f"frames/{seg_id}/frame_0001.jpg"],
+                )
+            )
 
         return manifest
 
@@ -384,11 +402,15 @@ class TestTranscribeSession:
         # Pre-create ASR data for first segment
         analysis_dir = tmp_path / "analysis"
         analysis_dir.mkdir()
-        (analysis_dir / "part_0001.json").write_text(json.dumps({
-            "segment_id": "part_0001",
-            "asr_items": [{"text": "existing", "t_start": 0, "t_end": 1}],
-            "asr_backend": "mock",
-        }))
+        (analysis_dir / "part_0001.json").write_text(
+            json.dumps(
+                {
+                    "segment_id": "part_0001",
+                    "asr_items": [{"text": "existing", "t_start": 0, "t_end": 1}],
+                    "asr_backend": "mock",
+                }
+            )
+        )
 
         stats = transcribe_session(manifest, tmp_path, backend="mock")
 
@@ -402,11 +424,15 @@ class TestTranscribeSession:
         # Pre-create ASR data
         analysis_dir = tmp_path / "analysis"
         analysis_dir.mkdir()
-        (analysis_dir / "part_0001.json").write_text(json.dumps({
-            "segment_id": "part_0001",
-            "asr_items": [{"text": "old", "t_start": 0, "t_end": 1}],
-            "asr_backend": "mock",
-        }))
+        (analysis_dir / "part_0001.json").write_text(
+            json.dumps(
+                {
+                    "segment_id": "part_0001",
+                    "asr_items": [{"text": "old", "t_start": 0, "t_end": 1}],
+                    "asr_backend": "mock",
+                }
+            )
+        )
 
         stats = transcribe_session(manifest, tmp_path, backend="mock", force=True)
 
@@ -425,9 +451,7 @@ class TestTranscribeSession:
         """Should filter by segment IDs."""
         manifest = self._create_test_manifest(tmp_path, num_segments=3)
 
-        stats = transcribe_session(
-            manifest, tmp_path, backend="mock", segments=["part_0002"]
-        )
+        stats = transcribe_session(manifest, tmp_path, backend="mock", segments=["part_0002"])
 
         assert stats.processed == 1
         assert stats.skipped_filter == 2
@@ -440,9 +464,7 @@ class TestTranscribeSession:
         def on_progress(segment_id, status, result):
             progress_calls.append((segment_id, status))
 
-        transcribe_session(
-            manifest, tmp_path, backend="mock", on_progress=on_progress
-        )
+        transcribe_session(manifest, tmp_path, backend="mock", on_progress=on_progress)
 
         assert len(progress_calls) == 1
         assert progress_calls[0] == ("part_0001", "done")
@@ -484,15 +506,19 @@ class TestAsrTimestampValidation:
         # Setup with multiple OCR items
         analysis_dir = tmp_path / "analysis"
         analysis_dir.mkdir()
-        (analysis_dir / "part_0001.json").write_text(json.dumps({
-            "segment_id": "part_0001",
-            "scene_type": "dialogue",
-            "ocr_items": [
-                {"text": "A", "t_rel": 0.0, "source_frame": "f1.jpg"},
-                {"text": "B", "t_rel": 1.0, "source_frame": "f2.jpg"},
-                {"text": "C", "t_rel": 2.0, "source_frame": "f3.jpg"},
-            ],
-        }))
+        (analysis_dir / "part_0001.json").write_text(
+            json.dumps(
+                {
+                    "segment_id": "part_0001",
+                    "scene_type": "dialogue",
+                    "ocr_items": [
+                        {"text": "A", "t_rel": 0.0, "source_frame": "f1.jpg"},
+                        {"text": "B", "t_rel": 1.0, "source_frame": "f2.jpg"},
+                        {"text": "C", "t_rel": 2.0, "source_frame": "f3.jpg"},
+                    ],
+                }
+            )
+        )
 
         manifest = Manifest(
             session_id="test",
@@ -842,6 +868,7 @@ class TestWhisperParamPassthrough:
 
         with patch.dict("sys.modules", {"faster_whisper": MagicMock()}):
             import sys
+
             mock_whisper_module = sys.modules["faster_whisper"]
             mock_whisper_module.WhisperModel = MagicMock(return_value=mock_model)
 
@@ -872,6 +899,7 @@ class TestWhisperParamPassthrough:
 
         with patch.dict("sys.modules", {"faster_whisper": MagicMock()}):
             import sys
+
             mock_whisper_module = sys.modules["faster_whisper"]
             mock_whisper_module.WhisperModel = MagicMock(return_value=mock_model)
 
@@ -905,6 +933,7 @@ class TestWhisperParamPassthrough:
 
         with patch.dict("sys.modules", {"faster_whisper": MagicMock()}):
             import sys
+
             mock_whisper_module = sys.modules["faster_whisper"]
             mock_whisper_module.WhisperModel = MagicMock(return_value=mock_model)
 

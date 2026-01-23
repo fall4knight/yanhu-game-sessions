@@ -73,11 +73,16 @@ def build_segment_command(
     """
     return [
         "-y",  # overwrite output
-        "-ss", str(start_time),
-        "-i", str(input_path),
-        "-t", str(duration),
-        "-c", "copy",  # copy streams without re-encoding
-        "-avoid_negative_ts", "make_zero",
+        "-ss",
+        str(start_time),
+        "-i",
+        str(input_path),
+        "-t",
+        str(duration),
+        "-c",
+        "copy",  # copy streams without re-encoding
+        "-avoid_negative_ts",
+        "make_zero",
         str(output_path),
     ]
 
