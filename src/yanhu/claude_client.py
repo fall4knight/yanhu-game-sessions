@@ -386,13 +386,13 @@ Output ONLY valid JSON:"""
    - 只记录画面中实际显示的符号，不要推断
    - 可为空数组 []
 
-11. ui_symbol_items（可选，符号时间定位）：
-   - 对于 ui_symbols 中的每个符号，提供其出现的具体帧位置
+11. ui_symbol_items（符号时间定位，必需）：
+   - **如果 ui_symbols 非空，则必须为每个符号提供其出现的帧位置**
    - 格式：[{{"symbol": "❤️", "source_frames": ["frame_0005.jpg", "frame_0007.jpg"]}}]
    - source_frames：该符号出现的帧列表（最多3个帧，按出现顺序）
    - 如果符号在多帧出现，选择最清晰/最突出的帧
    - 用于后续时间对齐，不需要推断
-   - 可为空数组 []
+   - 如果 ui_symbols 为空，则 ui_symbol_items 也必须为空数组 []
 
 12. player_action_guess（推断放这里）：
     - 所有"身份判断/剧情推断/情绪推断"都放这里，而非 facts

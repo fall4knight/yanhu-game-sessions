@@ -406,6 +406,32 @@ class ClaudeAnalyzer:
                         )
                     )
 
+            # Convert ui_symbol_items from Claude format to AnalysisResult format
+            # Calculate t_rel based on segment start time and frame index
+            ui_symbol_items = []
+            if response.ui_symbol_items:
+                segment_duration = segment.end_time - segment.start_time
+                num_frames = len(frame_paths)
+                for item in response.ui_symbol_items:
+                    # Parse frame index from source_frame (e.g., "frame_0003.jpg" -> 3)
+                    try:
+                        frame_idx = int(item.source_frame[6:10])
+                    except (ValueError, IndexError):
+                        frame_idx = 1
+                    # Estimate t_rel: segment_start + (frame_idx - 1) / num_frames * duration
+                    if num_frames > 1:
+                        frame_ratio = (frame_idx - 1) / (num_frames - 1)
+                        t_rel = segment.start_time + frame_ratio * segment_duration
+                    else:
+                        t_rel = segment.start_time
+                    ui_symbol_items.append(
+                        UiSymbolItem(
+                            symbol=item.symbol,
+                            t_rel=round(t_rel, 2),
+                            source_frame=item.source_frame,
+                        )
+                    )
+
             return AnalysisResult(
                 segment_id=segment.id,
                 scene_type=response.scene_type,
@@ -424,6 +450,7 @@ class ClaudeAnalyzer:
                 player_action_guess=response.player_action_guess,
                 hook_detail=response.hook_detail,
                 ocr_items=ocr_items,
+                ui_symbol_items=ui_symbol_items,
             )
         except Exception as e:
             return AnalysisResult(
