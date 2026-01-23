@@ -8,6 +8,7 @@ from pathlib import Path
 from yanhu.aligner import AlignedQuote
 from yanhu.analyzer import AnalysisResult
 from yanhu.manifest import Manifest, SegmentInfo
+from yanhu.symbol_binder import bind_symbols_to_ocr
 
 # Platform watermark keywords to filter out from highlights
 PLATFORM_WATERMARKS = frozenset(
@@ -646,6 +647,9 @@ _HEART_TARGET_KEYWORDS = ["都做过", "都做過"]
 def apply_heart_to_chunk(chunk: str, analysis: AnalysisResult) -> str:
     """Apply ❤️ to a segment's text chunk based on ui_symbols.
 
+    DEPRECATED: This function uses keyword matching. Use apply_symbols_to_quote instead
+    for time-based symbol binding.
+
     Rules:
     - If ui_symbols contains heart AND chunk contains "都做过"/"都做過":
       Insert ❤️ before that keyword
@@ -672,6 +676,59 @@ def apply_heart_to_chunk(chunk: str, analysis: AnalysisResult) -> str:
 
     # No target keyword found - prefix the entire chunk
     return f"❤️ {chunk}"
+
+
+def apply_symbols_to_quote(quote: str, analysis: AnalysisResult) -> str:
+    """Apply symbols to quote based on time-based binding (no keyword matching).
+
+    Uses symbol_binder to find nearest OCR item by time. If the quote text
+    matches a bound OCR item, adds the symbol as prefix.
+
+    Falls back to simple prefix behavior for backward compatibility when
+    time-based data (ui_symbol_items, ocr_items) is not available.
+
+    Args:
+        quote: The quote text for this segment
+        analysis: Analysis result with ui_symbol_items and ocr_items
+
+    Returns:
+        Quote with bound symbols as prefix (e.g., "❤️ 对话文本")
+    """
+    # Get ui_symbol_items and ocr_items from analysis
+    ui_symbol_items = getattr(analysis, "ui_symbol_items", None)
+    ocr_items = getattr(analysis, "ocr_items", None)
+
+    # If time-based data is available, use time-based binding
+    if ui_symbol_items and ocr_items:
+        # Bind symbols to OCR items by time
+        bound_symbols = bind_symbols_to_ocr(ui_symbol_items, ocr_items, threshold=1.5)
+
+        # Find symbols bound to this quote text
+        symbols_for_quote = []
+        for bound in bound_symbols:
+            if bound.source == "bound" and bound.ocr_text:
+                # Check if quote contains this OCR text
+                if bound.ocr_text in quote:
+                    symbols_for_quote.append(bound.symbol)
+
+        # Apply symbols as prefix
+        if symbols_for_quote:
+            symbols_str = " ".join(symbols_for_quote)
+            return f"{symbols_str} {quote}"
+
+    # Fallback: use old behavior for backward compatibility
+    # If ui_symbols contains heart, check for keywords or prefix
+    ui_symbols = getattr(analysis, "ui_symbols", None)
+    if _has_heart_symbol(ui_symbols):
+        # Check for target keywords
+        for keyword in _HEART_TARGET_KEYWORDS:
+            if keyword in quote:
+                # Insert ❤️ before the keyword
+                return quote.replace(keyword, f"❤️ {keyword}", 1)
+        # No target keyword found - prefix the entire quote
+        return f"❤️ {quote}"
+
+    return quote
 
 
 def get_highlight_text(
@@ -1012,9 +1069,9 @@ def compose_highlights(
                 merged_id = _merge_segment_ids(seg1.id, seg2.id)
                 merged_score = max(score1, score2)
 
-                # Apply heart to each segment's quote separately
-                chunk1 = apply_heart_to_chunk(quote1, analysis1) if quote1 else None
-                chunk2 = apply_heart_to_chunk(quote2, analysis2) if quote2 else None
+                # Apply symbols to each segment's quote separately
+                chunk1 = apply_symbols_to_quote(quote1, analysis1) if quote1 else None
+                chunk2 = apply_symbols_to_quote(quote2, analysis2) if quote2 else None
 
                 # Merge quotes: each segment contributes at most 1 quote
                 merged_quote = None
@@ -1040,8 +1097,8 @@ def compose_highlights(
                 i += 2  # Skip both segments
                 continue
 
-        # No merge - add single segment (apply heart to its quote)
-        final_quote = apply_heart_to_chunk(quote1, analysis1) if quote1 else None
+        # No merge - add single segment (apply symbols to its quote)
+        final_quote = apply_symbols_to_quote(quote1, analysis1) if quote1 else None
         merged_highlights.append(
             HighlightEntry(
                 score=score1,
