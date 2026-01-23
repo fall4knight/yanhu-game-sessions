@@ -434,7 +434,7 @@ def transcribe(
         click.echo(f"  Filter: {segment_list}")
 
     # Progress callback
-    def on_progress(segment_id: str, status: str, result):
+    def on_progress(segment_id: str, status: str, result, stats):
         if status == "cached":
             click.echo(f"  {segment_id}: cached (skipped)")
         elif status == "done":
