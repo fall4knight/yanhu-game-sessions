@@ -20,6 +20,15 @@ class OcrItem:
 
 
 @dataclass
+class UiSymbolItem:
+    """A UI symbol (emoji/icon) with source tracking for time-based alignment."""
+
+    symbol: str  # The emoji or symbol (e.g., "❤️", "⭐")
+    t_rel: float  # Relative time in seconds (estimated)
+    source_frame: str  # Frame filename where symbol appears
+
+
+@dataclass
 class ClaudeResponse:
     """Response from Claude API."""
 
@@ -40,6 +49,8 @@ class ClaudeResponse:
     hook_detail: str | None = None
     # OCR items with source tracking (for ASR alignment)
     ocr_items: list[OcrItem] | None = None
+    # UI symbol items with source tracking (for time-based binding)
+    ui_symbol_items: list[UiSymbolItem] | None = None
 
 
 class ClaudeClientError(Exception):
@@ -238,6 +249,9 @@ Output ONLY valid JSON:"""
   "what_changed": "描述变化或状态",
   "ui_key_text": ["关键台词1", "关键台词2"],
   "ui_symbols": ["❤️"],
+  "ui_symbol_items": [
+    {{"symbol": "❤️", "source_frames": ["frame_0005.jpg", "frame_0007.jpg"]}}
+  ],
   "player_action_guess": "可能...|疑似...",
   "hook_detail": "一条可咀嚼细节"
 }}
@@ -372,14 +386,22 @@ Output ONLY valid JSON:"""
    - 只记录画面中实际显示的符号，不要推断
    - 可为空数组 []
 
-11. player_action_guess（推断放这里）：
+11. ui_symbol_items（可选，符号时间定位）：
+   - 对于 ui_symbols 中的每个符号，提供其出现的具体帧位置
+   - 格式：[{{"symbol": "❤️", "source_frames": ["frame_0005.jpg", "frame_0007.jpg"]}}]
+   - source_frames：该符号出现的帧列表（最多3个帧，按出现顺序）
+   - 如果符号在多帧出现，选择最清晰/最突出的帧
+   - 用于后续时间对齐，不需要推断
+   - 可为空数组 []
+
+12. player_action_guess（推断放这里）：
     - 所有"身份判断/剧情推断/情绪推断"都放这里，而非 facts
     - 必须带不确定性措辞："可能..."、"疑似..."、"看起来..."
     - 保持一句话短句
     - 示例："可能是角色释放大招"、"疑似剧情回忆片段"
     - 如无法猜测可为空字符串 ""
 
-12. hook_detail（可选）：
+13. hook_detail（可选）：
     - 一条值得注意的细节（画面细节、数值、特殊元素等）
     - 可为空字符串 ""
 
@@ -585,6 +607,24 @@ Output ONLY valid JSON:"""
                             )
                         )
 
+            # Parse ui_symbol_items with source_frames
+            raw_symbol_items = data.get("ui_symbol_items", [])
+            ui_symbol_items = None
+            if raw_symbol_items:
+                ui_symbol_items = []
+                for item in raw_symbol_items:
+                    if isinstance(item, dict) and "symbol" in item:
+                        source_frames = item.get("source_frames", [])
+                        # Use first frame as primary source
+                        source_frame = source_frames[0] if source_frames else "frame_0001.jpg"
+                        ui_symbol_items.append(
+                            UiSymbolItem(
+                                symbol=item["symbol"],
+                                t_rel=0.0,  # Will be calculated by analyzer
+                                source_frame=source_frame,
+                            )
+                        )
+
             return ClaudeResponse(
                 scene_type=scene_type,
                 ocr_text=data.get("ocr_text", []),
@@ -600,6 +640,7 @@ Output ONLY valid JSON:"""
                 player_action_guess=data.get("player_action_guess"),
                 hook_detail=data.get("hook_detail"),
                 ocr_items=ocr_items,
+                ui_symbol_items=ui_symbol_items,
             )
         except json.JSONDecodeError as e:
             # Truncate raw_text to 500 chars to avoid bloating analysis files
@@ -753,6 +794,23 @@ class FakeClaudeClient:
                             )
                         )
 
+            # Parse ui_symbol_items with source_frames
+            raw_symbol_items = data.get("ui_symbol_items", [])
+            ui_symbol_items = None
+            if raw_symbol_items:
+                ui_symbol_items = []
+                for item in raw_symbol_items:
+                    if isinstance(item, dict) and "symbol" in item:
+                        source_frames = item.get("source_frames", [])
+                        source_frame = source_frames[0] if source_frames else "frame_0001.jpg"
+                        ui_symbol_items.append(
+                            UiSymbolItem(
+                                symbol=item["symbol"],
+                                t_rel=0.0,
+                                source_frame=source_frame,
+                            )
+                        )
+
             return ClaudeResponse(
                 scene_type=scene_type,
                 ocr_text=data.get("ocr_text", []),
@@ -767,6 +825,7 @@ class FakeClaudeClient:
                 player_action_guess=data.get("player_action_guess"),
                 hook_detail=data.get("hook_detail"),
                 ocr_items=ocr_items,
+                ui_symbol_items=ui_symbol_items,
             )
         except json.JSONDecodeError as e:
             return ClaudeResponse(

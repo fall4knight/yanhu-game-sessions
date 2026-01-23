@@ -69,6 +69,30 @@ class OcrItem:
 
 
 @dataclass
+class UiSymbolItem:
+    """A UI symbol (emoji/icon) with source tracking for time-based alignment."""
+
+    symbol: str  # The emoji or symbol (e.g., "❤️", "⭐")
+    t_rel: float  # Relative time in seconds (from session start)
+    source_frame: str  # Frame filename where symbol appears
+
+    def to_dict(self) -> dict:
+        return {
+            "symbol": self.symbol,
+            "t_rel": self.t_rel,
+            "source_frame": self.source_frame,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "UiSymbolItem":
+        return cls(
+            symbol=data["symbol"],
+            t_rel=data.get("t_rel", 0.0),
+            source_frame=data.get("source_frame", ""),
+        )
+
+
+@dataclass
 class AnalysisResult:
     """Result of analyzing a video segment."""
 
@@ -90,6 +114,8 @@ class AnalysisResult:
     hook_detail: str | None = None  # Optional detail worth noting
     # OCR items with source tracking (for ASR alignment)
     ocr_items: list[OcrItem] = field(default_factory=list)
+    # UI symbol items with source tracking (for time-based binding)
+    ui_symbol_items: list[UiSymbolItem] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         result = {
@@ -123,6 +149,8 @@ class AnalysisResult:
             result["hook_detail"] = self.hook_detail
         if self.ocr_items:
             result["ocr_items"] = [item.to_dict() for item in self.ocr_items]
+        if self.ui_symbol_items:
+            result["ui_symbol_items"] = [item.to_dict() for item in self.ui_symbol_items]
         return result
 
     @classmethod
@@ -146,6 +174,10 @@ class AnalysisResult:
             hook_detail=data.get("hook_detail"),
             # OCR items
             ocr_items=[OcrItem.from_dict(item) for item in data.get("ocr_items", [])],
+            # UI symbol items
+            ui_symbol_items=[
+                UiSymbolItem.from_dict(item) for item in data.get("ui_symbol_items", [])
+            ],
         )
 
     def save(self, output_path: Path) -> None:
