@@ -17,6 +17,28 @@ class TestAppCreation:
         assert app is not None
         assert app.config["sessions_dir"] == sessions_dir
 
+    def test_create_app_with_jobs_dir_parameter(self, tmp_path):
+        """App accepts jobs_dir parameter for backward compatibility."""
+        from yanhu.app import create_app
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+        custom_jobs_dir = tmp_path / "custom_jobs"
+        custom_jobs_dir.mkdir()
+
+        # Test with string path
+        app = create_app(sessions_dir, jobs_dir=str(custom_jobs_dir))
+        assert app.config["jobs_dir"] == custom_jobs_dir
+
+        # Test with Path object
+        app2 = create_app(sessions_dir, jobs_dir=custom_jobs_dir)
+        assert app2.config["jobs_dir"] == custom_jobs_dir
+
+        # Test with None (should use default derived path)
+        app3 = create_app(sessions_dir, jobs_dir=None)
+        expected = sessions_dir.parent / "_queue" / "jobs"
+        assert app3.config["jobs_dir"] == expected
+
 
 class TestSessionListing:
     """Test session listing route."""

@@ -898,12 +898,13 @@ JOB_DETAIL_TEMPLATE = BASE_TEMPLATE.replace(
 
 
 def create_app(
-    sessions_dir: Path,
-    raw_dir: Path | None = None,
+    sessions_dir: str | Path,
+    raw_dir: str | Path | None = None,
     worker_enabled: bool = False,
     allow_any_path: bool = False,
     preset: str = "fast",
     max_upload_size: int = 5 * 1024 * 1024 * 1024,  # 5GB default
+    jobs_dir: str | Path | None = None,
 ) -> Flask:
     """Create and configure the Flask app.
 
@@ -914,20 +915,29 @@ def create_app(
         allow_any_path: Allow any raw_path (skip validation that path is under raw_dir)
         preset: Processing preset for jobs (fast or quality)
         max_upload_size: Maximum upload file size in bytes (default: 5GB)
+        jobs_dir: Path to jobs directory (if None, derived from sessions_dir)
 
     Returns:
         Configured Flask application
     """
+    # Convert string paths to Path objects for internal use
+    sessions_path = Path(sessions_dir) if isinstance(sessions_dir, str) else sessions_dir
+    raw_path = Path(raw_dir) if isinstance(raw_dir, str) else raw_dir
+
     app = Flask(__name__)
-    app.config["sessions_dir"] = sessions_dir
-    app.config["raw_dir"] = raw_dir
+    app.config["sessions_dir"] = sessions_path
+    app.config["raw_dir"] = raw_path
     app.config["worker_enabled"] = worker_enabled
     app.config["allow_any_path"] = allow_any_path
     app.config["preset"] = preset
-    app.config["queue_dir"] = sessions_dir.parent / "_queue" if sessions_dir else None
-    app.config["jobs_dir"] = (
-        sessions_dir.parent / "_queue" / "jobs" if sessions_dir else Path("_queue/jobs")
-    )
+    app.config["queue_dir"] = sessions_path.parent / "_queue" if sessions_path else None
+    # Use provided jobs_dir or derive from sessions_path
+    if jobs_dir is not None:
+        app.config["jobs_dir"] = Path(jobs_dir) if isinstance(jobs_dir, str) else jobs_dir
+    else:
+        app.config["jobs_dir"] = (
+            sessions_path.parent / "_queue" / "jobs" if sessions_path else Path("_queue/jobs")
+        )
     app.config["MAX_CONTENT_LENGTH"] = max_upload_size
 
     @app.route("/")

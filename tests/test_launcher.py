@@ -80,3 +80,33 @@ class TestEnsureDefaultDirectories:
         assert raw_dir1 == raw_dir2
         assert sessions_dir1.exists()
         assert raw_dir1.exists()
+
+
+class TestLauncherAppCreation:
+    """Test that launcher can create app without crashes."""
+
+    def test_create_app_with_launcher_kwargs(self, tmp_path):
+        """create_app accepts jobs_dir parameter used by launcher."""
+        from yanhu.app import create_app
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+        raw_dir = tmp_path / "raw"
+        raw_dir.mkdir()
+        jobs_dir = tmp_path / "_queue" / "jobs"
+        jobs_dir.mkdir(parents=True)
+
+        # This is the exact call pattern from launcher.py
+        app = create_app(
+            sessions_dir=str(sessions_dir),
+            raw_dir=str(raw_dir),
+            jobs_dir=str(jobs_dir),
+            worker_enabled=True,
+            allow_any_path=False,
+            preset="fast",
+        )
+
+        assert app is not None
+        assert app.config["jobs_dir"] == jobs_dir
+        assert app.config["sessions_dir"] == sessions_dir
+        assert app.config["worker_enabled"] is True
