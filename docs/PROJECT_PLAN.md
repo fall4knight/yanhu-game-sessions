@@ -361,6 +361,127 @@ yanhu-game-sessions/
 
 ---
 
+### Milestone 9.0: Desktop App MVP (macOS/Windows)
+
+**Scope**: Minimal viable GUI to lower the terminal barrier. Wrap existing CLI/queue/watch/run-queue with PySide6/PyQt—NO pipeline rewrite. Focus on core workflow: select directories → start watcher → monitor queue → open sessions.
+
+**Definition of Done**: User can launch a standalone executable (macOS `.app` / Windows `.exe`), configure directories, start auto-run watcher, see queue status update, and open completed session highlights—all without touching terminal.
+
+**Checklist (MVP - 1-2 weeks)**:
+- [ ] **Directory Selection**
+  - [ ] UI for selecting raw-dir (support multiple directories via Add/Remove buttons)
+  - [ ] UI for selecting output-dir
+  - [ ] UI for selecting queue-dir
+  - [ ] Persist directory configuration in local config file (e.g., `~/.yanhu/gui_config.json`)
+- [ ] **Watcher Control**
+  - [ ] Start/Stop button with status indicator (running/stopped)
+  - [ ] Interval input field (seconds, default 10) for `--interval N` mode
+  - [ ] Auto-run toggle switch with **explicit warning**: "⚠️ Auto-run will consume API tokens"
+  - [ ] Auto-run limit input field (default 5 jobs per scan)
+  - [ ] Display current watcher state: interval, auto-run enabled/disabled, limit
+- [ ] **Queue Status Display**
+  - [ ] Read from `pending.jsonl` and `state.json` (poll every 5 seconds)
+  - [ ] Job table with columns: status, filename, game, timestamp
+  - [ ] Status filter buttons: All / Pending / Processing / Done / Failed
+  - [ ] Auto-refresh toggle (on/off)
+- [ ] **Session Browser**
+  - [ ] List completed sessions from output-dir (scan for `manifest.json` files)
+  - [ ] Display: session_id, game, duration, timestamp
+  - [ ] Buttons per session:
+    - [ ] "Open Overview" → system default app for `.md`
+    - [ ] "Open Timeline" → system default app
+    - [ ] "Open Highlights" → system default app
+    - [ ] "Reveal in Finder/Explorer" → open session folder
+- [ ] **API Key Management (Simple)**
+  - [ ] Input fields for Claude API Key and OpenAI API Key
+  - [ ] Store in local config file: `~/.yanhu/api_keys.json` (NOT in repo)
+  - [ ] "Clear Key" button for each API
+  - [ ] Status indicator: ✅ Configured / ❌ Not configured
+  - [ ] **Warning label**: "Keys are stored in your home directory, NOT in git"
+- [ ] **Error Handling**
+  - [ ] Recent errors panel (show last 10 errors from job outputs)
+  - [ ] Error type detection with user-friendly messages:
+    - [ ] JSON parse failure: "❌ Analysis failed - invalid JSON response"
+    - [ ] Raw file missing: "❌ Video file not found - may have been moved"
+    - [ ] Generic error: show first 100 chars of error message
+  - [ ] "Retry Job" button (requeue failed job to pending)
+- [ ] **Dry-Run Toggle**
+  - [ ] Checkbox/toggle for dry-run mode
+  - [ ] When enabled, watcher uses `--auto-run-dry-run` flag
+  - [ ] Label: "Preview jobs without running pipeline"
+- [ ] **Technology Stack (Python GUI)**
+  - [ ] Use PySide6 or PyQt6 for cross-platform GUI
+  - [ ] Direct import of existing `yanhu.watcher`, `yanhu.queue`, `yanhu.manifest` modules
+  - [ ] Subprocess calls to `yanhu.cli` commands (watch, run-queue)
+  - [ ] Multi-threading: watcher/queue in background thread, UI in main thread
+- [ ] **Packaging (Basic)**
+  - [ ] PyInstaller one-file or one-dir bundle
+  - [ ] macOS: portable `.app` bundle (no code signing for MVP)
+  - [ ] Windows: portable `.exe` (no installer for MVP)
+  - [ ] Include ffmpeg check on startup with install instructions if missing
+  - [ ] Version display in About dialog or title bar
+
+**Technology Decision (MVP)**:
+- **Committed to Option A: PySide6/PyQt + PyInstaller** for M9.0
+  - Fastest path to executable (1-2 weeks)
+  - Direct Python module reuse (no IPC complexity)
+  - Defer modern UI polish to M9.1
+
+**Security & Compliance (MVP)**:
+- **No video upload**: All processing local. UI shows "Local processing only" label.
+- **API keys**: Stored in `~/.yanhu/api_keys.json` (user home directory), NOT in repo.
+- **Git safety**: GUI config files (`~/.yanhu/`) are outside repo. Sessions output-dir defaults to outside repo. UI shows warning if user selects repo-internal path.
+- **Token cost transparency**:
+  - Auto-run toggle shows warning: "⚠️ Auto-run will consume API tokens. Use dry-run to preview."
+  - Dry-run toggle clearly labeled.
+- **User consent**: First-run: "Welcome! All video processing happens locally. API keys required only for cloud AI features."
+
+---
+
+### Milestone 9.1: Desktop App Polish (Post-MVP)
+
+**Scope**: Production-grade enhancements after M9.0 validation. Focus on security, UX polish, and advanced features.
+
+**Checklist (Future)**:
+- [ ] **Secure Credential Storage**
+  - [ ] macOS: Keychain Access integration
+  - [ ] Windows: Credential Manager integration
+  - [ ] Migrate from plaintext `api_keys.json` to OS-native secure storage
+- [ ] **Advanced Watcher Features**
+  - [ ] Add `--once` mode button (scan once and exit)
+  - [ ] Add watchdog mode (real-time file events, if library available)
+  - [ ] Real-time queue updates (file watcher on `pending.jsonl`)
+- [ ] **Cost Estimation**
+  - [ ] Pre-run cost estimator: "Estimated API cost: X frames × Y segments = $Z"
+  - [ ] Display cost breakdown by preset (fast vs quality)
+  - [ ] Historical cost tracking per session
+- [ ] **System Integration**
+  - [ ] Tray icon with Start/Stop watcher shortcuts
+  - [ ] Auto-start on login (optional, user-configurable)
+  - [ ] Desktop notifications for job completion/failure
+- [ ] **Packaging & Distribution**
+  - [ ] macOS: Code signing and notarization
+  - [ ] Windows: MSI installer with Add/Remove Programs support
+  - [ ] Auto-update mechanism (check for new releases)
+  - [ ] Bundle ffmpeg binary (optional, with license compliance)
+- [ ] **Configuration Management (Advanced)**
+  - [ ] Preset editor: customize fast/quality parameters
+  - [ ] "Reset to Defaults" button for all settings
+  - [ ] Import/Export config for team sharing
+  - [ ] Preset preview: show expected max-frames, model-size, etc.
+- [ ] **Error Handling (Enhanced)**
+  - [ ] Link to full error log file (open in editor)
+  - [ ] Error grouping by type (JSON errors, file not found, API errors)
+  - [ ] Bulk retry failed jobs
+- [ ] **UI Migration (Optional)**
+  - [ ] Migrate to **Option B: Tauri/Electron** for modern UI
+  - [ ] React/Vue/Svelte frontend with Python worker backend
+  - [ ] Reuse all business logic from M9.0 (only UI layer replaced)
+
+**Migration Path**: M9.0 validates user demand with minimal effort. M9.1 polishes UX and security. Option B (Tauri/Electron) migration is optional and only pursued if M9.0 sees adoption.
+
+---
+
 ## Polish Backlog (Stretch)
 
 ### OCR Variant Denoise for Highlights (Stretch)
@@ -424,6 +545,7 @@ yanhu-game-sessions/
 | 2026-01-23 | P3: Naming Strategy | Done | No hardcoded actor/game guessing; tag = stem__hash8 (避免同前缀混淆); --default-game CLI flag (默认unknown); QueueJob增raw_filename/raw_stem/suggested_tag; 18 P3 tests, 568 total |
 | 2026-01-23 | Presets (fast/quality) | Done | PRESETS dict (fast: 3frames/3facts/base/int8, quality: 6frames/5facts/small/float32); RunQueueConfig.resolve_config() 支持覆盖; job.outputs.run_config 记录实际参数; --preset CLI 选项; 15 preset tests, 583 total |
 | 2026-01-23 | Adaptive Segment Duration | Done | SEGMENT_STRATEGIES dict (short:5s, medium:15s, long:30s); get_video_duration() via ffprobe; determine_segment_duration() with auto strategy (≤3min→5s, ≤15min→15s, >15min→30s); --segment-strategy/--segment-duration CLI options; process_job() calls determine_segment_duration(); 28 segment tests, 611 total; RUNBOOK section 4d |
+| TBD | M9: Desktop App Wrapper | Not Started | Stretch (after v0.3 stability); M9.0 MVP: PySide6 GUI (1-2周, 核心流程); M9.1 Polish: Keychain/watchdog/cost estimator/installer; Option B (Tauri) 可选迁移 |
 
 ---
 
