@@ -91,6 +91,7 @@ class Manifest:
     segment_duration_seconds: int
     segments: list[SegmentInfo] = field(default_factory=list)
     source_metadata: SourceMetadata | None = None  # observability for source link/copy
+    transcribe_coverage: dict[str, int] | None = None  # {processed, total, skipped_limit}
 
     def to_dict(self) -> dict:
         result = {
@@ -103,6 +104,8 @@ class Manifest:
         }
         if self.source_metadata:
             result["source_metadata"] = self.source_metadata.to_dict()
+        if self.transcribe_coverage:
+            result["transcribe_coverage"] = self.transcribe_coverage
         return result
 
     @classmethod
@@ -118,6 +121,7 @@ class Manifest:
             segment_duration_seconds=data["segment_duration_seconds"],
             segments=[SegmentInfo.from_dict(s) for s in data.get("segments", [])],
             source_metadata=source_metadata,
+            transcribe_coverage=data.get("transcribe_coverage"),
         )
 
     def save(self, session_dir: Path) -> Path:

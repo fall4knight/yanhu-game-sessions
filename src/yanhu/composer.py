@@ -544,16 +544,36 @@ def compose_overview(manifest: Manifest) -> str:
         f"- **Segments**: {len(manifest.segments)}",
         f"- **Total Frames**: {total_frames}",
         f"- **Created**: {manifest.created_at}",
-        "",
-        "## Summary",
-        "",
-        "> TODO: AI-generated summary will appear here after Vision/ASR analysis.",
-        "",
-        "## Outcome",
-        "",
-        "> TODO: Session outcome (win/loss/progress) to be determined.",
-        "",
     ]
+
+    # Add transcription coverage info if partial
+    if manifest.transcribe_coverage:
+        cov = manifest.transcribe_coverage
+        lines.extend(
+            [
+                "",
+                "## Transcription Coverage",
+                "",
+                "⚠️ **PARTIAL SESSION**: Transcription was limited to reduce processing time.",
+                "",
+                f"- **Transcribed**: {cov['processed']}/{cov['total']} segments",
+                f"- **Skipped**: {cov['skipped_limit']} segments",
+            ]
+        )
+
+    lines.extend(
+        [
+            "",
+            "## Summary",
+            "",
+            "> TODO: AI-generated summary will appear here after Vision/ASR analysis.",
+            "",
+            "## Outcome",
+            "",
+            "> TODO: Session outcome (win/loss/progress) to be determined.",
+            "",
+        ]
+    )
 
     return "\n".join(lines)
 

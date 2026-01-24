@@ -1011,6 +1011,15 @@ def process_job(
             force=force,
         )
 
+        # Save transcribe coverage to manifest if limit was used
+        if transcribe_stats.skipped_limit > 0:
+            manifest.transcribe_coverage = {
+                "processed": transcribe_stats.processed,
+                "total": transcribe_stats.total,
+                "skipped_limit": transcribe_stats.skipped_limit,
+            }
+            manifest.save(session_dir)
+
         # Step 6: Compose
         write_timeline(manifest, session_dir)
         write_overview(manifest, session_dir)

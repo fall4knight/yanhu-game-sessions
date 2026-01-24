@@ -545,6 +545,7 @@ yanhu-game-sessions/
 | 2026-01-23 | P3: Naming Strategy | Done | No hardcoded actor/game guessing; tag = stem__hash8 (避免同前缀混淆); --default-game CLI flag (默认unknown); QueueJob增raw_filename/raw_stem/suggested_tag; 18 P3 tests, 568 total |
 | 2026-01-23 | Presets (fast/quality) | Done | PRESETS dict (fast: 3frames/3facts/base/int8, quality: 6frames/5facts/small/float32); RunQueueConfig.resolve_config() 支持覆盖; job.outputs.run_config 记录实际参数; --preset CLI 选项; 15 preset tests, 583 total |
 | 2026-01-23 | Adaptive Segment Duration | Done | SEGMENT_STRATEGIES dict (short:5s, medium:15s, long:30s); get_video_duration() via ffprobe; determine_segment_duration() with auto strategy (≤3min→5s, ≤15min→15s, >15min→30s); --segment-strategy/--segment-duration CLI options; process_job() calls determine_segment_duration(); 28 segment tests, 611 total; RUNBOOK section 4d |
+| 2026-01-23 | Transcribe Limits (Partial-by-Limit) | Done | --transcribe-limit N / --transcribe-max-seconds S flags; transcribe first N segments (not skip all); manifest.transcribe_coverage stores {processed, total, skipped_limit}; overview.md shows "⚠️ PARTIAL SESSION" marker with coverage stats; compose succeeds with missing transcripts; 5 tests, 643 total |
 | TBD | M9: Desktop App Wrapper | Not Started | Stretch (after v0.3 stability); M9.0 MVP: PySide6 GUI (1-2周, 核心流程); M9.1 Polish: Keychain/watchdog/cost estimator/installer; Option B (Tauri) 可选迁移 |
 
 ---
