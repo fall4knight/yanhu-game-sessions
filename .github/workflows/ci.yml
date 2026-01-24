@@ -26,3 +26,6 @@ jobs:
 
       - name: Run tests
         run: pytest -q
+
+      - name: Verify desktop UX contracts
+        run: yanhu verify --desktop-ux

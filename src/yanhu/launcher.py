@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import inspect
 import logging
-import shutil
 import sys
 import threading
 import time
@@ -49,8 +48,10 @@ def check_ffmpeg_availability() -> tuple[bool, str | None]:
         Tuple of (is_available, error_message).
         If available, error_message is None.
     """
-    ffmpeg_ok = shutil.which("ffmpeg") is not None
-    ffprobe_ok = shutil.which("ffprobe") is not None
+    from yanhu.ffmpeg_utils import find_ffmpeg, find_ffprobe
+
+    ffmpeg_ok = find_ffmpeg() is not None
+    ffprobe_ok = find_ffprobe() is not None
 
     if not ffmpeg_ok and not ffprobe_ok:
         return False, "ffmpeg and ffprobe not found"

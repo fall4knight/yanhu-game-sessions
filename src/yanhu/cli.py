@@ -1207,5 +1207,55 @@ def app(
         click.echo("\nStopped.")
 
 
+@main.command()
+@click.option(
+    "--desktop-ux",
+    is_flag=True,
+    help="Run desktop UX smoke gate (ffprobe discovery, quit server, launcher compatibility)",
+)
+def verify(desktop_ux: bool):
+    """Verify system contracts and output quality.
+
+    Runs deterministic checks to ensure critical contracts are met:
+
+    --desktop-ux: Desktop UX smoke gate
+      - ffprobe discovery robustness (PATH + fallback paths)
+      - Quit Server endpoint with os._exit fallback
+      - Launcher compatibility (create_app/run_app kwargs)
+
+    This gate is designed to catch regressions before release.
+
+    Examples:
+
+      # Run desktop UX gate (recommended for release smoke test)
+      yanhu verify --desktop-ux
+    """
+    if desktop_ux:
+        from yanhu.verify import verify_desktop_ux
+
+        click.echo("Running Desktop UX Smoke Gate...")
+        click.echo("")
+
+        valid, error = verify_desktop_ux()
+
+        if valid:
+            click.echo("✓ Desktop UX verification passed")
+            click.echo("")
+            click.echo("All checks:")
+            click.echo("  ✓ ffprobe discovery (shutil.which + fallback paths)")
+            click.echo("  ✓ Quit Server hard-stop (os._exit fallback)")
+            click.echo("  ✓ Launcher compatibility (create_app/run_app kwargs)")
+        else:
+            click.echo("✗ Desktop UX verification FAILED")
+            click.echo("")
+            click.echo("Errors:")
+            for line in error.split("\n"):
+                click.echo(f"  - {line}")
+            raise click.ClickException("Desktop UX smoke gate failed")
+    else:
+        click.echo("No verification checks specified.")
+        click.echo("Use --desktop-ux to run desktop UX smoke gate.")
+
+
 if __name__ == "__main__":
     main()

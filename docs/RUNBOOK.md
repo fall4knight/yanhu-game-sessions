@@ -461,6 +461,35 @@ FAIL: model is "mock" but expected "claude-*"
 
 ---
 
+## Release Smoke Test (Desktop UX Gate)
+
+Before releasing a new version, run the Desktop UX smoke gate to catch regressions in critical non-programmer features:
+
+```bash
+# Run desktop UX verification gate
+yanhu verify --desktop-ux
+```
+
+**What it checks:**
+- ✓ **ffprobe discovery**: Ensures `find_ffprobe()` uses `shutil.which` + fallback paths (`/opt/homebrew/bin`, `/usr/local/bin`) for packaged apps without shell PATH
+- ✓ **Quit Server hard-stop**: Ensures `/api/shutdown` endpoint exists with `os._exit(0)` fallback for reliable process termination
+- ✓ **Launcher compatibility**: Ensures `create_app()` accepts `jobs_dir` and str paths, `run_app()` accepts `debug` kwarg
+
+**Release checklist:**
+1. Run `yanhu verify --desktop-ux` (must pass)
+2. Run full test suite: `pytest -q` (must pass)
+3. Manual smoke tests:
+   - Launch desktop app (`yanhu-desktop`)
+   - Check ffmpeg warning if not installed
+   - Upload a short video (5-10s)
+   - Watch processing progress
+   - Click "Quit Server" button (server should terminate)
+
+**CI enforcement:**
+The desktop UX gate runs automatically in GitHub Actions CI. Any regression will fail CI before release.
+
+---
+
 ## 参数参考
 
 ### 成本控制参数（analyze）

@@ -1443,6 +1443,8 @@ def probe_media(video_path: Path) -> MediaInfo:
     """
     import subprocess
 
+    from yanhu.ffmpeg_utils import find_ffprobe
+
     info = MediaInfo()
 
     # Always get file size (no ffprobe needed)
@@ -1451,11 +1453,17 @@ def probe_media(video_path: Path) -> MediaInfo:
     except OSError:
         pass
 
+    # Find ffprobe (with fallback paths for packaged apps)
+    ffprobe_path = find_ffprobe()
+    if not ffprobe_path:
+        # Graceful degradation: return file size only
+        return info
+
     # Try ffprobe for detailed metadata
     try:
         result = subprocess.run(
             [
-                "ffprobe",
+                ffprobe_path,
                 "-v",
                 "quiet",
                 "-print_format",

@@ -17,18 +17,25 @@ class TestCheckFfmpegAvailability:
 
     def test_both_missing(self, monkeypatch):
         """Both ffmpeg and ffprobe missing."""
+        from pathlib import Path
+
         monkeypatch.setattr(shutil, "which", lambda x: None)
+        # Mock Path.exists to prevent fallback paths from being found
+        monkeypatch.setattr(Path, "exists", lambda self: False)
         is_available, error = check_ffmpeg_availability()
         assert not is_available
         assert "ffmpeg and ffprobe not found" in error
 
     def test_ffmpeg_missing(self, monkeypatch):
         """Only ffmpeg missing."""
+        from pathlib import Path
 
         def mock_which(cmd):
             return "/usr/bin/ffprobe" if cmd == "ffprobe" else None
 
         monkeypatch.setattr(shutil, "which", mock_which)
+        # Mock Path.exists to prevent fallback paths from being found
+        monkeypatch.setattr(Path, "exists", lambda self: False)
         is_available, error = check_ffmpeg_availability()
         assert not is_available
         assert "ffmpeg not found" in error
@@ -36,11 +43,14 @@ class TestCheckFfmpegAvailability:
 
     def test_ffprobe_missing(self, monkeypatch):
         """Only ffprobe missing."""
+        from pathlib import Path
 
         def mock_which(cmd):
             return "/usr/bin/ffmpeg" if cmd == "ffmpeg" else None
 
         monkeypatch.setattr(shutil, "which", mock_which)
+        # Mock Path.exists to prevent fallback paths from being found
+        monkeypatch.setattr(Path, "exists", lambda self: False)
         is_available, error = check_ffmpeg_availability()
         assert not is_available
         assert "ffprobe not found" in error

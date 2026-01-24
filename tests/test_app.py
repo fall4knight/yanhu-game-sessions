@@ -1869,3 +1869,256 @@ class TestCalibratedEta:
         assert job.estimated_segments == 18
         # With metrics: 10 + 18 / 0.4 = 55 seconds (not heuristic 64)
         assert job.estimated_runtime_sec == 55
+
+
+class TestFfprobeValidation:
+    """Test ffprobe validation in job submission."""
+
+    def test_submit_job_rejected_without_ffprobe(self, tmp_path):
+        """Test POST /api/jobs returns 400 when ffprobe not found."""
+        from yanhu.app import create_app
+
+        sessions_dir = tmp_path / "sessions"
+        raw_dir = tmp_path / "raw"
+        sessions_dir.mkdir()
+        raw_dir.mkdir()
+
+        # Create test video
+        test_video = raw_dir / "test.mp4"
+        test_video.write_text("fake video")
+
+        app = create_app(
+            sessions_dir=str(sessions_dir),
+            raw_dir=str(raw_dir),
+            worker_enabled=True,
+        )
+
+        # Force ffprobe_path to None (simulate not found)
+        app.config["ffprobe_path"] = None
+
+        client = app.test_client()
+
+        response = client.post(
+            "/api/jobs",
+            data={
+                "raw_path": str(test_video),
+                "game": "test",
+            },
+        )
+
+        assert response.status_code == 400
+        data = response.get_json()
+        assert "ffprobe not found" in data["error"]
+
+    def test_upload_rejected_without_ffprobe(self, tmp_path):
+        """Test POST /api/uploads returns 400 when ffprobe not found."""
+        from io import BytesIO
+
+        from yanhu.app import create_app
+
+        sessions_dir = tmp_path / "sessions"
+        raw_dir = tmp_path / "raw"
+        sessions_dir.mkdir()
+        raw_dir.mkdir()
+
+        app = create_app(
+            sessions_dir=str(sessions_dir),
+            raw_dir=str(raw_dir),
+            worker_enabled=True,
+        )
+
+        # Force ffprobe_path to None (simulate not found)
+        app.config["ffprobe_path"] = None
+
+        client = app.test_client()
+
+        response = client.post(
+            "/api/uploads",
+            data={
+                "file": (BytesIO(b"fake video data"), "test.mp4"),
+                "game": "test",
+            },
+            content_type="multipart/form-data",
+        )
+
+        assert response.status_code == 400
+        data = response.get_json()
+        assert "ffprobe not found" in data["error"]
+
+
+class TestShutdownEndpoint:
+    """Test server shutdown endpoint."""
+
+    def test_shutdown_requires_token(self, tmp_path):
+        """Test POST /api/shutdown requires valid token."""
+        from yanhu.app import create_app
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+
+        app = create_app(sessions_dir=str(sessions_dir))
+        client = app.test_client()
+
+        # Try without token
+        response = client.post("/api/shutdown", data={})
+        assert response.status_code == 403
+        data = response.get_json()
+        assert "Invalid shutdown token" in data["error"]
+
+        # Try with wrong token
+        response = client.post("/api/shutdown", data={"token": "wrong"})
+        assert response.status_code == 403
+        data = response.get_json()
+        assert "Invalid shutdown token" in data["error"]
+
+    def test_shutdown_with_valid_token(self, tmp_path, monkeypatch):
+        """Test POST /api/shutdown succeeds with valid token and schedules termination."""
+        import os
+        from threading import Timer
+
+        from yanhu.app import create_app
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+
+        app = create_app(sessions_dir=str(sessions_dir))
+        client = app.test_client()
+
+        # Get the shutdown token from config
+        token = app.config["shutdown_token"]
+
+        # Mock os._exit to prevent actual shutdown
+        exit_called = []
+
+        def mock_os_exit(code):
+            exit_called.append(code)
+
+        monkeypatch.setattr(os, "_exit", mock_os_exit)
+
+        # Track Timer creation to verify shutdown is scheduled
+        timers_started = []
+
+        def mock_timer_start(self):
+            timers_started.append((self.interval, self.function))
+            # Don't actually start the timer to avoid calling os._exit during test
+
+        monkeypatch.setattr(Timer, "start", mock_timer_start)
+
+        # Submit with valid token
+        response = client.post("/api/shutdown", data={"token": token})
+
+        # Should succeed with ok: true
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data.get("ok") is True
+
+        # Should have scheduled a timer with ~0.3s delay
+        assert len(timers_started) == 1
+        interval, func = timers_started[0]
+        assert interval == 0.3  # 300ms delay
+
+        # Verify the termination function would call os._exit
+        # (We don't actually call it to avoid exiting the test process)
+        # The function is a lambda/closure, we just verify it was scheduled
+
+    def test_shutdown_rejects_non_local_requests(self, tmp_path):
+        """Test shutdown endpoint rejects non-localhost requests (best-effort)."""
+        from yanhu.app import create_app
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+
+        app = create_app(sessions_dir=str(sessions_dir))
+        client = app.test_client()
+
+        token = app.config["shutdown_token"]
+
+        # Simulate remote request by setting REMOTE_ADDR
+        response = client.post(
+            "/api/shutdown",
+            data={"token": token},
+            environ_base={"REMOTE_ADDR": "192.168.1.100"},
+        )
+
+        assert response.status_code == 403
+        data = response.get_json()
+        assert "localhost" in data["error"].lower()
+
+
+class TestQuitButtonRendering:
+    """Test Quit Server button renders cleanly."""
+
+    def test_quit_button_renders_without_noqa_comments(self, tmp_path):
+        """Test quit button label is clean without noqa comments in HTML."""
+        from yanhu.app import create_app
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+
+        app = create_app(sessions_dir=str(sessions_dir))
+        client = app.test_client()
+
+        # Get the home page
+        response = client.get("/")
+        html = response.get_data(as_text=True)
+
+        # Should contain clean "Quit Server" button
+        assert "Quit Server" in html
+        # Should NOT contain noqa comments in rendered HTML
+        assert "noqa" not in html
+        assert "E501" not in html
+        # Should have the quit button element
+        assert 'id="quitButton"' in html
+        assert 'onclick="quitServer()"' in html
+
+    def test_shutdown_termination_calls_os_exit(self, tmp_path, monkeypatch):
+        """Test termination function calls os._exit(0) as final fallback."""
+        import os
+        from threading import Timer
+
+        from yanhu.app import create_app
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+
+        app = create_app(sessions_dir=str(sessions_dir))
+        client = app.test_client()
+
+        token = app.config["shutdown_token"]
+
+        # Mock os._exit to prevent actual shutdown
+        exit_called = []
+
+        def mock_os_exit(code):
+            exit_called.append(code)
+
+        monkeypatch.setattr(os, "_exit", mock_os_exit)
+
+        # Capture the termination function
+        captured_func = []
+        original_timer_init = Timer.__init__
+
+        def mock_timer_init(self, *args, **kwargs):
+            original_timer_init(self, *args, **kwargs)
+            if len(args) >= 2:
+                captured_func.append(args[1])  # The function argument
+
+        monkeypatch.setattr(Timer, "__init__", mock_timer_init)
+
+        # Don't actually start the timer
+        monkeypatch.setattr(Timer, "start", lambda self: None)
+
+        # Submit with valid token
+        response = client.post("/api/shutdown", data={"token": token})
+        assert response.status_code == 200
+
+        # Should have captured the termination function
+        assert len(captured_func) == 1
+        terminate_func = captured_func[0]
+
+        # Call the termination function directly
+        terminate_func()
+
+        # Should have called os._exit(0)
+        assert exit_called == [0]
+

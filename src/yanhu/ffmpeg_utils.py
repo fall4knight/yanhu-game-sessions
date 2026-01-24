@@ -17,6 +17,66 @@ class FFmpegError(Exception):
     pass
 
 
+def find_ffprobe() -> str | None:
+    """Find ffprobe executable, checking common paths for packaged apps.
+
+    Tries in order:
+    1. shutil.which("ffprobe") - relies on PATH
+    2. Common absolute paths (macOS Homebrew, standard Unix paths)
+
+    Returns:
+        Absolute path to ffprobe, or None if not found
+    """
+    # Try PATH first
+    ffprobe_path = shutil.which("ffprobe")
+    if ffprobe_path:
+        return ffprobe_path
+
+    # Try common absolute paths (for packaged apps without shell PATH)
+    common_paths = [
+        "/opt/homebrew/bin/ffprobe",  # macOS Apple Silicon Homebrew
+        "/usr/local/bin/ffprobe",  # macOS Intel Homebrew / standard Unix
+        "/usr/bin/ffprobe",  # System install
+    ]
+
+    for path_str in common_paths:
+        path = Path(path_str)
+        if path.exists() and path.is_file():
+            return str(path)
+
+    return None
+
+
+def find_ffmpeg() -> str | None:
+    """Find ffmpeg executable, checking common paths for packaged apps.
+
+    Tries in order:
+    1. shutil.which("ffmpeg") - relies on PATH
+    2. Common absolute paths (macOS Homebrew, standard Unix paths)
+
+    Returns:
+        Absolute path to ffmpeg, or None if not found
+    """
+    # Try PATH first
+    ffmpeg_path = shutil.which("ffmpeg")
+    if ffmpeg_path:
+        return ffmpeg_path
+
+    # Try common absolute paths (for packaged apps without shell PATH)
+    common_paths = [
+        "/opt/homebrew/bin/ffmpeg",  # macOS Apple Silicon Homebrew
+        "/usr/local/bin/ffmpeg",  # macOS Intel Homebrew / standard Unix
+        "/usr/bin/ffmpeg",  # System install
+    ]
+
+    for path_str in common_paths:
+        path = Path(path_str)
+        if path.exists() and path.is_file():
+            return str(path)
+
+    return None
+
+
 def check_ffmpeg_available() -> str:
     """Check if ffmpeg is available and return its path.
 
@@ -26,7 +86,7 @@ def check_ffmpeg_available() -> str:
     Raises:
         FFmpegNotFoundError: If ffmpeg is not found
     """
-    ffmpeg_path = shutil.which("ffmpeg")
+    ffmpeg_path = find_ffmpeg()
     if ffmpeg_path is None:
         raise FFmpegNotFoundError(
             "ffmpeg not found. Please install ffmpeg:\n"
@@ -49,7 +109,7 @@ def get_video_duration(video_path: Path) -> float:
     Raises:
         FFmpegError: If ffprobe fails
     """
-    ffprobe_path = shutil.which("ffprobe")
+    ffprobe_path = find_ffprobe()
     if ffprobe_path is None:
         raise FFmpegNotFoundError("ffprobe not found (usually installed with ffmpeg)")
 

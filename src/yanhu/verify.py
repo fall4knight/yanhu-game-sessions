@@ -5,6 +5,7 @@ Validates that all required outputs exist and meet quality/consistency constrain
 
 from __future__ import annotations
 
+import inspect
 import json
 from datetime import datetime
 from pathlib import Path
@@ -234,5 +235,111 @@ def validate_outputs(session_dir: Path) -> tuple[bool, str]:
     valid, error_msg = validate_partial_consistency(session_dir)
     if not valid:
         return False, error_msg
+
+    return True, ""
+
+
+def verify_desktop_ux() -> tuple[bool, str]:
+    """Verify desktop UX critical contracts for non-programmer users.
+
+    Checks:
+    A. ffprobe discovery robustness (shutil.which + fallback paths)
+    B. Quit Server hard-stop (os._exit fallback)
+    C. Packaged launcher compatibility (kwargs acceptance)
+
+    Returns:
+        Tuple of (success, error_message). error_message is empty if success.
+    """
+    errors = []
+
+    # A. Check ffprobe discovery
+    try:
+        from yanhu.ffmpeg_utils import find_ffprobe
+
+        # Verify function exists and is callable
+        if not callable(find_ffprobe):
+            errors.append("ffprobe discovery: find_ffprobe() is not callable")
+        else:
+            # Verify find_ffprobe uses shutil.which (check source code)
+            source = inspect.getsource(find_ffprobe)
+            if "shutil.which" not in source:
+                errors.append(
+                    "ffprobe discovery: find_ffprobe() does not use shutil.which fallback"
+                )
+            if "/opt/homebrew/bin" not in source and "/usr/local/bin" not in source:
+                errors.append(
+                    "ffprobe discovery: find_ffprobe() missing common fallback paths "
+                    "(/opt/homebrew/bin, /usr/local/bin)"
+                )
+    except ImportError as e:
+        errors.append(f"ffprobe discovery: failed to import find_ffprobe - {e}")
+    except Exception as e:
+        errors.append(f"ffprobe discovery: unexpected error - {e}")
+
+    # B. Check Quit Server endpoint with os._exit fallback
+    try:
+        from yanhu import app as app_module
+
+        # Check that shutdown endpoint exists
+        if not hasattr(app_module, "create_app"):
+            errors.append("Quit Server: create_app() not found in yanhu.app")
+        else:
+            # Verify shutdown endpoint implementation has os._exit
+            app_source = inspect.getsource(app_module)
+            if "/api/shutdown" not in app_source:
+                errors.append("Quit Server: /api/shutdown endpoint not found in app.py")
+            if "os._exit" not in app_source:
+                errors.append("Quit Server: os._exit(0) fallback not found in shutdown logic")
+            if "shutdown_token" not in app_source:
+                errors.append("Quit Server: shutdown_token security not found")
+            if "127.0.0.1" not in app_source and "localhost" not in app_source:
+                errors.append("Quit Server: localhost-only restriction not found")
+    except ImportError as e:
+        errors.append(f"Quit Server: failed to import yanhu.app - {e}")
+    except Exception as e:
+        errors.append(f"Quit Server: unexpected error - {e}")
+
+    # C. Check launcher compatibility contract
+    try:
+        from yanhu.app import create_app, run_app
+
+        # Verify create_app accepts jobs_dir kwarg
+        create_app_sig = inspect.signature(create_app)
+        if "jobs_dir" not in create_app_sig.parameters:
+            errors.append(
+                "Launcher compatibility: create_app() missing jobs_dir parameter "
+                "(required for packaged launcher)"
+            )
+
+        # Verify create_app accepts str paths (not just Path objects)
+        # Check parameter annotations
+        sessions_dir_param = create_app_sig.parameters.get("sessions_dir")
+        if sessions_dir_param:
+            # Verify annotation accepts str
+            annotation = sessions_dir_param.annotation
+            if annotation != inspect.Parameter.empty:
+                # Convert annotation to string for checking
+                annotation_str = str(annotation)
+                if "str" not in annotation_str and annotation is not str:
+                    errors.append(
+                        "Launcher compatibility: create_app() sessions_dir "
+                        "should accept str paths"
+                    )
+
+        # Verify run_app accepts debug kwarg (backward compatibility)
+        run_app_sig = inspect.signature(run_app)
+        if "debug" not in run_app_sig.parameters:
+            errors.append(
+                "Launcher compatibility: run_app() missing debug parameter "
+                "(backward compatibility requirement)"
+            )
+
+    except ImportError as e:
+        errors.append(f"Launcher compatibility: failed to import create_app/run_app - {e}")
+    except Exception as e:
+        errors.append(f"Launcher compatibility: unexpected error - {e}")
+
+    if errors:
+        return False, "\n".join(errors)
 
     return True, ""

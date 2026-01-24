@@ -22,7 +22,7 @@ Before running any claude backend verification:
 
 2. Check API key is set in .env:
 ```bash
-bash -lc 'set -a; [ -f .env ] && source .env; set +a; echo "ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:+SET}"'
+python3 -c "from dotenv import dotenv_values; env = dotenv_values('.env'); print(f\"ANTHROPIC_API_KEY={'SET' if env.get('ANTHROPIC_API_KEY') else 'NOT_SET'}\")"
 ```
 
 If .env is MISSING, immediately **FAIL** and print:
@@ -80,9 +80,9 @@ A) Source video observability (P2.1):
   - Actual file type doesn't match source_mode
 
 B) L1 Claude Vision analysis correctness:
-- Run:
+- Run (using helper to load .env without shell noise):
   ```bash
-  bash -lc 'set -a; source .env; set +a; source .venv/bin/activate && yanhu analyze --session <sid> --backend claude --segments <seg> --detail-level L1 --max-facts 3 --max-frames 3 --force'
+  .claude/skills/yanhu-verify/run_with_env.py yanhu analyze --session <sid> --backend claude --segments <seg> --detail-level L1 --max-facts 3 --max-frames 3 --force
   ```
 - Assert in analysis/<seg>.json:
   - model starts with "claude-"
@@ -92,7 +92,7 @@ B) L1 Claude Vision analysis correctness:
   - what_changed is non-empty and not "mock"
 - Then run:
   ```bash
-  bash -lc 'set -a; source .env; set +a; source .venv/bin/activate && yanhu compose --session <sid>'
+  .claude/skills/yanhu-verify/run_with_env.py yanhu compose --session <sid>
   ```
 - Assert timeline contains facts[0] and includes "- change:" line for that segment.
 

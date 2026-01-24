@@ -272,8 +272,14 @@ BASE_TEMPLATE = """
         <h1>Yanhu Sessions</h1>
         <div class="nav">
             <a href="/">← All Sessions</a>
-            <span style="float: right; color: #7f8c8d; font-size: 0.9em;">
-                🔒 Local processing only
+            <span style="float: right;">
+                <span style="color: #7f8c8d; font-size: 0.9em; margin-right: 15px;">
+                    🔒 Local processing only
+                </span>
+                <button id="quitButton" onclick="quitServer()"
+                        style="background: #e74c3c; color: white; border: none; padding: 5px 15px; border-radius: 4px; cursor: pointer; font-size: 0.9em;">
+                    Quit Server
+                </button>
             </span>
         </div>
     </header>
@@ -293,6 +299,36 @@ BASE_TEMPLATE = """
     <div class="content">
         {% block content %}{% endblock %}
     </div>
+    <script>
+        const SHUTDOWN_TOKEN = "{{ shutdown_token }}";
+
+        function quitServer() {
+            if (!confirm("Quit the Yanhu server? The web page will become inaccessible.")) {
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append("token", SHUTDOWN_TOKEN);
+
+            fetch("/api/shutdown", {
+                method: "POST",
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.ok) {
+                    alert("Server stopped. You can close this tab.");
+                    // Disable the button
+                    document.getElementById("quitButton").disabled = true;
+                    document.getElementById("quitButton").textContent = "Server Stopped";
+                }
+            })
+            .catch(error => {
+                // Expected: connection error after shutdown
+                alert("Server stopped. You can close this tab.");
+            });
+        }
+    </script>
     {% block scripts %}{% endblock %}
 </body>
 </html>
@@ -304,9 +340,14 @@ SESSION_LIST_TEMPLATE = BASE_TEMPLATE.replace(
     {% if worker_enabled %}
     <div class="upload-area" id="upload-area">
         <h3>Upload Video</h3>
+        {% if not ffprobe_available %}
+        <div style="background: #fff3cd; border: 1px solid #ffc107; padding: 10px; margin-bottom: 15px; border-radius: 4px; color: #856404;">
+            <strong>⚠️ Upload disabled:</strong> ffprobe not found. Please install ffmpeg to enable video processing.
+        </div>
+        {% endif %}
         <form method="POST" action="/api/uploads" enctype="multipart/form-data" id="upload-form">
             <div class="file-input-wrapper">
-                <input type="file" id="file" name="file" accept=".mp4,.mov,.mkv,.webm" required>
+                <input type="file" id="file" name="file" accept=".mp4,.mov,.mkv,.webm" required {{ "disabled" if not ffprobe_available else "" }}>
                 <small>Drag & drop or click to select (.mp4, .mov, .mkv, .webm, max 5GB)</small>
             </div>
             <div class="form-group">
@@ -352,12 +393,17 @@ SESSION_LIST_TEMPLATE = BASE_TEMPLATE.replace(
                 </select>
                 <small>CPU mode uses int8 quantization, GPU uses float16</small>
             </div>
-            <button type="submit" class="btn">Upload & Start Job</button>
+            <button type="submit" class="btn" {{ "disabled" if not ffprobe_available else "" }}>Upload & Start Job</button>
         </form>
     </div>
 
     <div class="job-form">
         <h3>New Job (Existing File)</h3>
+        {% if not ffprobe_available %}
+        <div style="background: #fff3cd; border: 1px solid #ffc107; padding: 10px; margin-bottom: 15px; border-radius: 4px; color: #856404;">
+            <strong>⚠️ Job submission disabled:</strong> ffprobe not found. Please install ffmpeg to enable video processing.
+        </div>
+        {% endif %}
         <form method="POST" action="/api/jobs">
             <div class="form-group">
                 <label for="raw_path">Video Path</label>
@@ -405,7 +451,7 @@ SESSION_LIST_TEMPLATE = BASE_TEMPLATE.replace(
                 </select>
                 <small>CPU mode uses int8 quantization, GPU uses float16</small>
             </div>
-            <button type="submit" class="btn">Submit Job</button>
+            <button type="submit" class="btn" {{ "disabled" if not ffprobe_available else "" }}>Submit Job</button>
         </form>
     </div>
     {% endif %}
@@ -1160,6 +1206,21 @@ def create_app(
         )
     app.config["MAX_CONTENT_LENGTH"] = max_upload_size
 
+    # Discover ffprobe path (with fallback for packaged apps)
+    from yanhu.ffmpeg_utils import find_ffprobe
+
+    ffprobe_path = find_ffprobe()
+    app.config["ffprobe_path"] = ffprobe_path
+    if not ffprobe_path:
+        app.config["ffprobe_error"] = (
+            "ffprobe not found. Please install ffmpeg to enable video processing."
+        )
+
+    # Generate per-launch shutdown token for security
+    import secrets
+
+    app.config["shutdown_token"] = secrets.token_urlsafe(32)
+
     @app.route("/")
     def index():
         """List all sessions and jobs, newest first."""
@@ -1229,6 +1290,8 @@ def create_app(
             raw_dir=str(app.config["raw_dir"]) if app.config["raw_dir"] else None,
             title="Sessions",
             ffmpeg_warning=app.config.get("ffmpeg_error"),
+            ffprobe_available=app.config.get("ffprobe_path") is not None,
+            shutdown_token=app.config.get("shutdown_token", ""),
             available_asr_models=list_asr_models(),
         )
 
@@ -1500,6 +1563,14 @@ def create_app(
         if not app.config["worker_enabled"]:
             return jsonify({"error": "Worker not enabled"}), 400
 
+        # Check ffprobe availability
+        if not app.config.get("ffprobe_path"):
+            return jsonify(
+                {
+                    "error": "ffprobe not found. Please install ffmpeg to enable video processing."
+                }
+            ), 400
+
         # Get form data
         raw_path_str = request.form.get("raw_path", "").strip()
         game = request.form.get("game", "").strip() or None
@@ -1710,6 +1781,14 @@ def create_app(
         if not app.config["raw_dir"]:
             return jsonify({"error": "Raw directory not configured"}), 400
 
+        # Check ffprobe availability
+        if not app.config.get("ffprobe_path"):
+            return jsonify(
+                {
+                    "error": "ffprobe not found. Please install ffmpeg to enable video processing."
+                }
+            ), 400
+
         # Check if file was uploaded
         if "file" not in request.files:
             return jsonify({"error": "No file provided"}), 400
@@ -1856,6 +1935,55 @@ def create_app(
 
         # Redirect to job detail page
         return redirect(f"/jobs/{job.job_id}")
+
+    @app.route("/api/shutdown", methods=["POST"])
+    def shutdown_server():
+        """Shutdown the server (local requests only, requires token).
+
+        Reliably terminates the process and releases the port by:
+        1. Returning 200 OK immediately
+        2. Attempting werkzeug shutdown if available
+        3. Using os._exit(0) as final fallback after 300ms delay
+
+        This works in both dev server and packaged PyInstaller environments.
+        """
+        # Check if request is from localhost (best-effort)
+        remote_addr = request.remote_addr
+        if remote_addr not in ("127.0.0.1", "localhost", "::1"):
+            return jsonify({"error": "Shutdown only allowed from localhost"}), 403
+
+        # Verify shutdown token
+        provided_token = request.form.get("token", "")
+        expected_token = app.config.get("shutdown_token", "")
+
+        if not expected_token or provided_token != expected_token:
+            return jsonify({"error": "Invalid shutdown token"}), 403
+
+        # Schedule robust shutdown
+        import os
+        from threading import Timer
+
+        # Capture werkzeug shutdown function from request context
+        # (must be done here, inside the request context)
+        werkzeug_shutdown = request.environ.get("werkzeug.server.shutdown")
+
+        def terminate():
+            """Terminate the process reliably."""
+            # Try werkzeug shutdown first (dev server)
+            if werkzeug_shutdown is not None:
+                try:
+                    werkzeug_shutdown()
+                except Exception:
+                    pass
+
+            # Final fallback: force exit
+            # os._exit(0) bypasses cleanup and threads, terminates immediately
+            os._exit(0)
+
+        # Schedule termination after 300ms to allow response to be sent
+        Timer(0.3, terminate).start()
+
+        return jsonify({"ok": True}), 200
 
     @app.errorhandler(413)
     def request_entity_too_large(error):
