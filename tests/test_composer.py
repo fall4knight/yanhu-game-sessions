@@ -1887,11 +1887,11 @@ class TestUiDeduplication:
         analysis_dir = tmp_path / "analysis"
         analysis_dir.mkdir()
 
-        # Both have no UI
+        # Both have no UI - use distinct descriptions to avoid deduplication
         first = AnalysisResult(
             segment_id="part_0001",
             scene_type="combat",
-            facts=["战斗场景1"],
+            facts=["激烈的枪战场面"],
             scene_label="Combat",
         )
         first.save(analysis_dir / "part_0001.json")
@@ -1899,7 +1899,7 @@ class TestUiDeduplication:
         second = AnalysisResult(
             segment_id="part_0002",
             scene_type="combat",
-            facts=["战斗场景2"],
+            facts=["近身格斗动作"],
             scene_label="Combat",
         )
         second.save(analysis_dir / "part_0002.json")
@@ -2066,10 +2066,11 @@ class TestAdjacentSegmentMerging:
         analysis_dir.mkdir()
 
         # No dialogue content (no ui_key_text, no ocr_text)
+        # Use distinct descriptions to avoid Tier C deduplication
         first = AnalysisResult(
             segment_id="part_0001",
             scene_type="combat",
-            facts=["战斗场景1"],
+            facts=["激烈的枪战场面"],
             scene_label="Combat",
         )
         first.save(analysis_dir / "part_0001.json")
@@ -2077,7 +2078,7 @@ class TestAdjacentSegmentMerging:
         second = AnalysisResult(
             segment_id="part_0002",
             scene_type="combat",
-            facts=["战斗场景2"],
+            facts=["夜景行车画面"],
             scene_label="Combat",
         )
         second.save(analysis_dir / "part_0002.json")
@@ -2110,9 +2111,11 @@ class TestAdjacentSegmentMerging:
 
         # Should not be merged - no dialogue content
         assert "+" not in result
-        # Should have 2 highlight lines
+        # Should have 2 highlight lines (distinct descriptions, not deduplicated)
         highlight_lines = [line for line in result.split("\n") if line.startswith("- [")]
         assert len(highlight_lines) == 2
+        assert "激烈的枪战场面" in result
+        assert "夜景行车画面" in result
 
 
 class TestNoLowScoreFill:

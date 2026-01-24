@@ -156,7 +156,8 @@ def get_highlight_quote(
     4. ui_key_text (filtered, first 1-2 items joined with " / ")
     5. ocr_text (first non-empty)
 
-    Note: Does NOT apply heart emoji - caller should use apply_heart_to_chunk.
+    Symbols from ui_symbol_items are applied to individual text items based on
+    time-based binding (per-item, not global prefix).
 
     Args:
         segment: Segment info
@@ -165,7 +166,7 @@ def get_highlight_quote(
         filtered_ui: Filtered UI text
 
     Returns:
-        Quote text (without heart emoji), or None if not available
+        Quote text with symbols applied per-item, or None if not available
     """
     # Try aligned_quotes first
     if segment.analysis_path:
@@ -188,16 +189,39 @@ def get_highlight_quote(
                 if q.asr:
                     return q.asr
 
-    # Fallback to ui_key_text (filtered) - join up to 2 items
+    # Fallback to ui_key_text (filtered) - join up to 2 items with per-item symbol binding
     if filtered_ui:
-        if len(filtered_ui) >= 2:
-            return f"{filtered_ui[0]} / {filtered_ui[1]}"
-        return filtered_ui[0]
+        items_with_symbols = apply_symbols_to_text_items(filtered_ui[:2], analysis)
+        if len(items_with_symbols) >= 2:
+            quote = f"{items_with_symbols[0]} / {items_with_symbols[1]}"
+        else:
+            quote = items_with_symbols[0]
 
-    # Fallback to ocr_text (use pick_dialogue_text for best selection)
+        # Backward compatibility: if no symbols were applied via ui_symbol_items,
+        # try old ui_symbols with apply_heart_to_chunk
+        original_quote = (
+            f"{filtered_ui[0]} / {filtered_ui[1]}"
+            if len(filtered_ui) >= 2
+            else filtered_ui[0]
+        )
+        if quote == original_quote:
+            quote = apply_heart_to_chunk(quote, analysis)
+
+        return quote
+
+    # Fallback to ocr_text (use pick_dialogue_text for best selection) with symbol binding
     dialogue = pick_dialogue_text(analysis.ocr_text)
     if dialogue:
-        return dialogue
+        # Apply symbols to the selected dialogue
+        items_with_symbols = apply_symbols_to_text_items([dialogue], analysis)
+        quote = items_with_symbols[0]
+
+        # Backward compatibility: if no symbols were applied via ui_symbol_items,
+        # try old ui_symbols with apply_heart_to_chunk
+        if quote == dialogue:
+            quote = apply_heart_to_chunk(quote, analysis)
+
+        return quote
 
     # Final fallback: facts[0] or caption
     description = analysis.get_description()
@@ -731,37 +755,134 @@ def apply_symbols_to_quote(quote: str, analysis: AnalysisResult) -> str:
     return quote
 
 
+def apply_symbols_to_text_items(
+    text_items: list[str],
+    analysis: AnalysisResult,
+) -> list[str]:
+    """Apply symbols to individual text items based on time-based binding.
+
+    For each text item, checks if any symbol is bound to an OCR item
+    containing this text. If found, prefixes the text item with the symbol.
+
+    Args:
+        text_items: List of text strings (from ui_key_text or ocr_text)
+        analysis: Analysis result with ui_symbol_items and ocr_items
+
+    Returns:
+        List of text items with symbols applied to matching items
+    """
+    ui_symbol_items = getattr(analysis, "ui_symbol_items", None)
+    ocr_items = getattr(analysis, "ocr_items", None)
+
+    if not ui_symbol_items or not ocr_items:
+        return text_items
+
+    # Bind symbols to OCR items by time
+    bound_symbols = bind_symbols_to_ocr(ui_symbol_items, ocr_items, threshold=1.5)
+
+    # Create mapping: ocr_text -> symbols
+    ocr_to_symbols: dict[str, list[str]] = {}
+    for bound in bound_symbols:
+        if bound.source == "bound" and bound.ocr_text:
+            if bound.ocr_text not in ocr_to_symbols:
+                ocr_to_symbols[bound.ocr_text] = []
+            ocr_to_symbols[bound.ocr_text].append(bound.symbol)
+
+    # Apply symbols to matching text items
+    result = []
+    for item in text_items:
+        # Check if this item matches any OCR text with bound symbols
+        symbols = ocr_to_symbols.get(item, [])
+        if symbols:
+            symbols_str = " ".join(symbols)
+            result.append(f"{symbols_str} {item}")
+        else:
+            result.append(item)
+
+    return result
+
+
+def get_standalone_symbols(
+    analysis: AnalysisResult,
+    segment_id: str,
+    segment_start_time: float,
+) -> list[tuple[str, float]]:
+    """Get standalone symbols (not bound to any OCR text) from analysis.
+
+    Returns list of (symbol, absolute_time) tuples for symbols that don't
+    match any OCR text within the threshold.
+
+    Args:
+        analysis: Analysis result with ui_symbol_items and ocr_items
+        segment_id: Segment ID for reference
+        segment_start_time: Segment start time in seconds
+
+    Returns:
+        List of (symbol, absolute_time) tuples for standalone symbols
+    """
+    ui_symbol_items = getattr(analysis, "ui_symbol_items", None)
+    ocr_items = getattr(analysis, "ocr_items", None)
+
+    if not ui_symbol_items:
+        return []
+
+    # If no ocr_items, all symbols are standalone
+    if not ocr_items:
+        return [
+            (item.symbol, segment_start_time + item.t_rel) for item in ui_symbol_items
+        ]
+
+    # Bind symbols to OCR items by time
+    bound_symbols = bind_symbols_to_ocr(ui_symbol_items, ocr_items, threshold=1.5)
+
+    # Extract standalone symbols (source="symbol")
+    standalone = []
+    for bound in bound_symbols:
+        if bound.source == "symbol":
+            # Find the original ui_symbol_item to get t_rel
+            for item in ui_symbol_items:
+                if item.symbol == bound.symbol:
+                    absolute_time = segment_start_time + item.t_rel
+                    standalone.append((bound.symbol, absolute_time))
+                    break
+
+    return standalone
+
+
 def get_highlight_text(
     analysis: AnalysisResult,
     filtered_ui: list[str],
 ) -> str:
-    """Get the highlight text for a segment (without ❤️ prefix).
+    """Get the highlight text for a segment with per-item symbol binding.
 
     Priority:
-    1. ui_key_text (filtered) - join first 2 with " / "
+    1. ui_key_text (filtered) - join first 2 with " / ", apply symbols per-item
     2. Best dialogue from ocr_text
     3. facts[0] or caption
 
-    Note: ❤️ is NOT applied here. Use apply_heart_to_chunk() after
-    getting the text to apply segment-specific emoji placement.
+    Symbols are applied to individual text items based on time-based binding,
+    not as a global prefix.
 
     Args:
         analysis: Analysis result
         filtered_ui: UI text with watermarks removed
 
     Returns:
-        Highlight text string (without ❤️ prefix)
+        Highlight text string with symbols applied to matching items
     """
-    # Priority 1: ui_key_text (filtered)
+    # Priority 1: ui_key_text (filtered) with per-item symbol binding
     if filtered_ui:
-        if len(filtered_ui) >= 2:
-            return f"{filtered_ui[0]} / {filtered_ui[1]}"
-        return filtered_ui[0]
+        items_with_symbols = apply_symbols_to_text_items(filtered_ui[:2], analysis)
+        if len(items_with_symbols) >= 2:
+            return f"{items_with_symbols[0]} / {items_with_symbols[1]}"
+        return items_with_symbols[0]
 
     # Priority 2: Best dialogue from ocr_text
     dialogue = pick_dialogue_text(analysis.ocr_text)
     if dialogue:
-        return dialogue
+        # Apply symbols to the selected dialogue
+        items_with_symbols = apply_symbols_to_text_items([dialogue], analysis)
+        return items_with_symbols[0]
 
     # Priority 3: facts[0] or caption
     description = analysis.get_description()
@@ -961,6 +1082,129 @@ def _merge_segment_ids(id1: str, id2: str) -> str:
     return f"{prefix}{num1:04d}+{num2:04d}"
 
 
+def get_content_tier(
+    analysis: AnalysisResult,
+    segment: SegmentInfo,
+    session_dir: Path,
+) -> str:
+    """Classify segment content into tiers for highlight selection.
+
+    Tier A (high priority): Has aligned_quotes, ui_key_text (filtered), or ui_symbol_items
+    Tier B (medium): Has ocr_text or what_changed
+    Tier C (low): Only has facts/caption (no dialogue/symbols/alignment)
+
+    Note: asr_items alone do not qualify for Tier A, as they often contain
+    noise/artifacts. Only actual dialogue (ui_key_text) and symbols count as high-value.
+
+    Args:
+        analysis: Analysis result
+        segment: Segment info
+        session_dir: Session directory path
+
+    Returns:
+        "A", "B", or "C"
+    """
+    # Check for Tier A indicators
+    # 1. Check aligned_quotes
+    if segment.analysis_path:
+        analysis_path = session_dir / segment.analysis_path
+        aligned_quotes = load_aligned_quotes(analysis_path)
+        if aligned_quotes:
+            return "A"
+
+    # 2. Check ui_key_text (filtered)
+    filtered_ui = filter_watermarks(analysis.ui_key_text)
+    if filtered_ui:
+        return "A"
+
+    # 3. Check ui_symbol_items
+    ui_symbol_items = getattr(analysis, "ui_symbol_items", None)
+    if ui_symbol_items:
+        return "A"
+
+    # Note: asr_items not checked - often contains noise/artifacts
+    # Only ui_key_text (dialogue) and symbols count as high-value content
+
+    # Check for Tier B indicators
+    if analysis.ocr_text or analysis.what_changed:
+        return "B"
+
+    # Default: Tier C (only facts/caption)
+    return "C"
+
+
+def normalize_description(text: str) -> str:
+    """Normalize description text for deduplication.
+
+    Removes punctuation, whitespace, and common particles to detect
+    semantically similar descriptions.
+
+    Args:
+        text: Description text (facts[0] or caption)
+
+    Returns:
+        Normalized text for comparison
+    """
+    import re
+    import unicodedata
+
+    if not text:
+        return ""
+
+    # Convert to lowercase
+    normalized = text.lower()
+
+    # Remove punctuation (including Chinese punctuation)
+    normalized = re.sub(r"[.,;:!?。，、；：！？「」『』【】（）()《》<>\-_/\\]", "", normalized)
+
+    # Remove whitespace
+    normalized = re.sub(r"\s+", "", normalized)
+
+    # Normalize unicode (e.g., full-width to half-width)
+    normalized = unicodedata.normalize("NFKC", normalized)
+
+    return normalized
+
+
+def is_similar_description(desc1: str, desc2: str, threshold: float = 0.5) -> bool:
+    """Check if two descriptions are semantically similar.
+
+    Uses character n-gram overlap to detect similarity. Descriptions are
+    considered similar if they share >= threshold of n-grams.
+
+    Args:
+        desc1: First description
+        desc2: Second description
+        threshold: Similarity threshold (0.0-1.0), default 0.5
+
+    Returns:
+        True if descriptions are similar
+    """
+    if not desc1 or not desc2:
+        return False
+
+    # Extract character bi-grams and tri-grams for Chinese text
+    def extract_ngrams(text: str, n: int = 2) -> set[str]:
+        normalized = normalize_description(text)
+        if len(normalized) < n:
+            return {normalized}
+        return {normalized[i : i + n] for i in range(len(normalized) - n + 1)}
+
+    # Combine bi-grams and tri-grams for better coverage
+    ngrams1 = extract_ngrams(desc1, 2) | extract_ngrams(desc1, 3)
+    ngrams2 = extract_ngrams(desc2, 2) | extract_ngrams(desc2, 3)
+
+    if not ngrams1 or not ngrams2:
+        return False
+
+    # Calculate overlap ratio (Jaccard similarity)
+    intersection = ngrams1 & ngrams2
+    union = ngrams1 | ngrams2
+    similarity = len(intersection) / len(union) if union else 0
+
+    return similarity >= threshold
+
+
 @dataclass
 class HighlightEntry:
     """A highlight entry with quote, summary, and metadata."""
@@ -1002,9 +1246,9 @@ def compose_highlights(
         Markdown content for highlights.md
     """
     # Score all segments with valid analysis
-    # Each entry: (score, segment, analysis, filtered_ui, quote, summary)
+    # Each entry: (score, segment, analysis, filtered_ui, quote, summary, tier)
     scored_segments: list[
-        tuple[int, SegmentInfo, AnalysisResult, list[str], str | None, str | None]
+        tuple[int, SegmentInfo, AnalysisResult, list[str], str | None, str | None, str]
     ] = []
 
     for segment in manifest.segments:
@@ -1015,29 +1259,97 @@ def compose_highlights(
         filtered_ui = filter_watermarks(analysis.ui_key_text)
         quote = get_highlight_quote(segment, session_dir, analysis, filtered_ui)
         summary = get_highlight_summary(analysis)
-        scored_segments.append((score, segment, analysis, filtered_ui, quote, summary))
+        tier = get_content_tier(analysis, segment, session_dir)
+        scored_segments.append((score, segment, analysis, filtered_ui, quote, summary, tier))
 
-    # Sort by score (descending), then by time (ascending) for same score
-    scored_segments.sort(key=lambda x: (-x[0], x[1].start_time))
+    # Group by tier
+    tier_a = [
+        (s, seg, a, ui, q, sum)
+        for s, seg, a, ui, q, sum, t in scored_segments
+        if t == "A" and s >= min_score
+    ]
+    tier_b = [
+        (s, seg, a, ui, q, sum)
+        for s, seg, a, ui, q, sum, t in scored_segments
+        if t == "B" and s >= min_score
+    ]
+    tier_c = [
+        (s, seg, a, ui, q, sum)
+        for s, seg, a, ui, q, sum, t in scored_segments
+        if t == "C" and s >= min_score
+    ]
 
-    # Primary selection: score >= min_score only (strict threshold, no fill)
-    seen_ui_keys: set[tuple[str, ...]] = set()
+    # Sort each tier by score (descending), then by time (ascending)
+    tier_a.sort(key=lambda x: (-x[0], x[1].start_time))
+    tier_b.sort(key=lambda x: (-x[0], x[1].start_time))
+    tier_c.sort(key=lambda x: (-x[0], x[1].start_time))
+
+    # Tiered selection: prioritize Tier A > B > C
     primary_selection: list[
         tuple[int, SegmentInfo, AnalysisResult, list[str], str | None, str | None]
     ] = []
+    seen_ui_keys: set[tuple[str, ...]] = set()
 
-    for score, segment, analysis, filtered_ui, quote, summary in scored_segments:
-        # Strict min_score - segments below don't enter at all
-        if score < min_score:
-            continue
-
-        # Deduplicate by ui_key_text
+    # Add Tier A (high priority: dialogue/symbols/alignment)
+    # No deduplication for Tier A - preserve all dialogue/symbol content
+    for score, segment, analysis, filtered_ui, quote, summary in tier_a:
+        # Deduplicate by ui_key_text only (preserve dialogue variants)
         ui_key = _get_ui_dedup_key(filtered_ui)
         if ui_key is not None:
             if ui_key in seen_ui_keys:
-                continue  # Skip duplicate
+                continue
             seen_ui_keys.add(ui_key)
+        primary_selection.append((score, segment, analysis, filtered_ui, quote, summary))
 
+    # Add Tier B (medium priority: OCR/what_changed)
+    # Deduplicate by similarity for visual descriptions without dialogue
+    seen_tier_b_descriptions: list[str] = []  # Track Tier B descriptions
+    for score, segment, analysis, filtered_ui, quote, summary in tier_b:
+        # For Tier B without ui_key_text, deduplicate by similarity
+        if not filtered_ui:
+            desc = analysis.facts[0] if analysis.facts else analysis.caption or ""
+            if not desc:
+                primary_selection.append(
+                    (score, segment, analysis, filtered_ui, quote, summary)
+                )
+                continue
+
+            # Check similarity against all previously seen Tier B descriptions
+            # Use low threshold (0.1) to very aggressively catch similar visual descriptions
+            # This prevents flooding highlights with repetitive "戴眼镜/特写" type content
+            is_duplicate = False
+            for seen_desc in seen_tier_b_descriptions:
+                if is_similar_description(desc, seen_desc, threshold=0.1):
+                    is_duplicate = True
+                    break
+
+            if is_duplicate:
+                continue  # Skip similar description
+
+            seen_tier_b_descriptions.append(desc)
+
+        primary_selection.append((score, segment, analysis, filtered_ui, quote, summary))
+
+    # Add Tier C (low priority: only facts/caption)
+    # Strong deduplication by similarity detection
+    seen_tier_c_descriptions: list[str] = []  # Track Tier C descriptions
+    for score, segment, analysis, filtered_ui, quote, summary in tier_c:
+        desc = analysis.facts[0] if analysis.facts else analysis.caption or ""
+        if not desc:
+            continue
+
+        # Check similarity against all previously seen Tier C descriptions
+        # Use threshold 0.5 to catch semantically similar visual descriptions
+        is_duplicate = False
+        for seen_desc in seen_tier_c_descriptions:
+            if is_similar_description(desc, seen_desc, threshold=0.5):
+                is_duplicate = True
+                break
+
+        if is_duplicate:
+            continue  # Skip similar description
+
+        seen_tier_c_descriptions.append(desc)
         primary_selection.append((score, segment, analysis, filtered_ui, quote, summary))
 
     # Sort primary selection by time for merging
@@ -1069,18 +1381,15 @@ def compose_highlights(
                 merged_id = _merge_segment_ids(seg1.id, seg2.id)
                 merged_score = max(score1, score2)
 
-                # Apply symbols to each segment's quote separately
-                chunk1 = apply_symbols_to_quote(quote1, analysis1) if quote1 else None
-                chunk2 = apply_symbols_to_quote(quote2, analysis2) if quote2 else None
-
                 # Merge quotes: each segment contributes at most 1 quote
+                # Note: symbols already applied per-item in get_highlight_text
                 merged_quote = None
-                if chunk1 and chunk2:
-                    merged_quote = f"{chunk1} / {chunk2}"
-                elif chunk1:
-                    merged_quote = chunk1
-                elif chunk2:
-                    merged_quote = chunk2
+                if quote1 and quote2:
+                    merged_quote = f"{quote1} / {quote2}"
+                elif quote1:
+                    merged_quote = quote1
+                elif quote2:
+                    merged_quote = quote2
 
                 # Merge summaries: prefer first, fallback to second
                 merged_summary = summary1 or summary2
@@ -1097,8 +1406,9 @@ def compose_highlights(
                 i += 2  # Skip both segments
                 continue
 
-        # No merge - add single segment (apply symbols to its quote)
-        final_quote = apply_symbols_to_quote(quote1, analysis1) if quote1 else None
+        # No merge - add single segment
+        # Note: symbols already applied per-item in get_highlight_text
+        final_quote = quote1
         merged_highlights.append(
             HighlightEntry(
                 score=score1,
@@ -1109,6 +1419,25 @@ def compose_highlights(
             )
         )
         i += 1
+
+    # Add standalone symbol entries (symbols not bound to any OCR text)
+    for score, segment, analysis, filtered_ui, quote, summary in primary_selection:
+        standalone_symbols = get_standalone_symbols(
+            analysis, segment.id, segment.start_time
+        )
+        for symbol, absolute_time in standalone_symbols:
+            # Create a highlight entry for standalone symbol with reduced score
+            # Use half the segment score since it's just a symbol without context
+            symbol_score = score // 2
+            merged_highlights.append(
+                HighlightEntry(
+                    score=symbol_score,
+                    segment_id=segment.id,
+                    start_time=absolute_time,
+                    quote=symbol,
+                    summary=None,
+                )
+            )
 
     # Sort by score (descending) and take top-k
     merged_highlights.sort(key=lambda x: -x.score)
