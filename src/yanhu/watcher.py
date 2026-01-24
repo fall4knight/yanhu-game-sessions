@@ -14,6 +14,7 @@ import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 # Supported video extensions
 VIDEO_EXTENSIONS = frozenset({".mp4", ".mkv", ".mov"})
@@ -22,19 +23,45 @@ VIDEO_EXTENSIONS = frozenset({".mp4", ".mkv", ".mov"})
 def compute_file_key(path: Path) -> str:
     """Compute a deterministic dedup key for a file.
 
-    Uses path + mtime + size to create a unique hash.
-    This ensures files are re-queued if they are replaced with different content.
+    Uses path + mtime + size + content fingerprint to create a unique hash.
+    This ensures files are re-queued if they are replaced with different content,
+    even when mtime granularity is coarse.
+
+    Content fingerprint:
+    - Files <= 256KB: hash full content
+    - Files > 256KB: hash first 64KB + last 64KB
 
     Args:
         path: Path to the file
 
     Returns:
-        SHA256 hash of the key components
+        16-character hex string (blake2b digest_size=8)
     """
     resolved = path.resolve()
     stat = resolved.stat()
-    key_data = f"{resolved}:{stat.st_mtime}:{stat.st_size}"
-    return hashlib.sha256(key_data.encode()).hexdigest()[:16]
+
+    # Compute content fingerprint
+    size = stat.st_size
+    content_hash = hashlib.blake2b(digest_size=8)
+
+    with open(resolved, "rb") as f:
+        if size <= 256 * 1024:  # 256KB
+            # Hash full content
+            content_hash.update(f.read())
+        else:
+            # Hash first 64KB + last 64KB
+            first_chunk = f.read(64 * 1024)
+            content_hash.update(first_chunk)
+
+            # Seek to last 64KB
+            f.seek(-64 * 1024, 2)  # Seek from end
+            last_chunk = f.read(64 * 1024)
+            content_hash.update(last_chunk)
+
+    # Combine metadata + content fingerprint
+    key_data = f"{resolved}:{stat.st_mtime}:{stat.st_size}:{content_hash.hexdigest()}"
+    final_hash = hashlib.blake2b(key_data.encode(), digest_size=8)
+    return final_hash.hexdigest()
 
 
 @dataclass
@@ -879,7 +906,19 @@ def process_job(
         # Step 1: Ingest
         game = job.get_game()
         tag = job.get_tag()
-        session_id = generate_session_id(game, tag)
+
+        # Parse job.created_at and convert to America/Los_Angeles timezone
+        job_timestamp = datetime.fromisoformat(job.created_at)
+        la_tz = ZoneInfo("America/Los_Angeles")
+
+        if job_timestamp.tzinfo is None:
+            # Naive datetime - assume America/Los_Angeles
+            job_timestamp = job_timestamp.replace(tzinfo=la_tz)
+        else:
+            # Aware datetime - convert to America/Los_Angeles
+            job_timestamp = job_timestamp.astimezone(la_tz)
+
+        session_id = generate_session_id(game, tag, timestamp=job_timestamp)
         # CRITICAL: create_session_directory args are (session_id, output_dir)
         session_dir = create_session_directory(session_id, output_dir)
         source_local, source_metadata = copy_source_video(raw_path, session_dir, mode=source_mode)
