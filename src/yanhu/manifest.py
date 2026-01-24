@@ -92,6 +92,7 @@ class Manifest:
     segments: list[SegmentInfo] = field(default_factory=list)
     source_metadata: SourceMetadata | None = None  # observability for source link/copy
     transcribe_coverage: dict[str, int] | None = None  # {processed, total, skipped_limit}
+    asr_models: list[str] = field(default_factory=list)  # list of ASR models run
 
     def to_dict(self) -> dict:
         result = {
@@ -106,6 +107,8 @@ class Manifest:
             result["source_metadata"] = self.source_metadata.to_dict()
         if self.transcribe_coverage:
             result["transcribe_coverage"] = self.transcribe_coverage
+        if self.asr_models:
+            result["asr_models"] = self.asr_models
         return result
 
     @classmethod
@@ -122,6 +125,7 @@ class Manifest:
             segments=[SegmentInfo.from_dict(s) for s in data.get("segments", [])],
             source_metadata=source_metadata,
             transcribe_coverage=data.get("transcribe_coverage"),
+            asr_models=data.get("asr_models", []),
         )
 
     def save(self, session_dir: Path) -> Path:

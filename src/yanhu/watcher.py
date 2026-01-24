@@ -163,7 +163,8 @@ class QueueJob:
 
     created_at: str  # ISO format timestamp
     raw_path: str  # Absolute path to the video file
-    status: str = "pending"  # pending, processing, done, failed
+    status: str = "pending"  # pending, processing, done, failed, cancelled, cancel_requested
+    job_id: str | None = None  # Unique job identifier (auto-generated if None)
     suggested_game: str | None = None  # Optional game name hint (P3: from --default-game)
     raw_dir: str | None = None  # Source directory (for multi-dir debugging)
     # P3: Naming strategy fields
@@ -176,6 +177,11 @@ class QueueJob:
     session_id: str | None = None  # Generated session ID after processing
     error: str | None = None  # Error message if failed
     outputs: dict | None = None  # Output paths after successful processing
+    preset: str | None = None  # Processing preset (fast/quality)
+    media: dict | None = None  # Media metadata from ffprobe (MediaInfo.to_dict())
+    estimated_segments: int | None = None  # Estimated number of segments
+    estimated_runtime_sec: int | None = None  # Estimated processing time in seconds
+    asr_models: list[str] | None = None  # ASR models to run (e.g., ["whisper_local", "mock"])
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
@@ -184,6 +190,8 @@ class QueueJob:
             "raw_path": self.raw_path,
             "status": self.status,
         }
+        if self.job_id is not None:
+            result["job_id"] = self.job_id
         if self.suggested_game is not None:
             result["suggested_game"] = self.suggested_game
         if self.raw_dir is not None:
@@ -204,6 +212,16 @@ class QueueJob:
             result["error"] = self.error
         if self.outputs is not None:
             result["outputs"] = self.outputs
+        if self.preset is not None:
+            result["preset"] = self.preset
+        if self.media is not None:
+            result["media"] = self.media
+        if self.estimated_segments is not None:
+            result["estimated_segments"] = self.estimated_segments
+        if self.estimated_runtime_sec is not None:
+            result["estimated_runtime_sec"] = self.estimated_runtime_sec
+        if self.asr_models is not None:
+            result["asr_models"] = self.asr_models
         return result
 
     @classmethod
@@ -213,6 +231,7 @@ class QueueJob:
             created_at=data["created_at"],
             raw_path=data["raw_path"],
             status=data.get("status", "pending"),
+            job_id=data.get("job_id"),
             suggested_game=data.get("suggested_game"),
             raw_dir=data.get("raw_dir"),
             raw_filename=data.get("raw_filename"),
@@ -223,6 +242,11 @@ class QueueJob:
             session_id=data.get("session_id"),
             error=data.get("error"),
             outputs=data.get("outputs"),
+            preset=data.get("preset"),
+            media=data.get("media"),
+            estimated_segments=data.get("estimated_segments"),
+            estimated_runtime_sec=data.get("estimated_runtime_sec"),
+            asr_models=data.get("asr_models"),
         )
 
     def to_json_line(self) -> str:
@@ -404,6 +428,209 @@ def get_pending_jobs(queue_file: Path) -> list[QueueJob]:
         List of QueueJob with status="pending"
     """
     return [job for job in read_queue(queue_file) if job.status == "pending"]
+
+
+def generate_job_id() -> str:
+    """Generate a unique job ID.
+
+    Uses timestamp + short hash for readability and uniqueness.
+    Format: job_YYYYMMDD_HHMMSS_<hash8>
+
+    Returns:
+        Job ID string
+    """
+    import hashlib
+    import uuid
+
+    now = datetime.now()
+    timestamp = now.strftime("%Y%m%d_%H%M%S")
+
+    # Generate short hash from UUID for uniqueness
+    hash_obj = hashlib.md5(str(uuid.uuid4()).encode())
+    short_hash = hash_obj.hexdigest()[:8]
+
+    return f"job_{timestamp}_{short_hash}"
+
+
+def save_job_to_file(job: QueueJob, jobs_dir: Path) -> None:
+    """Save a job to a per-job JSON file.
+
+    Uses atomic write (temp file + rename).
+
+    Args:
+        job: The job to save
+        jobs_dir: Directory for job files
+    """
+    # Ensure job has an ID
+    if not job.job_id:
+        job.job_id = generate_job_id()
+
+    jobs_dir.mkdir(parents=True, exist_ok=True)
+    job_file = jobs_dir / f"{job.job_id}.json"
+
+    # Write to temp file first
+    fd, temp_path = tempfile.mkstemp(
+        dir=jobs_dir,
+        prefix=".job_",
+        suffix=".tmp",
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(job.to_dict(), f, ensure_ascii=False, indent=2)
+        # Atomic rename
+        os.replace(temp_path, job_file)
+    except Exception:
+        # Clean up temp file on error
+        try:
+            os.unlink(temp_path)
+        except OSError:
+            pass
+        raise
+
+
+def load_job_from_file(job_file: Path) -> QueueJob | None:
+    """Load a job from a JSON file.
+
+    Args:
+        job_file: Path to job JSON file
+
+    Returns:
+        QueueJob instance, or None if file cannot be read
+    """
+    if not job_file.exists():
+        return None
+
+    try:
+        with open(job_file, encoding="utf-8") as f:
+            data = json.load(f)
+        return QueueJob.from_dict(data)
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def list_all_jobs(jobs_dir: Path) -> list[QueueJob]:
+    """List all jobs from the jobs directory.
+
+    Args:
+        jobs_dir: Directory containing job JSON files
+
+    Returns:
+        List of QueueJob instances, sorted by created_at descending
+    """
+    if not jobs_dir.exists():
+        return []
+
+    jobs = []
+    for job_file in jobs_dir.glob("job_*.json"):
+        job = load_job_from_file(job_file)
+        if job:
+            jobs.append(job)
+
+    # Sort by created_at descending (newest first)
+    jobs.sort(key=lambda j: j.created_at, reverse=True)
+    return jobs
+
+
+def get_job_by_id(job_id: str, jobs_dir: Path) -> QueueJob | None:
+    """Get a job by its ID.
+
+    Args:
+        job_id: The job ID
+        jobs_dir: Directory containing job JSON files
+
+    Returns:
+        QueueJob instance, or None if not found
+    """
+    job_file = jobs_dir / f"{job_id}.json"
+    return load_job_from_file(job_file)
+
+
+def update_job_by_id(
+    job_id: str,
+    jobs_dir: Path,
+    status: str | None = None,
+    session_id: str | None = None,
+    error: str | None = None,
+    outputs: dict | None = None,
+) -> QueueJob | None:
+    """Update a job by its ID.
+
+    Args:
+        job_id: The job ID
+        jobs_dir: Directory containing job JSON files
+        status: New status (if provided)
+        session_id: Session ID (if provided)
+        error: Error message (if provided)
+        outputs: Output paths (if provided)
+
+    Returns:
+        Updated QueueJob, or None if not found
+    """
+    job = get_job_by_id(job_id, jobs_dir)
+    if not job:
+        return None
+
+    # Update fields
+    if status is not None:
+        job.status = status
+    if session_id is not None:
+        job.session_id = session_id
+    if error is not None:
+        job.error = error
+    if outputs is not None:
+        job.outputs = outputs
+
+    # Save back
+    save_job_to_file(job, jobs_dir)
+    return job
+
+
+def cancel_job(job_id: str, jobs_dir: Path) -> QueueJob | None:
+    """Cancel a job by its ID.
+
+    Transitions:
+    - pending → cancelled
+    - processing → cancel_requested
+
+    Args:
+        job_id: The job ID
+        jobs_dir: Directory containing job JSON files
+
+    Returns:
+        Updated QueueJob, or None if not found or already completed
+    """
+    job = get_job_by_id(job_id, jobs_dir)
+    if not job:
+        return None
+
+    # Only cancel pending or processing jobs
+    if job.status == "pending":
+        job.status = "cancelled"
+        save_job_to_file(job, jobs_dir)
+        return job
+    elif job.status == "processing":
+        job.status = "cancel_requested"
+        save_job_to_file(job, jobs_dir)
+        return job
+    else:
+        # Already done/failed/cancelled - no change
+        return job
+
+
+def get_pending_jobs_v2(jobs_dir: Path) -> list[QueueJob]:
+    """Get all pending jobs from the jobs directory.
+
+    Args:
+        jobs_dir: Directory containing job JSON files
+
+    Returns:
+        List of QueueJob with status="pending", sorted by created_at ascending
+    """
+    all_jobs = list_all_jobs(jobs_dir)
+    pending = [job for job in all_jobs if job.status == "pending"]
+    # Sort by created_at ascending (oldest first) for FIFO processing
+    pending.sort(key=lambda j: j.created_at)
+    return pending
 
 
 @dataclass
@@ -800,38 +1027,6 @@ class JobResult:
     outputs: dict | None = None
 
 
-def validate_outputs(session_dir: Path) -> tuple[bool, str]:
-    """Validate that session outputs exist and are non-empty.
-
-    Args:
-        session_dir: Path to session directory
-
-    Returns:
-        Tuple of (success, error_message). error_message is empty if success.
-    """
-    # Check required files exist
-    required_files = ["overview.md", "timeline.md", "highlights.md"]
-    for filename in required_files:
-        filepath = session_dir / filename
-        if not filepath.exists():
-            return False, f"Missing required output: {filename}"
-
-    # Validate highlights.md has at least one highlight entry
-    highlights_path = session_dir / "highlights.md"
-    highlights_content = highlights_path.read_text(encoding="utf-8")
-    if "- [" not in highlights_content:
-        return False, "highlights.md contains no highlight entries (no '- [' line found)"
-
-    # Validate timeline.md has content (segments or quotes)
-    timeline_path = session_dir / "timeline.md"
-    timeline_content = timeline_path.read_text(encoding="utf-8")
-    if "### part_" not in timeline_content and "- quote:" not in timeline_content:
-        return (
-            False,
-            "timeline.md contains no segment or quote content (no '### part_' or '- quote:' found)",
-        )
-
-    return True, ""
 
 
 def process_job(
@@ -879,6 +1074,7 @@ def process_job(
         generate_session_id,
     )
     from yanhu.transcriber import transcribe_session
+    from yanhu.verify import validate_outputs
 
     raw_path = Path(job.raw_path)
 
@@ -955,16 +1151,44 @@ def process_job(
         )
 
         # Step 5: Transcribe (params from run_config)
-        # Progress callback for transcribe
-        import time
+        # Initialize progress tracker for transcribe stage
+        from yanhu.progress import ProgressTracker
 
-        transcribe_start_time = time.time()
+        # Determine coverage for progress tracker
+        transcribe_limit = run_config.get("transcribe_limit")
+        if transcribe_limit == 0:
+            transcribe_limit = None
+
+        transcribe_coverage = None
+        if transcribe_limit is not None:
+            # If limit is set, prepare coverage metadata
+            total_segments = len(manifest.segments)
+            transcribe_coverage = {
+                "processed": min(transcribe_limit, total_segments),
+                "total": total_segments,
+                "skipped_limit": max(0, total_segments - transcribe_limit),
+            }
+
+        progress_tracker = ProgressTracker(
+            session_id=manifest.session_id,
+            session_dir=session_dir,
+            stage="transcribe",
+            total=len(manifest.segments),
+            coverage=transcribe_coverage,
+        )
+
+        # Progress callback for transcribe
         last_progress_log = [0]  # Mutable to track in closure
 
         def transcribe_progress_callback(
             seg_id: str, status: str, result, stats
         ) -> None:
-            """Log transcribe progress."""
+            """Log transcribe progress and update progress tracker."""
+            # Update progress tracker with current done count
+            # stats.processed tracks successfully processed segments
+            if stats:
+                progress_tracker.update(stats.processed)
+
             if status == "done" and result:
                 item_count = len(result.asr_items) if result.asr_items else 0
                 if item_count > 0:
@@ -984,18 +1208,16 @@ def process_job(
             # Log progress summary every 5 segments
             if stats and stats.processed > 0 and stats.processed % 5 == 0:
                 if stats.processed != last_progress_log[0]:
-                    elapsed = time.time() - transcribe_start_time
-                    progress_msg = (
-                        f"  Progress: {stats.processed}/{stats.total} segments, "
-                        f"elapsed {elapsed:.1f}s"
-                    )
-                    print(progress_msg)
+                    # Use progress tracker for formatted output
+                    print(f"  {progress_tracker.format_console_line()}")
                     last_progress_log[0] = stats.processed
 
-        transcribe_limit = run_config.get("transcribe_limit")
-        # Convert 0 to None (0 means no limit)
-        if transcribe_limit == 0:
-            transcribe_limit = None
+        # Determine which ASR models to run
+        asr_models = job.asr_models
+        if asr_models is None:
+            # Backward compatibility: use default or backend from run_config
+            backend = run_config.get("transcribe_backend", "whisper_local")
+            asr_models = [backend]
 
         transcribe_stats = transcribe_session(
             manifest=manifest,
@@ -1009,7 +1231,11 @@ def process_job(
             max_total_seconds=run_config.get("transcribe_max_seconds"),
             on_progress=transcribe_progress_callback,
             force=force,
+            asr_models=asr_models,
         )
+
+        # Finalize progress tracker (transition to compose stage)
+        progress_tracker.finalize(stage="compose")
 
         # Save transcribe coverage to manifest if limit was used
         if transcribe_stats.skipped_limit > 0:
@@ -1018,12 +1244,22 @@ def process_job(
                 "total": transcribe_stats.total,
                 "skipped_limit": transcribe_stats.skipped_limit,
             }
+
+        # Save ASR models to manifest
+        if asr_models:
+            manifest.asr_models = asr_models
+
+        # Save manifest if updated
+        if transcribe_stats.skipped_limit > 0 or asr_models:
             manifest.save(session_dir)
 
         # Step 6: Compose
         write_timeline(manifest, session_dir)
         write_overview(manifest, session_dir)
         write_highlights(manifest, session_dir)
+
+        # Update progress to done
+        progress_tracker.finalize(stage="done")
 
         # Step 7: Validate outputs
         valid, error_msg = validate_outputs(session_dir)
@@ -1133,6 +1369,241 @@ def get_video_duration(video_path: Path) -> float:
     except (subprocess.TimeoutExpired, ValueError, FileNotFoundError):
         pass
     return 0
+
+
+@dataclass
+class MediaInfo:
+    """Media file metadata from ffprobe."""
+
+    duration_sec: float | None = None
+    file_size_bytes: int | None = None
+    container: str | None = None
+    video_codec: str | None = None
+    audio_codec: str | None = None
+    width: int | None = None
+    height: int | None = None
+    fps: float | None = None
+    bitrate_kbps: int | None = None
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for JSON serialization."""
+        result = {}
+        if self.duration_sec is not None:
+            result["duration_sec"] = self.duration_sec
+        if self.file_size_bytes is not None:
+            result["file_size_bytes"] = self.file_size_bytes
+        if self.container is not None:
+            result["container"] = self.container
+        if self.video_codec is not None:
+            result["video_codec"] = self.video_codec
+        if self.audio_codec is not None:
+            result["audio_codec"] = self.audio_codec
+        if self.width is not None:
+            result["width"] = self.width
+        if self.height is not None:
+            result["height"] = self.height
+        if self.fps is not None:
+            result["fps"] = self.fps
+        if self.bitrate_kbps is not None:
+            result["bitrate_kbps"] = self.bitrate_kbps
+        return result
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "MediaInfo":
+        """Create from dictionary."""
+        return cls(
+            duration_sec=data.get("duration_sec"),
+            file_size_bytes=data.get("file_size_bytes"),
+            container=data.get("container"),
+            video_codec=data.get("video_codec"),
+            audio_codec=data.get("audio_codec"),
+            width=data.get("width"),
+            height=data.get("height"),
+            fps=data.get("fps"),
+            bitrate_kbps=data.get("bitrate_kbps"),
+        )
+
+
+def probe_media(video_path: Path) -> MediaInfo:
+    """Probe media file for metadata using ffprobe.
+
+    Best-effort extraction of media info. Gracefully degrades if ffprobe
+    is unavailable (returns file size only).
+
+    Args:
+        video_path: Path to video file
+
+    Returns:
+        MediaInfo with available metadata
+    """
+    import subprocess
+
+    info = MediaInfo()
+
+    # Always get file size (no ffprobe needed)
+    try:
+        info.file_size_bytes = video_path.stat().st_size
+    except OSError:
+        pass
+
+    # Try ffprobe for detailed metadata
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "quiet",
+                "-print_format",
+                "json",
+                "-show_format",
+                "-show_streams",
+                str(video_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        if result.returncode != 0:
+            # ffprobe failed, return basic info
+            return info
+
+        data = json.loads(result.stdout)
+
+        # Extract format info
+        if "format" in data:
+            fmt = data["format"]
+            if "duration" in fmt:
+                try:
+                    info.duration_sec = float(fmt["duration"])
+                except (ValueError, TypeError):
+                    pass
+            if "format_name" in fmt:
+                info.container = fmt["format_name"]
+            if "bit_rate" in fmt:
+                try:
+                    info.bitrate_kbps = int(int(fmt["bit_rate"]) / 1000)
+                except (ValueError, TypeError):
+                    pass
+
+        # Extract stream info
+        if "streams" in data:
+            for stream in data["streams"]:
+                codec_type = stream.get("codec_type")
+
+                if codec_type == "video" and info.video_codec is None:
+                    # First video stream
+                    info.video_codec = stream.get("codec_name")
+                    if "width" in stream:
+                        try:
+                            info.width = int(stream["width"])
+                        except (ValueError, TypeError):
+                            pass
+                    if "height" in stream:
+                        try:
+                            info.height = int(stream["height"])
+                        except (ValueError, TypeError):
+                            pass
+                    # Calculate FPS from avg_frame_rate
+                    if "avg_frame_rate" in stream:
+                        try:
+                            fps_str = stream["avg_frame_rate"]
+                            if "/" in fps_str:
+                                num, den = fps_str.split("/")
+                                if int(den) != 0:
+                                    info.fps = float(num) / float(den)
+                        except (ValueError, TypeError, ZeroDivisionError):
+                            pass
+
+                elif codec_type == "audio" and info.audio_codec is None:
+                    # First audio stream
+                    info.audio_codec = stream.get("codec_name")
+
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, FileNotFoundError, OSError):
+        # ffprobe unavailable or failed - return basic info
+        pass
+
+    return info
+
+
+def calculate_job_estimates(
+    media_info: MediaInfo,
+    segment_strategy: str = "auto",
+    preset: str = "fast",
+    metrics_file: Path | None = None,
+) -> tuple[int, int]:
+    """Calculate estimated segments and runtime for a job.
+
+    Uses persistent metrics if available to improve accuracy.
+
+    Args:
+        media_info: Media metadata from probe_media
+        segment_strategy: Segmentation strategy (auto/short/medium/long)
+        preset: Processing preset (fast/quality)
+        metrics_file: Optional path to _metrics.json for improved estimates
+
+    Returns:
+        Tuple of (estimated_segments, estimated_runtime_sec)
+    """
+    import math
+
+    # Default estimates if duration unavailable
+    if media_info.duration_sec is None or media_info.duration_sec <= 0:
+        return (0, 0)
+
+    # Determine segment duration
+    duration_sec = media_info.duration_sec
+
+    if segment_strategy == "short":
+        segment_duration = 5
+    elif segment_strategy == "medium":
+        segment_duration = 15
+    elif segment_strategy == "long":
+        segment_duration = 30
+    else:  # auto
+        if duration_sec <= 180:  # <= 3 minutes
+            segment_duration = 5
+        elif duration_sec <= 900:  # <= 15 minutes
+            segment_duration = 15
+        else:
+            segment_duration = 30
+
+    # Calculate estimated segments
+    estimated_segments = math.ceil(duration_sec / segment_duration)
+
+    # Try to use metrics for better estimate
+    if metrics_file and metrics_file.exists():
+        try:
+            from yanhu.metrics import MetricsStore
+
+            store = MetricsStore(metrics_file)
+            metrics = store.get_metrics(preset, segment_duration)
+            if metrics and metrics.samples > 0 and metrics.avg_rate_ema > 0:
+                # Use observed rate from metrics
+                # runtime = overhead + segments / rate
+                base_overhead_sec = 10
+                estimated_runtime_sec = base_overhead_sec + int(
+                    estimated_segments / metrics.avg_rate_ema
+                )
+                return (estimated_segments, estimated_runtime_sec)
+        except Exception:
+            # Fallback to heuristic if metrics loading fails
+            pass
+
+    # Fallback to heuristic
+    # Fast preset: ~3 sec/segment (segmentation + extraction + quick analysis + fast transcribe)
+    # Quality preset: ~8 sec/segment (higher quality models take longer)
+    if preset == "quality":
+        sec_per_segment = 8
+    else:  # fast
+        sec_per_segment = 3
+
+    # Add base overhead (ingest, compose, verify)
+    base_overhead_sec = 10
+
+    estimated_runtime_sec = (estimated_segments * sec_per_segment) + base_overhead_sec
+
+    return (estimated_segments, estimated_runtime_sec)
 
 
 def determine_segment_duration(

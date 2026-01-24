@@ -554,6 +554,58 @@ class TranscribeStats:
     total: int = 0  # Total segments considered
 
 
+def save_asr_result_per_model(
+    asr_result: AsrResult,
+    session_dir: Path,
+    model_key: str,
+) -> None:
+    """Save ASR result to per-model transcript file.
+
+    Saves to: <session_dir>/outputs/asr/<model_key>/transcript.json
+
+    Format: List of per-segment results:
+    [
+        {"segment_id": "part_0001", "asr_items": [...], "asr_backend": "...", ...},
+        {"segment_id": "part_0002", "asr_items": [...], ...},
+    ]
+
+    Args:
+        asr_result: ASR transcription result
+        session_dir: Path to session directory
+        model_key: Model identifier (e.g., "whisper_local", "mock")
+    """
+    asr_dir = session_dir / "outputs" / "asr" / model_key
+    asr_dir.mkdir(parents=True, exist_ok=True)
+    transcript_path = asr_dir / "transcript.json"
+
+    # Load existing transcript or create new
+    results: list[dict] = []
+    if transcript_path.exists():
+        try:
+            with open(transcript_path, encoding="utf-8") as f:
+                results = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            results = []
+
+    # Update or append result for this segment
+    result_dict = asr_result.to_dict()
+    result_dict["segment_id"] = asr_result.segment_id
+
+    # Find and update existing entry, or append new
+    updated = False
+    for i, r in enumerate(results):
+        if r.get("segment_id") == asr_result.segment_id:
+            results[i] = result_dict
+            updated = True
+            break
+    if not updated:
+        results.append(result_dict)
+
+    # Write back
+    with open(transcript_path, "w", encoding="utf-8") as f:
+        json.dump(results, f, indent=2, ensure_ascii=False)
+
+
 def merge_asr_to_analysis(
     asr_result: AsrResult,
     analysis_path: Path,
@@ -614,13 +666,15 @@ def transcribe_session(
     device: str = "cpu",
     compute_type: str = "int8",
     beam_size: int = 5,
+    # Multi-model support
+    asr_models: list[str] | None = None,
 ) -> TranscribeStats:
     """Transcribe all segments in a session.
 
     Args:
         manifest: Session manifest
         session_dir: Path to session directory
-        backend: ASR backend ("mock" or "whisper_local")
+        backend: ASR backend ("mock" or "whisper_local") - deprecated, use asr_models
         max_seconds: Optional limit on audio duration per segment
         force: Re-transcribe even if ASR data exists
         limit: Only process first N segments
@@ -634,20 +688,19 @@ def transcribe_session(
         device: Device for inference ("cpu", "cuda", "auto")
         compute_type: Quantization type ("int8", "float16", "float32")
         beam_size: Beam size for decoding (default 5)
+        asr_models: List of ASR models to run (e.g., ["whisper_local", "mock"])
+            If None, uses backend parameter for backward compatibility
 
     Returns:
         Transcription statistics
     """
-    asr_backend = get_asr_backend(
-        backend,
-        model_size=model_size,
-        language=language,
-        vad_filter=vad_filter,
-        force_audio=force,
-        device=device,
-        compute_type=compute_type,
-        beam_size=beam_size,
-    )
+    # Determine which models to run
+    if asr_models is None:
+        # Backward compatibility: use backend parameter
+        models_to_run = [backend]
+    else:
+        models_to_run = asr_models
+
     stats = TranscribeStats()
     stats.total = len(manifest.segments)
     cumulative_duration = 0.0  # Track total transcribed duration
@@ -673,7 +726,7 @@ def transcribe_session(
                 on_progress("", "duration_limit_reached", None, stats)
             break
 
-        # Check cache
+        # Check cache (only for primary model in analysis/)
         analysis_path = session_dir / "analysis" / f"{segment.id}.json"
         if not force and analysis_path.exists():
             try:
@@ -687,34 +740,62 @@ def transcribe_session(
             except (json.JSONDecodeError, OSError):
                 pass
 
-        # Transcribe
-        try:
-            result = asr_backend.transcribe_segment(segment, session_dir, max_seconds)
+        # Transcribe with all models
+        segment_has_error = False
+        for model_idx, model_key in enumerate(models_to_run):
+            is_primary = model_idx == 0
 
-            # Merge into analysis
-            merge_asr_to_analysis(result, analysis_path, segment)
+            try:
+                # Get backend for this model
+                model_backend = get_asr_backend(
+                    model_key,
+                    model_size=model_size,
+                    language=language,
+                    vad_filter=vad_filter,
+                    force_audio=force,
+                    device=device,
+                    compute_type=compute_type,
+                    beam_size=beam_size,
+                )
 
-            if result.asr_error:
-                stats.errors += 1
-                if on_progress:
-                    on_progress(segment.id, "error", result, stats)
-            else:
-                stats.processed += 1
-                # Update cumulative duration
-                segment_duration = segment.end_time - segment.start_time
-                cumulative_duration += segment_duration
-                if on_progress:
-                    on_progress(segment.id, "done", result, stats)
+                # Transcribe
+                result = model_backend.transcribe_segment(segment, session_dir, max_seconds)
 
-        except Exception as e:
+                # Save to per-model transcript
+                save_asr_result_per_model(result, session_dir, model_key)
+
+                # If this is the primary model, also merge into analysis/
+                if is_primary:
+                    merge_asr_to_analysis(result, analysis_path, segment)
+
+                if result.asr_error:
+                    segment_has_error = True
+
+            except Exception as e:
+                segment_has_error = True
+                error_result = AsrResult(
+                    segment_id=segment.id,
+                    asr_backend=model_key,
+                    asr_error=str(e),
+                )
+                # Save error to per-model transcript
+                save_asr_result_per_model(error_result, session_dir, model_key)
+
+                # If this is the primary model, also merge into analysis/
+                if is_primary:
+                    merge_asr_to_analysis(error_result, analysis_path, segment)
+
+        # Update stats (count once per segment, not per model)
+        if segment_has_error:
             stats.errors += 1
-            error_result = AsrResult(
-                segment_id=segment.id,
-                asr_backend=backend,
-                asr_error=str(e),
-            )
-            merge_asr_to_analysis(error_result, analysis_path, segment)
             if on_progress:
-                on_progress(segment.id, "error", error_result, stats)
+                on_progress(segment.id, "error", None, stats)
+        else:
+            stats.processed += 1
+            # Update cumulative duration
+            segment_duration = segment.end_time - segment.start_time
+            cumulative_duration += segment_duration
+            if on_progress:
+                on_progress(segment.id, "done", None, stats)
 
     return stats

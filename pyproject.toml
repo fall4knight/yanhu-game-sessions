@@ -33,9 +33,17 @@ asr = [
 watcher = [
     "watchdog>=3.0",
 ]
+app = [
+    "flask>=3.0",
+    "markdown>=3.5",
+]
+build = [
+    "pyinstaller>=6.0",
+]
 
 [project.scripts]
 yanhu = "yanhu.cli:main"
+yanhu-desktop = "yanhu.launcher:run_launcher"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/yanhu"]

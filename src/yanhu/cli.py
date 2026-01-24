@@ -1084,5 +1084,128 @@ def run_queue_cmd(
         click.echo(f"  Skipped (dry-run): {result.skipped}")
 
 
+@main.command()
+@click.option(
+    "--sessions-dir",
+    "-s",
+    default="sessions",
+    type=click.Path(exists=True, file_okay=False, dir_okay=True),
+    help="Directory containing session folders (default: sessions)",
+)
+@click.option(
+    "--host",
+    "-h",
+    default="127.0.0.1",
+    help="Host to bind to (default: 127.0.0.1)",
+)
+@click.option(
+    "--port",
+    "-p",
+    default=8787,
+    type=int,
+    help="Port to bind to (default: 8787)",
+)
+@click.option(
+    "--raw-dir",
+    "-r",
+    default="raw",
+    type=click.Path(file_okay=False, dir_okay=True),
+    help="Directory for raw videos (for job submission, default: raw)",
+)
+@click.option(
+    "--worker/--no-worker",
+    default=True,
+    help="Enable background worker for job processing (default: enabled)",
+)
+@click.option(
+    "--allow-any-path",
+    is_flag=True,
+    help="Allow any raw_path (skip validation that path is under raw-dir)",
+)
+@click.option(
+    "--preset",
+    type=click.Choice(["fast", "quality"], case_sensitive=False),
+    default="fast",
+    help="Processing preset for worker: fast (default) or quality",
+)
+def app(
+    sessions_dir: str,
+    host: str,
+    port: int,
+    raw_dir: str,
+    worker: bool,
+    allow_any_path: bool,
+    preset: str,
+):
+    """Start local web app for viewing sessions and submitting jobs.
+
+    Viewer mode (--no-worker):
+      - List all sessions (newest first)
+      - View overview.md, highlights.md, timeline.md (rendered)
+      - Live progress polling (shows stage, done/total, elapsed, ETA)
+      - View manifest.json (read-only)
+
+    Trigger mode (--worker, default):
+      - All viewer features +
+      - Submit new jobs (video path, game, transcribe limits)
+      - Background worker processes jobs automatically
+      - Watch live progress on session page
+
+    Does NOT support (yet):
+      - Canceling jobs
+      - Multi-worker concurrency (single-threaded)
+      - Upload (user provides path to existing file)
+
+    Examples:
+
+      # Viewer only (no job submission)
+      yanhu app --no-worker
+
+      # Trigger mode (default, with job submission)
+      yanhu app
+
+      # Custom directories
+      yanhu app --sessions-dir sessions --raw-dir raw
+
+      # Allow any path (skip raw-dir validation)
+      yanhu app --allow-any-path
+
+      # Quality preset
+      yanhu app --preset quality
+    """
+    from yanhu.app import run_app
+
+    sessions_path = Path(sessions_dir)
+    raw_path = Path(raw_dir) if raw_dir else None
+
+    click.echo(f"Sessions directory: {sessions_path.resolve()}")
+    if worker:
+        click.echo("Mode: Trigger (job submission enabled)")
+        if raw_path:
+            click.echo(f"Raw directory: {raw_path.resolve()}")
+        click.echo(f"Preset: {preset}")
+        if allow_any_path:
+            click.echo("Path validation: disabled (--allow-any-path)")
+    else:
+        click.echo("Mode: Viewer only (--no-worker)")
+
+    click.echo(f"Starting web app at http://{host}:{port}")
+    click.echo("Press Ctrl+C to stop")
+    click.echo("")
+
+    try:
+        run_app(
+            sessions_path,
+            host=host,
+            port=port,
+            raw_dir=raw_path,
+            worker_enabled=worker,
+            allow_any_path=allow_any_path,
+            preset=preset,
+        )
+    except KeyboardInterrupt:
+        click.echo("\nStopped.")
+
+
 if __name__ == "__main__":
     main()

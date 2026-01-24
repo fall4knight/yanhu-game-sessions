@@ -1193,3 +1193,197 @@ class TestScanResult:
         assert result.found == 0
         assert result.queued == 0
         assert result.skipped == 0
+
+
+class TestProbeMedia:
+    """Test probe_media function."""
+
+    def test_probe_returns_file_size_even_without_ffprobe(self, tmp_path, monkeypatch):
+        """probe_media returns file size even if ffprobe unavailable."""
+        from yanhu.watcher import probe_media
+
+        # Create a test file
+        video_file = tmp_path / "test.mp4"
+        video_file.write_bytes(b"x" * 1024 * 100)  # 100KB
+
+        # Mock subprocess to fail (ffprobe unavailable)
+        import subprocess
+
+        def mock_run(*args, **kwargs):
+            raise FileNotFoundError("ffprobe not found")
+
+        monkeypatch.setattr(subprocess, "run", mock_run)
+
+        info = probe_media(video_file)
+
+        # Should still get file size
+        assert info.file_size_bytes == 1024 * 100
+        # Other fields should be None
+        assert info.duration_sec is None
+        assert info.video_codec is None
+
+    def test_probe_gracefully_handles_missing_file(self):
+        """probe_media handles missing file gracefully."""
+        from yanhu.watcher import probe_media
+
+        info = probe_media(Path("/nonexistent/video.mp4"))
+
+        # Should return empty MediaInfo
+        assert info.file_size_bytes is None
+        assert info.duration_sec is None
+
+
+class TestCalculateJobEstimates:
+    """Test calculate_job_estimates function."""
+
+    def test_estimate_short_video_auto_strategy(self):
+        """Short video (90s) uses 5s segments with auto strategy."""
+        from yanhu.watcher import MediaInfo, calculate_job_estimates
+
+        media = MediaInfo(duration_sec=90.0, file_size_bytes=1024 * 1024 * 50)
+
+        segments, runtime = calculate_job_estimates(media, segment_strategy="auto", preset="fast")
+
+        # 90s / 5s segments = 18 segments
+        assert segments == 18
+        # Fast: 18 * 3 + 10 = 64 seconds
+        assert runtime == 64
+
+    def test_estimate_medium_video_auto_strategy(self):
+        """Medium video (10min) uses 15s segments with auto strategy."""
+        from yanhu.watcher import MediaInfo, calculate_job_estimates
+
+        media = MediaInfo(duration_sec=600.0, file_size_bytes=1024 * 1024 * 200)
+
+        segments, runtime = calculate_job_estimates(media, segment_strategy="auto", preset="fast")
+
+        # 600s / 15s segments = 40 segments
+        assert segments == 40
+        # Fast: 40 * 3 + 10 = 130 seconds
+        assert runtime == 130
+
+    def test_estimate_long_video_auto_strategy(self):
+        """Long video (20min) uses 30s segments with auto strategy."""
+        from yanhu.watcher import MediaInfo, calculate_job_estimates
+
+        media = MediaInfo(duration_sec=1200.0, file_size_bytes=1024 * 1024 * 400)
+
+        segments, runtime = calculate_job_estimates(media, segment_strategy="auto", preset="fast")
+
+        # 1200s / 30s segments = 40 segments
+        assert segments == 40
+        # Fast: 40 * 3 + 10 = 130 seconds
+        assert runtime == 130
+
+    def test_estimate_quality_preset_slower(self):
+        """Quality preset has higher runtime estimate."""
+        from yanhu.watcher import MediaInfo, calculate_job_estimates
+
+        media = MediaInfo(duration_sec=90.0, file_size_bytes=1024 * 1024 * 50)
+
+        segments_fast, runtime_fast = calculate_job_estimates(
+            media, segment_strategy="auto", preset="fast"
+        )
+        segments_quality, runtime_quality = calculate_job_estimates(
+            media, segment_strategy="auto", preset="quality"
+        )
+
+        # Same number of segments
+        assert segments_fast == segments_quality == 18
+        # Quality takes longer
+        # Quality: 18 * 8 + 10 = 154 seconds
+        assert runtime_quality == 154
+        assert runtime_quality > runtime_fast
+
+    def test_estimate_no_duration_returns_zeros(self):
+        """No duration returns (0, 0)."""
+        from yanhu.watcher import MediaInfo, calculate_job_estimates
+
+        media = MediaInfo(file_size_bytes=1024 * 1024)
+
+        segments, runtime = calculate_job_estimates(media, segment_strategy="auto", preset="fast")
+
+        assert segments == 0
+        assert runtime == 0
+
+    def test_estimate_explicit_strategy(self):
+        """Explicit strategy (short/medium/long) uses fixed segment duration."""
+        from yanhu.watcher import MediaInfo, calculate_job_estimates
+
+        media = MediaInfo(duration_sec=100.0, file_size_bytes=1024 * 1024)
+
+        # Short strategy: 5s segments
+        segments_short, _ = calculate_job_estimates(media, segment_strategy="short", preset="fast")
+        assert segments_short == 20  # ceil(100 / 5)
+
+        # Medium strategy: 15s segments
+        segments_medium, _ = calculate_job_estimates(
+            media, segment_strategy="medium", preset="fast"
+        )
+        assert segments_medium == 7  # ceil(100 / 15)
+
+        # Long strategy: 30s segments
+        segments_long, _ = calculate_job_estimates(media, segment_strategy="long", preset="fast")
+        assert segments_long == 4  # ceil(100 / 30)
+
+    def test_estimate_uses_metrics_when_available(self, tmp_path):
+        """Estimate uses metrics for better accuracy when available."""
+        from yanhu.metrics import MetricsStore
+        from yanhu.watcher import MediaInfo, calculate_job_estimates
+
+        # Create metrics file with observed data
+        metrics_file = tmp_path / "_metrics.json"
+        store = MetricsStore(metrics_file)
+        # Store observed rate of 0.4 seg/s for fast preset with 5s segments
+        store.update_metrics(preset="fast", segment_duration=5, observed_rate=0.4)
+
+        # Create media info for 90s video (will use 5s segments with auto strategy)
+        media = MediaInfo(duration_sec=90.0, file_size_bytes=1024 * 1024)
+
+        # Calculate with metrics
+        segments, runtime = calculate_job_estimates(
+            media, segment_strategy="auto", preset="fast", metrics_file=metrics_file
+        )
+
+        # 90s / 5s = 18 segments
+        assert segments == 18
+        # With metrics: 10 (overhead) + 18 / 0.4 = 10 + 45 = 55 seconds
+        assert runtime == 55
+
+    def test_estimate_fallback_when_no_metrics(self, tmp_path):
+        """Estimate falls back to heuristic when metrics unavailable."""
+        from yanhu.watcher import MediaInfo, calculate_job_estimates
+
+        # Empty metrics file
+        metrics_file = tmp_path / "_metrics.json"
+
+        media = MediaInfo(duration_sec=90.0, file_size_bytes=1024 * 1024)
+
+        segments, runtime = calculate_job_estimates(
+            media, segment_strategy="auto", preset="fast", metrics_file=metrics_file
+        )
+
+        # 90s / 5s = 18 segments
+        assert segments == 18
+        # Without metrics: use heuristic (3 sec/segment)
+        # 18 * 3 + 10 = 64 seconds
+        assert runtime == 64
+
+    def test_estimate_fallback_when_metrics_file_missing(self):
+        """Estimate falls back when metrics file doesn't exist."""
+        from pathlib import Path
+
+        from yanhu.watcher import MediaInfo, calculate_job_estimates
+
+        media = MediaInfo(duration_sec=90.0, file_size_bytes=1024 * 1024)
+
+        segments, runtime = calculate_job_estimates(
+            media,
+            segment_strategy="auto",
+            preset="fast",
+            metrics_file=Path("/nonexistent/_metrics.json"),
+        )
+
+        # Should use heuristic fallback
+        assert segments == 18
+        assert runtime == 64

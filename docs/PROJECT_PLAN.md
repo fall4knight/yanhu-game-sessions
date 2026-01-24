@@ -361,82 +361,42 @@ yanhu-game-sessions/
 
 ---
 
-### Milestone 9.0: Desktop App MVP (macOS/Windows)
+### Milestone 9.0: Desktop Distribution MVP (macOS/Windows) — Done
 
-**Scope**: Minimal viable GUI to lower the terminal barrier. Wrap existing CLI/queue/watch/run-queue with PySide6/PyQt—NO pipeline rewrite. Focus on core workflow: select directories → start watcher → monitor queue → open sessions.
+**Scope**: Ship a **standalone desktop distribution** for the existing local Web App (viewer + trigger + upload + progress + sessions).  
+No pipeline rewrite, no native GUI redesign—focus on **one-click launch** for non-programmers.
 
-**Definition of Done**: User can launch a standalone executable (macOS `.app` / Windows `.exe`), configure directories, start auto-run watcher, see queue status update, and open completed session highlights—all without touching terminal.
+**Definition of Done**: A user can download a zip from GitHub Releases, double‑click a macOS `.app` / Windows `.exe`, the browser opens automatically to `http://127.0.0.1:8787`, and they can drag & drop a video to process and view session outputs—without installing Python or using a terminal.
 
-**Checklist (MVP - 1-2 weeks)**:
-- [ ] **Directory Selection**
-  - [ ] UI for selecting raw-dir (support multiple directories via Add/Remove buttons)
-  - [ ] UI for selecting output-dir
-  - [ ] UI for selecting queue-dir
-  - [ ] Persist directory configuration in local config file (e.g., `~/.yanhu/gui_config.json`)
-- [ ] **Watcher Control**
-  - [ ] Start/Stop button with status indicator (running/stopped)
-  - [ ] Interval input field (seconds, default 10) for `--interval N` mode
-  - [ ] Auto-run toggle switch with **explicit warning**: "⚠️ Auto-run will consume API tokens"
-  - [ ] Auto-run limit input field (default 5 jobs per scan)
-  - [ ] Display current watcher state: interval, auto-run enabled/disabled, limit
-- [ ] **Queue Status Display**
-  - [ ] Read from `pending.jsonl` and `state.json` (poll every 5 seconds)
-  - [ ] Job table with columns: status, filename, game, timestamp
-  - [ ] Status filter buttons: All / Pending / Processing / Done / Failed
-  - [ ] Auto-refresh toggle (on/off)
-- [ ] **Session Browser**
-  - [ ] List completed sessions from output-dir (scan for `manifest.json` files)
-  - [ ] Display: session_id, game, duration, timestamp
-  - [ ] Buttons per session:
-    - [ ] "Open Overview" → system default app for `.md`
-    - [ ] "Open Timeline" → system default app
-    - [ ] "Open Highlights" → system default app
-    - [ ] "Reveal in Finder/Explorer" → open session folder
-- [ ] **API Key Management (Simple)**
-  - [ ] Input fields for Claude API Key and OpenAI API Key
-  - [ ] Store in local config file: `~/.yanhu/api_keys.json` (NOT in repo)
-  - [ ] "Clear Key" button for each API
-  - [ ] Status indicator: ✅ Configured / ❌ Not configured
-  - [ ] **Warning label**: "Keys are stored in your home directory, NOT in git"
-- [ ] **Error Handling**
-  - [ ] Recent errors panel (show last 10 errors from job outputs)
-  - [ ] Error type detection with user-friendly messages:
-    - [ ] JSON parse failure: "❌ Analysis failed - invalid JSON response"
-    - [ ] Raw file missing: "❌ Video file not found - may have been moved"
-    - [ ] Generic error: show first 100 chars of error message
-  - [ ] "Retry Job" button (requeue failed job to pending)
-- [ ] **Dry-Run Toggle**
-  - [ ] Checkbox/toggle for dry-run mode
-  - [ ] When enabled, watcher uses `--auto-run-dry-run` flag
-  - [ ] Label: "Preview jobs without running pipeline"
-- [ ] **Technology Stack (Python GUI)**
-  - [ ] Use PySide6 or PyQt6 for cross-platform GUI
-  - [ ] Direct import of existing `yanhu.watcher`, `yanhu.queue`, `yanhu.manifest` modules
-  - [ ] Subprocess calls to `yanhu.cli` commands (watch, run-queue)
-  - [ ] Multi-threading: watcher/queue in background thread, UI in main thread
-- [ ] **Packaging (Basic)**
-  - [ ] PyInstaller one-file or one-dir bundle
-  - [ ] macOS: portable `.app` bundle (no code signing for MVP)
-  - [ ] Windows: portable `.exe` (no installer for MVP)
-  - [ ] Include ffmpeg check on startup with install instructions if missing
-  - [ ] Version display in About dialog or title bar
+**Checklist (MVP)**:
+- [x] Desktop launcher entrypoint (`yanhu.launcher`) that:
+  - [x] Checks `ffmpeg/ffprobe` availability and shows clear install guidance if missing
+  - [x] Creates default data dirs on first run: `~/yanhu-sessions/{raw,sessions}`
+  - [x] Starts the local server and auto-opens the default browser
+- [x] UI safety signals:
+  - [x] Visible “Local processing only” banner/header
+  - [x] Warning banner when ffmpeg is missing
+- [x] Packaging (distribution-first):
+  - [x] PyInstaller spec (`yanhu.spec`) builds macOS `.app` and Windows `.exe`
+  - [x] Local build scripts (`scripts/build_desktop.sh`, `scripts/build_desktop.bat`)
+  - [x] Build docs (`docs/BUILD.md`, `scripts/README.md`)
+- [x] Release automation:
+  - [x] GitHub Actions workflow builds artifacts on tag push and uploads to GitHub Releases
+- [x] Non-programmer docs:
+  - [x] README “Non‑Programmer Quickstart” (Chinese + English)
+- [ ] Code signing / notarization (defer to M9.1)
+- [ ] Installer packages (.dmg/.msi) + auto-updater (defer to M9.1)
+- [ ] Bundle ffmpeg binaries (license/compliance review; defer to M9.1)
+- [ ] Hide console window / tray integration (defer to M9.1)
 
 **Technology Decision (MVP)**:
-- **Committed to Option A: PySide6/PyQt + PyInstaller** for M9.0
-  - Fastest path to executable (1-2 weeks)
-  - Direct Python module reuse (no IPC complexity)
-  - Defer modern UI polish to M9.1
+- Committed to **Distribution-first**: reuse the local Web UI + PyInstaller launcher.
+- Optional follow-up: embed the Web UI into a native shell (QtWebEngine/Tauri/Electron) under M9.1+ if needed.
 
-**Security & Compliance (MVP)**:
-- **No video upload**: All processing local. UI shows "Local processing only" label.
-- **API keys**: Stored in `~/.yanhu/api_keys.json` (user home directory), NOT in repo.
-- **Git safety**: GUI config files (`~/.yanhu/`) are outside repo. Sessions output-dir defaults to outside repo. UI shows warning if user selects repo-internal path.
-- **Token cost transparency**:
-  - Auto-run toggle shows warning: "⚠️ Auto-run will consume API tokens. Use dry-run to preview."
-  - Dry-run toggle clearly labeled.
-- **User consent**: First-run: "Welcome! All video processing happens locally. API keys required only for cloud AI features."
+**Security & Privacy (MVP)**:
+- Local processing by default; no server upload path.
+- Any API keys remain local to the user machine and must never be stored in-repo.
 
----
 
 ### Milestone 9.1: Desktop App Polish (Post-MVP)
 
@@ -546,7 +506,18 @@ yanhu-game-sessions/
 | 2026-01-23 | Presets (fast/quality) | Done | PRESETS dict (fast: 3frames/3facts/base/int8, quality: 6frames/5facts/small/float32); RunQueueConfig.resolve_config() 支持覆盖; job.outputs.run_config 记录实际参数; --preset CLI 选项; 15 preset tests, 583 total |
 | 2026-01-23 | Adaptive Segment Duration | Done | SEGMENT_STRATEGIES dict (short:5s, medium:15s, long:30s); get_video_duration() via ffprobe; determine_segment_duration() with auto strategy (≤3min→5s, ≤15min→15s, >15min→30s); --segment-strategy/--segment-duration CLI options; process_job() calls determine_segment_duration(); 28 segment tests, 611 total; RUNBOOK section 4d |
 | 2026-01-23 | Transcribe Limits (Partial-by-Limit) | Done | --transcribe-limit N / --transcribe-max-seconds S flags; transcribe first N segments (not skip all); manifest.transcribe_coverage stores {processed, total, skipped_limit}; overview.md shows "⚠️ PARTIAL SESSION" marker with coverage stats; compose succeeds with missing transcripts; 5 tests, 643 total |
-| TBD | M9: Desktop App Wrapper | Not Started | Stretch (after v0.3 stability); M9.0 MVP: PySide6 GUI (1-2周, 核心流程); M9.1 Polish: Keychain/watchdog/cost estimator/installer; Option B (Tauri) 可选迁移 |
+| 2026-01-23 | Progress Heartbeat (Long-Video UX) | Done | progress.json at <session_dir>/outputs/progress.json; atomic writes; schema: {session_id, stage, done, total, elapsed_sec, eta_sec, updated_at (UTC), coverage?}; ProgressTracker class; updates during transcribe (per segment); console prints concise progress every 5 segments; finalized to "compose" then "done"; handles edge cases (total=0, limit); 10 tests, 653 total |
+| 2026-01-23 | Verify Gate Strengthening | Done | yanhu.verify module with validate_outputs(); validates progress.json exists and is valid (required fields, type checks, done≤total, stage∈{transcribe,compose,done}, stage=done→done==total, ISO-8601 updated_at); validates partial-by-limit consistency (manifest.transcribe_coverage→overview PARTIAL marker+stats, progress.json coverage matches manifest); 22 tests, 675 total |
+| 2026-01-23 | App v0 (Viewer) | Done | CLI: `yanhu app --sessions-dir <path> --host 127.0.0.1 --port 8787`; Routes: GET / (list sessions, newest first), GET /s/{id} (tabs: overview/highlights/timeline/manifest), GET /s/{id}/progress (JSON, 404 if missing), GET /s/{id}/manifest (JSON); UI polls /progress every 1s when stage≠done; markdown rendered safely; minimal Flask+markdown deps; Does NOT support: upload/trigger pipeline; 11 tests, 686 total |
+| 2026-01-23 | App v1 (Trigger) | Done | Extended CLI: `yanhu app --raw-dir <path> --worker/--no-worker --allow-any-path --preset fast`; New Job form on home page (raw_path, game, transcribe_limit, transcribe_max_seconds); POST /api/jobs validates path & enqueues; BackgroundWorker processes jobs (single-threaded, polls queue every 2s, reuses process_job); job status: pending→processing→done/failed; sessions & jobs unified list; Does NOT support: cancel jobs, multi-worker, upload (user provides path); 7 tests, 693 total |
+| 2026-01-23 | App v1.1 (Observability + Cancel) | Done | Per-job JSON files in _queue/jobs/<job_id>.json (atomic writes); job_id auto-generated (job_YYYYMMDD_HHMMSS_hash8); Routes: GET /jobs/<job_id> (HTML detail page with status/metadata/progress/cancel button), GET /api/jobs/<job_id> (JSON), POST /api/jobs/<job_id>/cancel (pending→cancelled, processing→cancel_requested); Worker skips cancelled jobs, checks cancel_requested before/after processing; job status state machine: pending→processing→done/failed/cancelled, cancel_requested→cancelled; home page links to job detail; Cancel semantics: best-effort (pending=immediate skip, processing=after current step completes); 7 new tests, 699 total |
+| 2026-01-23 | App v1.2 (Upload/Drag&Drop) | Done | POST /api/uploads (multipart/form-data) accepts file + optional game/preset/transcribe_limit/transcribe_max_seconds; saves to --raw-dir with unique name (YYYYMMDD_HHMMSS_hash8_sanitized_filename); validates extension (.mp4/.mov/.mkv/.webm); atomic write (tmp + rename); creates job automatically; redirects to /jobs/<job_id>; UI: drag&drop area + file picker on home page; MAX_CONTENT_LENGTH=5GB (configurable); path traversal sanitized (os.path.basename); 413 error for oversized files; uploaded files deletable via cancel; 6 new tests, 705 total |
+| 2026-01-23 | App v1.3 (Media Preflight) | Done | probe_media() via ffprobe JSON output extracts: duration_sec, file_size_bytes, container, video_codec, audio_codec, width, height, fps, bitrate_kbps; graceful degradation if ffprobe unavailable (file_size only); MediaInfo dataclass; calculate_job_estimates() computes estimated_segments (ceil(duration/segment_duration)) and estimated_runtime_sec (segments * sec_per_segment + overhead); job.media/estimated_segments/estimated_runtime_sec stored in per-job JSON; UI displays "Media Info" and "Estimates" tables on job detail page with formatted values; probing happens after upload and existing-file job creation; does NOT affect pipeline behavior; 12 new tests (4 app + 8 watcher), 717 total |
+| 2026-01-23 | App v1.4 (ETA Calibration + Metrics) | Done | MetricsStore in _metrics.json persists observed throughput (seg/s) per preset+segment_duration_bucket (auto_short/medium/long); BackgroundWorker._update_metrics() updates after job done using transcribe_processed/elapsed_sec; EMA smoothing (alpha=0.2): avg_rate_ema = 0.2*observed + 0.8*old; calculate_job_estimates() uses metrics when available (runtime = overhead + segments/metrics_rate), falls back to heuristic; UI JavaScript computes calibrated ETA: rate_ema = 0.2*current_rate + 0.8*rate_ema, eta = (total-done)/rate_ema; displays "Observed rate", "Calibrated ETA", "Est. finish time"; metrics are local-only advisory data; does NOT change pipeline behavior; 19 new tests (2 app + 3 watcher + 14 metrics), 736 total |
+| 2026-01-23 | Multi-model ASR v0 | Done | asr_registry.py defines ASR_MODELS (mock, whisper_local) with validate_asr_models(); job.asr_models (comma-separated) accepted in UI forms and validated; transcribe_session(asr_models=[...]) runs models sequentially per segment; per-model outputs saved to outputs/asr/<model_key>/transcript.json (list of segment results); primary model (first in list) also saved to analysis/ for backward compat; manifest.asr_models records models run; UI "Transcripts" tab: GET /s/<session_id>/transcripts endpoint, model selector buttons, per-segment display with text/timestamps; best-effort error handling (one model fails → continue others); compose uses primary model only (v0 limitation); 8 new tests (6 registry + 5 transcriber), 749 total; Does NOT: implement qwen3 ASR, add side-by-side diff view, run models in parallel |
+| 2026-01-23 | M9.0: Desktop Distribution MVP | Done | launcher.py desktop entrypoint: starts Flask app, ensures ~/yanhu-sessions/{sessions,raw} dirs exist, auto-opens browser to http://127.0.0.1:8787, checks ffmpeg availability and shows warning banner if missing; PyInstaller packaging: yanhu.spec builds macOS .app and Windows .exe (no code signing/installer for MVP); UI footer shows "🔒 Local processing only"; ffmpeg warning banner with install instructions if not available; GitHub Actions workflow builds macOS/Windows artifacts on tag push; pyproject.toml adds [build] optional deps (pyinstaller), yanhu-desktop entry point; scripts/build_desktop.sh/.bat for local builds; docs/BUILD.md + RELEASE_NOTES_v0.1.0.md + SMOKE_TEST_CHECKLIST.md; 6 new launcher tests, 761 total; Does NOT: redesign UI, add code signing, create installer, bundle ffmpeg; Distribution-first approach: reuses existing Web UI rather than building native GUI |
+| TBD | Qwen3 Analyze Backend | Not Started | Future milestone: Add qwen3 as optional analyze backend (alternative to claude) or ASR backend; --analyze-backend qwen3 CLI flag; qwen3-specific prompt templates; cost comparison docs |
+| TBD | M9.1: Desktop Polish | Not Started | Code signing (macOS/Windows); Installer packages (.dmg, .msi); Auto-updater; Keychain integration for API keys; Menu bar/system tray icon; Crash reporting |
 
 ---
 
