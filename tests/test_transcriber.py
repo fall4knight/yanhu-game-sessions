@@ -15,6 +15,7 @@ from yanhu.transcriber import (
     _ensure_monotonic,
     get_asr_backend,
     merge_asr_to_analysis,
+    save_asr_result_per_model,
     transcribe_session,
 )
 
@@ -1104,3 +1105,150 @@ class TestAsrConfigInAnalysis:
         assert data["asr_config"]["language"] == "yue"
         assert data["asr_config"]["beam_size"] == 10
         assert data["asr_config"]["vad_filter"] is False
+
+
+class TestMultiModelTranscription:
+    """Test multi-model ASR transcription."""
+
+    def test_save_asr_result_per_model(self, tmp_path):
+        """Should save per-model transcript to outputs/asr/<model>/transcript.json."""
+        session_dir = tmp_path / "session"
+        session_dir.mkdir()
+
+        result = AsrResult(
+            segment_id="part_0001",
+            asr_items=[AsrItem(text="Hello", t_start=0.0, t_end=1.0)],
+            asr_backend="mock",
+        )
+
+        save_asr_result_per_model(result, session_dir, "mock")
+
+        # Verify file created
+        transcript_file = session_dir / "outputs" / "asr" / "mock" / "transcript.json"
+        assert transcript_file.exists()
+
+        # Verify content
+        with open(transcript_file, encoding="utf-8") as f:
+            data = json.load(f)
+
+        assert len(data) == 1
+        assert data[0]["segment_id"] == "part_0001"
+        assert data[0]["asr_backend"] == "mock"
+        assert len(data[0]["asr_items"]) == 1
+        assert data[0]["asr_items"][0]["text"] == "Hello"
+
+    def test_save_multiple_segments_per_model(self, tmp_path):
+        """Should append multiple segments to same transcript file."""
+        session_dir = tmp_path / "session"
+        session_dir.mkdir()
+
+        # Save first segment
+        result1 = AsrResult(
+            segment_id="part_0001",
+            asr_items=[AsrItem(text="First", t_start=0.0, t_end=1.0)],
+            asr_backend="mock",
+        )
+        save_asr_result_per_model(result1, session_dir, "mock")
+
+        # Save second segment
+        result2 = AsrResult(
+            segment_id="part_0002",
+            asr_items=[AsrItem(text="Second", t_start=1.0, t_end=2.0)],
+            asr_backend="mock",
+        )
+        save_asr_result_per_model(result2, session_dir, "mock")
+
+        # Verify both segments in file
+        transcript_file = session_dir / "outputs" / "asr" / "mock" / "transcript.json"
+        with open(transcript_file, encoding="utf-8") as f:
+            data = json.load(f)
+
+        assert len(data) == 2
+        assert data[0]["segment_id"] == "part_0001"
+        assert data[1]["segment_id"] == "part_0002"
+
+    def test_transcribe_session_with_multiple_models(self, tmp_path):
+        """Should transcribe with multiple models."""
+        # Create session structure
+        session_dir = tmp_path / "session"
+        session_dir.mkdir()
+        segments_dir = session_dir / "segments"
+        segments_dir.mkdir()
+
+        # Create manifest
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-23T00:00:00",
+            source_video="/test/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=10,
+            segments=[
+                SegmentInfo(
+                    id="part_0001",
+                    start_time=0.0,
+                    end_time=10.0,
+                    video_path="segments/part_0001.mp4",
+                )
+            ],
+        )
+
+        # Transcribe with both mock and mock (to test multiple models)
+        stats = transcribe_session(
+            manifest=manifest,
+            session_dir=session_dir,
+            asr_models=["mock", "mock"],  # Use mock twice for testing
+            force=True,
+        )
+
+        # Should process once (not duplicated per model)
+        assert stats.processed == 1
+        assert stats.total == 1
+
+        # Verify per-model outputs exist
+        mock_transcript = session_dir / "outputs" / "asr" / "mock" / "transcript.json"
+        assert mock_transcript.exists()
+
+        # Verify primary model also saved to analysis/
+        analysis_file = session_dir / "analysis" / "part_0001.json"
+        assert analysis_file.exists()
+
+    def test_transcribe_session_backward_compat_no_asr_models(self, tmp_path):
+        """Should work without asr_models parameter (backward compatibility)."""
+        session_dir = tmp_path / "session"
+        session_dir.mkdir()
+        segments_dir = session_dir / "segments"
+        segments_dir.mkdir()
+
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-23T00:00:00",
+            source_video="/test/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=10,
+            segments=[
+                SegmentInfo(
+                    id="part_0001",
+                    start_time=0.0,
+                    end_time=10.0,
+                    video_path="segments/part_0001.mp4",
+                )
+            ],
+        )
+
+        # Transcribe without asr_models (should use backend parameter)
+        stats = transcribe_session(
+            manifest=manifest,
+            session_dir=session_dir,
+            backend="mock",
+            force=True,
+        )
+
+        assert stats.processed == 1
+
+        # Verify primary model saved to analysis/
+        analysis_file = session_dir / "analysis" / "part_0001.json"
+        assert analysis_file.exists()
+
+        # Verify per-model output also exists
+        mock_transcript = session_dir / "outputs" / "asr" / "mock" / "transcript.json"
+        assert mock_transcript.exists()

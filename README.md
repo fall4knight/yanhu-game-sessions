@@ -37,6 +37,60 @@ cat sessions/demo_run01_*/timeline.md
 
 ---
 
+## 🖥️ 非程序员快速上手（桌面应用）
+
+**适用人群**：不熟悉命令行的用户
+
+**前置要求**：安装 ffmpeg（视频处理必需）
+- **macOS**: `brew install ffmpeg`
+- **Windows**: 下载并安装 [ffmpeg](https://ffmpeg.org/download.html)
+
+**步骤**：
+1. 下载桌面应用（从 GitHub Releases 或构建产物）
+   - macOS: `Yanhu-Sessions-macOS.zip` → 解压后双击 `Yanhu Sessions.app`
+   - Windows: `Yanhu-Sessions-Windows.zip` → 解压后双击 `yanhu.exe`
+
+2. 应用自动启动，浏览器打开 `http://127.0.0.1:8787`
+
+3. 拖拽视频文件到上传区，或选择已有视频文件路径
+
+4. 等待处理完成，查看时间线、精彩集锦等产物
+
+**数据存储位置**：`~/yanhu-sessions/`（可在应用中查看）
+
+**注意**：
+- 所有处理均在本地完成，不上传到云端
+- 如需 Claude Vision 分析，需要设置 `ANTHROPIC_API_KEY` 环境变量
+
+---
+
+## 🖥️ Non-Programmer Quickstart (Desktop App)
+
+**For**: Users not familiar with command line
+
+**Prerequisites**: Install ffmpeg (required for video processing)
+- **macOS**: `brew install ffmpeg`
+- **Windows**: Download and install [ffmpeg](https://ffmpeg.org/download.html)
+
+**Steps**:
+1. Download desktop app (from GitHub Releases or build artifacts)
+   - macOS: `Yanhu-Sessions-macOS.zip` → Extract and double-click `Yanhu Sessions.app`
+   - Windows: `Yanhu-Sessions-Windows.zip` → Extract and double-click `yanhu.exe`
+
+2. App starts automatically, browser opens at `http://127.0.0.1:8787`
+
+3. Drag and drop video file to upload area, or select existing video file path
+
+4. Wait for processing to complete, view timeline, highlights, etc.
+
+**Data storage location**: `~/yanhu-sessions/` (viewable in app)
+
+**Note**:
+- All processing is done locally, nothing uploaded to cloud
+- For Claude Vision analysis, set `ANTHROPIC_API_KEY` environment variable
+
+---
+
 ## v0.1 范围（后置版）
 
 以单局游戏 / 单段剧情为单位，完成以下 pipeline：

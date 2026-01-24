@@ -1,6 +1,9 @@
 """Tests for process_job output validation (P0)."""
 
-from yanhu.watcher import QueueJob, process_job, validate_outputs
+import json
+
+from yanhu.verify import validate_outputs
+from yanhu.watcher import QueueJob, process_job
 
 
 class TestOutputValidation:
@@ -11,10 +14,34 @@ class TestOutputValidation:
         session_dir = tmp_path / "session"
         session_dir.mkdir()
 
+        # Create manifest.json
+        manifest_data = {
+            "session_id": "test",
+            "created_at": "2026-01-24T00:00:00",
+            "source_video": "/path/to/video.mp4",
+            "source_video_local": "source/video.mp4",
+            "segment_duration_seconds": 10,
+            "segments": [],
+        }
+        (session_dir / "manifest.json").write_text(json.dumps(manifest_data))
+
         # Create valid output files
         (session_dir / "overview.md").write_text("# Overview\n\nContent here")
         (session_dir / "timeline.md").write_text("### part_0001\n\nTimeline content")
         (session_dir / "highlights.md").write_text("# Highlights\n\n- [00:01:23] Quote here")
+
+        # Create valid progress.json
+        outputs_dir = session_dir / "outputs"
+        outputs_dir.mkdir()
+        progress_data = {
+            "session_id": "test",
+            "stage": "done",
+            "done": 1,
+            "total": 1,
+            "elapsed_sec": 1.0,
+            "updated_at": "2026-01-24T00:00:00+00:00",
+        }
+        (outputs_dir / "progress.json").write_text(json.dumps(progress_data))
 
         valid, error = validate_outputs(session_dir)
         assert valid
@@ -24,6 +51,29 @@ class TestOutputValidation:
         """Validate outputs fails when file is missing."""
         session_dir = tmp_path / "session"
         session_dir.mkdir()
+
+        # Create manifest.json and progress.json
+        manifest_data = {
+            "session_id": "test",
+            "created_at": "2026-01-24T00:00:00",
+            "source_video": "/path/to/video.mp4",
+            "source_video_local": "source/video.mp4",
+            "segment_duration_seconds": 10,
+            "segments": [],
+        }
+        (session_dir / "manifest.json").write_text(json.dumps(manifest_data))
+
+        outputs_dir = session_dir / "outputs"
+        outputs_dir.mkdir()
+        progress_data = {
+            "session_id": "test",
+            "stage": "done",
+            "done": 1,
+            "total": 1,
+            "elapsed_sec": 1.0,
+            "updated_at": "2026-01-24T00:00:00+00:00",
+        }
+        (outputs_dir / "progress.json").write_text(json.dumps(progress_data))
 
         # Only create 2 of 3 required files
         (session_dir / "overview.md").write_text("# Overview")
@@ -38,6 +88,29 @@ class TestOutputValidation:
         session_dir = tmp_path / "session"
         session_dir.mkdir()
 
+        # Create manifest.json and progress.json
+        manifest_data = {
+            "session_id": "test",
+            "created_at": "2026-01-24T00:00:00",
+            "source_video": "/path/to/video.mp4",
+            "source_video_local": "source/video.mp4",
+            "segment_duration_seconds": 10,
+            "segments": [],
+        }
+        (session_dir / "manifest.json").write_text(json.dumps(manifest_data))
+
+        outputs_dir = session_dir / "outputs"
+        outputs_dir.mkdir()
+        progress_data = {
+            "session_id": "test",
+            "stage": "done",
+            "done": 1,
+            "total": 1,
+            "elapsed_sec": 1.0,
+            "updated_at": "2026-01-24T00:00:00+00:00",
+        }
+        (outputs_dir / "progress.json").write_text(json.dumps(progress_data))
+
         (session_dir / "overview.md").write_text("# Overview")
         (session_dir / "timeline.md").write_text("### part_0001")
         (session_dir / "highlights.md").write_text("# Highlights\n\nNo entries here")
@@ -51,6 +124,29 @@ class TestOutputValidation:
         session_dir = tmp_path / "session"
         session_dir.mkdir()
 
+        # Create manifest.json and progress.json
+        manifest_data = {
+            "session_id": "test",
+            "created_at": "2026-01-24T00:00:00",
+            "source_video": "/path/to/video.mp4",
+            "source_video_local": "source/video.mp4",
+            "segment_duration_seconds": 10,
+            "segments": [],
+        }
+        (session_dir / "manifest.json").write_text(json.dumps(manifest_data))
+
+        outputs_dir = session_dir / "outputs"
+        outputs_dir.mkdir()
+        progress_data = {
+            "session_id": "test",
+            "stage": "done",
+            "done": 1,
+            "total": 1,
+            "elapsed_sec": 1.0,
+            "updated_at": "2026-01-24T00:00:00+00:00",
+        }
+        (outputs_dir / "progress.json").write_text(json.dumps(progress_data))
+
         (session_dir / "overview.md").write_text("# Overview")
         (session_dir / "timeline.md").write_text("# Timeline\n\nNo segments")
         (session_dir / "highlights.md").write_text("- [00:01:23] Quote")
@@ -63,6 +159,29 @@ class TestOutputValidation:
         """Validate outputs succeeds when timeline has quote line."""
         session_dir = tmp_path / "session"
         session_dir.mkdir()
+
+        # Create manifest.json and progress.json
+        manifest_data = {
+            "session_id": "test",
+            "created_at": "2026-01-24T00:00:00",
+            "source_video": "/path/to/video.mp4",
+            "source_video_local": "source/video.mp4",
+            "segment_duration_seconds": 10,
+            "segments": [],
+        }
+        (session_dir / "manifest.json").write_text(json.dumps(manifest_data))
+
+        outputs_dir = session_dir / "outputs"
+        outputs_dir.mkdir()
+        progress_data = {
+            "session_id": "test",
+            "stage": "done",
+            "done": 1,
+            "total": 1,
+            "elapsed_sec": 1.0,
+            "updated_at": "2026-01-24T00:00:00+00:00",
+        }
+        (outputs_dir / "progress.json").write_text(json.dumps(progress_data))
 
         (session_dir / "overview.md").write_text("# Overview")
         (session_dir / "timeline.md").write_text("# Timeline\n\n- quote: Some quote here")

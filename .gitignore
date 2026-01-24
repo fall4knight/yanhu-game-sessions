@@ -66,3 +66,13 @@ htmlcov/
 # Ruff
 .ruff_cache/
 uv.lock
+
+# PyInstaller
+*.spec.bak
+*.manifest
+*.spec~
+_queue/
+_metrics.json
+RELEASE_COMMANDS_v0.1.0.sh
+SMOKE_TEST_RESULTS_v0.1.0.md
+STEP_13_EXECUTION_GUIDE.md

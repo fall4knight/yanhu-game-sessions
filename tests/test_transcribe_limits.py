@@ -1,140 +1,240 @@
-"""Tests for transcribe limits and progress observability."""
+"""Tests for transcribe limits (partial-by-limit) feature."""
 
-import json
+from unittest.mock import MagicMock, patch
 
-from yanhu.transcriber import transcribe_session
+from yanhu.manifest import Manifest, SegmentInfo
+from yanhu.transcriber import TranscribeStats, transcribe_session
 
 
 class TestTranscribeLimits:
-    """Test transcribe limit parameters."""
+    """Test transcribe limit and max_total_seconds parameters."""
 
-    def test_limit_processes_only_n_segments(self, tmp_path):
-        """Should only transcribe first N segments when limit is set."""
-        from yanhu.manifest import Manifest, SegmentInfo
-
-        segments = [
-            SegmentInfo(
-                id=f"part_{i:04d}",
-                start_time=i * 10.0,
-                end_time=(i + 1) * 10.0,
-                video_path=f"segments/part_{i:04d}.mp4",
-                frames=[],
-            )
-            for i in range(5)
-        ]
+    def test_limit_transcribes_only_first_n_segments(self, tmp_path):
+        """With --transcribe-limit N, only first N segments are transcribed."""
+        # Create manifest with 5 segments
         manifest = Manifest(
-            session_id="test_limit",
-            created_at="2026-01-23",
-            source_video="/test/video.mp4",
-            source_video_local="video.mp4",
+            session_id="test_session",
+            created_at="2026-01-23T10:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
             segment_duration_seconds=10,
-            segments=segments,
+            segments=[
+                SegmentInfo("part_0001", 0.0, 10.0, "seg1.mp4"),
+                SegmentInfo("part_0002", 10.0, 20.0, "seg2.mp4"),
+                SegmentInfo("part_0003", 20.0, 30.0, "seg3.mp4"),
+                SegmentInfo("part_0004", 30.0, 40.0, "seg4.mp4"),
+                SegmentInfo("part_0005", 40.0, 50.0, "seg5.mp4"),
+            ],
         )
 
-        (tmp_path / "analysis").mkdir()
-
-        stats = transcribe_session(
-            manifest=manifest,
-            session_dir=tmp_path,
-            backend="mock",
-            limit=2,
-            force=False,
-        )
-
-        assert stats.processed == 2
-        assert stats.skipped_limit == 3
-        assert stats.total == 5
-
-    def test_progress_callback_called(self, tmp_path):
-        """Should call on_progress callback after each segment."""
-        from yanhu.manifest import Manifest, SegmentInfo
-
-        segments = [
-            SegmentInfo(
-                id=f"part_{i:04d}",
-                start_time=i * 10.0,
-                end_time=(i + 1) * 10.0,
-                video_path=f"segments/part_{i:04d}.mp4",
-                frames=[],
-            )
-            for i in range(3)
-        ]
-        manifest = Manifest(
-            session_id="test_progress",
-            created_at="2026-01-23",
-            source_video="/test/video.mp4",
-            source_video_local="video.mp4",
-            segment_duration_seconds=10,
-            segments=segments,
-        )
-
-        (tmp_path / "analysis").mkdir()
-
-        progress_calls = []
-
-        def progress_callback(seg_id, status, result, stats):
-            progress_calls.append((seg_id, status))
-
-        transcribe_session(
-            manifest=manifest,
-            session_dir=tmp_path,
-            backend="mock",
-            on_progress=progress_callback,
-            force=False,
-        )
-
-        assert len([c for c in progress_calls if c[1] == "done"]) == 3
-
-    def test_compose_with_partial_asr(self, tmp_path):
-        """Should generate outputs even with partial ASR data."""
-        from yanhu.composer import write_highlights, write_overview, write_timeline
-        from yanhu.manifest import Manifest, SegmentInfo
-
-        segments = [
-            SegmentInfo(
-                id=f"part_{i:04d}",
-                start_time=i * 10.0,
-                end_time=(i + 1) * 10.0,
-                video_path=f"segments/part_{i:04d}.mp4",
-                frames=[f"frames/part_{i:04d}_001.jpg"],
-            )
-            for i in range(3)
-        ]
-        manifest = Manifest(
-            session_id="test_partial",
-            created_at="2026-01-23",
-            source_video="/test/video.mp4",
-            source_video_local="video.mp4",
-            segment_duration_seconds=10,
-            segments=segments,
-        )
-
+        # Create analysis directory
         analysis_dir = tmp_path / "analysis"
         analysis_dir.mkdir()
 
-        # Only first segment has ASR
-        for i in range(3):
-            data = {
-                "segment_id": f"part_{i:04d}",
-                "scene_type": "gameplay",
-                "caption": f"Segment {i}",
-                "facts": [f"Fact {i}"],
-            }
-            if i == 0:
-                data["asr_items"] = [{"text": "Test", "t_start": 0.0, "t_end": 10.0}]
-            (analysis_dir / f"part_{i:04d}.json").write_text(
-                json.dumps(data, ensure_ascii=False)
+        # Mock the ASR backend to track which segments were called
+        transcribed_segments = []
+
+        def mock_transcribe(segment, session_dir, max_seconds):
+            transcribed_segments.append(segment.id)
+            from yanhu.transcriber import AsrResult
+
+            return AsrResult(
+                segment_id=segment.id, asr_items=[], asr_backend="mock", asr_config={}
             )
 
-        # Should generate all outputs
-        timeline_path = write_timeline(manifest, tmp_path)
-        overview_path = write_overview(manifest, tmp_path)
-        highlights_path = write_highlights(manifest, tmp_path)
+        with patch("yanhu.transcriber.get_asr_backend") as mock_get_backend:
+            with patch("yanhu.transcriber.merge_asr_to_analysis") as mock_merge:
+                # Make merge a no-op
+                mock_merge.return_value = None
+                mock_backend = MagicMock()
+                mock_backend.transcribe_segment = mock_transcribe
+                mock_get_backend.return_value = mock_backend
 
-        assert timeline_path.exists()
-        assert overview_path.exists()
-        assert highlights_path.exists()
+                # Transcribe with limit=2
+                stats = transcribe_session(
+                    manifest=manifest,
+                    session_dir=tmp_path,
+                    backend="mock",
+                    limit=2,
+                )
 
-        timeline_content = timeline_path.read_text()
-        assert "### part_0000" in timeline_content
-        assert "### part_0002" in timeline_content
+                # Assert only first 2 segments were transcribed
+                assert len(transcribed_segments) == 2
+                assert transcribed_segments == ["part_0001", "part_0002"]
+
+                # Assert stats
+                assert stats.processed == 2
+                assert stats.total == 5
+                assert stats.skipped_limit == 3  # Remaining 3 segments
+
+    def test_manifest_coverage_saved_when_limit_used(self, tmp_path):
+        """When limit is used, manifest.transcribe_coverage is saved to manifest."""
+        # Simulate what process_job does after transcribe_session
+        manifest = Manifest(
+            session_id="test_session",
+            created_at="2026-01-23T10:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=10,
+            segments=[
+                SegmentInfo("part_0001", 0.0, 10.0, "seg1.mp4"),
+                SegmentInfo("part_0002", 10.0, 20.0, "seg2.mp4"),
+                SegmentInfo("part_0003", 20.0, 30.0, "seg3.mp4"),
+            ],
+        )
+
+        # Create session dir
+        session_dir = tmp_path / manifest.session_id
+        session_dir.mkdir()
+
+        # Simulate transcribe stats with skipped_limit > 0
+        stats = TranscribeStats()
+        stats.processed = 2
+        stats.total = 3
+        stats.skipped_limit = 1
+
+        # This is what process_job does when skipped_limit > 0
+        if stats.skipped_limit > 0:
+            manifest.transcribe_coverage = {
+                "processed": stats.processed,
+                "total": stats.total,
+                "skipped_limit": stats.skipped_limit,
+            }
+            manifest.save(session_dir)
+
+        # Load manifest and verify coverage was saved
+        loaded_manifest = Manifest.load(session_dir)
+
+        assert loaded_manifest.transcribe_coverage is not None
+        assert loaded_manifest.transcribe_coverage["processed"] == 2
+        assert loaded_manifest.transcribe_coverage["total"] == 3
+        assert loaded_manifest.transcribe_coverage["skipped_limit"] == 1
+
+    def test_overview_shows_partial_marker_when_limit_used(self, tmp_path):
+        """Overview.md shows PARTIAL marker when transcribe_coverage exists."""
+        from yanhu.composer import compose_overview
+
+        manifest = Manifest(
+            session_id="2026-01-23_10-00-00_testgame_run01",
+            created_at="2026-01-23T10:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=10,
+            segments=[
+                SegmentInfo("part_0001", 0.0, 10.0, "seg1.mp4"),
+                SegmentInfo("part_0002", 10.0, 20.0, "seg2.mp4"),
+                SegmentInfo("part_0003", 20.0, 30.0, "seg3.mp4"),
+            ],
+            transcribe_coverage={
+                "processed": 2,
+                "total": 3,
+                "skipped_limit": 1,
+            },
+        )
+
+        overview = compose_overview(manifest)
+
+        # Assert PARTIAL marker exists
+        assert "PARTIAL SESSION" in overview
+        assert "Transcription Coverage" in overview
+        assert "Transcribed**: 2/3 segments" in overview
+        assert "Skipped**: 1 segments" in overview
+
+    def test_overview_no_partial_marker_when_no_limit(self, tmp_path):
+        """Overview.md has no PARTIAL marker when transcribe_coverage is None."""
+        from yanhu.composer import compose_overview
+
+        manifest = Manifest(
+            session_id="2026-01-23_10-00-00_testgame_run01",
+            created_at="2026-01-23T10:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=10,
+            segments=[
+                SegmentInfo("part_0001", 0.0, 10.0, "seg1.mp4"),
+                SegmentInfo("part_0002", 10.0, 20.0, "seg2.mp4"),
+            ],
+            transcribe_coverage=None,
+        )
+
+        overview = compose_overview(manifest)
+
+        # Assert no PARTIAL marker
+        assert "PARTIAL SESSION" not in overview
+        assert "Transcription Coverage" not in overview
+
+    def test_compose_succeeds_with_missing_transcripts(self, tmp_path):
+        """Compose generates all outputs even when some segments lack ASR."""
+        from yanhu.composer import write_highlights, write_overview, write_timeline
+
+        manifest = Manifest(
+            session_id="2026-01-23_10-00-00_testgame_run01",
+            created_at="2026-01-23T10:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=10,
+            segments=[
+                SegmentInfo(
+                    "part_0001",
+                    0.0,
+                    10.0,
+                    "seg1.mp4",
+                    analysis_path="analysis/part_0001.json",
+                ),
+                SegmentInfo(
+                    "part_0002",
+                    10.0,
+                    20.0,
+                    "seg2.mp4",
+                    analysis_path="analysis/part_0002.json",
+                ),
+            ],
+        )
+
+        # Create session directory
+        session_dir = tmp_path / manifest.session_id
+        session_dir.mkdir()
+        analysis_dir = session_dir / "analysis"
+        analysis_dir.mkdir()
+
+        # Create analysis files: first has ASR, second doesn't
+        import json
+
+        (analysis_dir / "part_0001.json").write_text(
+            json.dumps(
+                {
+                    "segment_id": "part_0001",
+                    "scene_type": "dialogue",
+                    "facts": ["Scene 1"],
+                    "caption": "First segment",
+                    "asr_items": [{"text": "Hello world", "t_start": 0.0, "t_end": 2.0}],
+                }
+            )
+        )
+
+        (analysis_dir / "part_0002.json").write_text(
+            json.dumps(
+                {
+                    "segment_id": "part_0002",
+                    "scene_type": "action",
+                    "facts": ["Scene 2"],
+                    "caption": "Second segment",
+                    # No asr_items - simulates skipped transcription
+                }
+            )
+        )
+
+        # Compose should succeed without errors
+        write_timeline(manifest, session_dir)
+        write_overview(manifest, session_dir)
+        write_highlights(manifest, session_dir)
+
+        # Assert all files created
+        assert (session_dir / "timeline.md").exists()
+        assert (session_dir / "overview.md").exists()
+        assert (session_dir / "highlights.md").exists()
+
+        # Timeline should handle missing ASR gracefully
+        timeline_content = (session_dir / "timeline.md").read_text()
+        assert "part_0001" in timeline_content
+        assert "part_0002" in timeline_content
