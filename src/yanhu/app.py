@@ -101,6 +101,19 @@ BASE_TEMPLATE = """
             color: #7f8c8d;
             font-size: 12px;
         }
+        .form-group select {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+            background: white;
+        }
+        .whisper-options {
+            margin-left: 20px;
+            padding-left: 15px;
+            border-left: 3px solid #3498db;
+        }
         .btn {
             background: #3498db;
             color: white;
@@ -146,6 +159,27 @@ BASE_TEMPLATE = """
         }
         .tab-content { display: none; }
         .tab-content.active { display: block; }
+        .analysis-part {
+            background: white;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            padding: 15px;
+            margin-bottom: 15px;
+        }
+        .analysis-part h3 {
+            margin-top: 0;
+            color: #2c3e50;
+        }
+        .analysis-summary p {
+            margin: 8px 0;
+        }
+        .raw-json {
+            background: #f5f5f5;
+            padding: 10px;
+            border-radius: 4px;
+            overflow-x: auto;
+            font-size: 12px;
+        }
         .progress-bar {
             background: #fff3cd;
             border: 1px solid #ffc107;
@@ -299,11 +333,24 @@ SESSION_LIST_TEMPLATE = BASE_TEMPLATE.replace(
                 <small>Max total duration to transcribe (0 or empty = no limit)</small>
             </div>
             <div class="form-group">
-                <label for="upload_asr_models">ASR Models (optional)</label>
-                <input type="text" id="upload_asr_models" name="asr_models"
-                       placeholder="whisper_local,mock">
-                <small>Comma-separated list of models (e.g., "whisper_local,mock").
-                Available: mock, whisper_local. Leave empty for default (mock).</small>
+                <label for="asr_model">ASR Model</label>
+                <select id="asr_model" name="asr_model" onchange="toggleWhisperOptions()">
+                    {% for model in available_asr_models %}
+                    <option value="{{ model.key }}"
+                            {% if model.key == 'whisper_local' %}selected{% endif %}>
+                        {{ model.display_name }}
+                    </option>
+                    {% endfor %}
+                </select>
+                <small>Select transcription model</small>
+            </div>
+            <div class="form-group whisper-options" id="whisper_options" style="display: block;">
+                <label for="whisper_device">Whisper Device</label>
+                <select id="whisper_device" name="whisper_device">
+                    <option value="cpu" selected>CPU (int8)</option>
+                    <option value="cuda">GPU/CUDA (float16)</option>
+                </select>
+                <small>CPU mode uses int8 quantization, GPU uses float16</small>
             </div>
             <button type="submit" class="btn">Upload & Start Job</button>
         </form>
@@ -339,11 +386,24 @@ SESSION_LIST_TEMPLATE = BASE_TEMPLATE.replace(
                 <small>Max total duration to transcribe (0 or empty = no limit)</small>
             </div>
             <div class="form-group">
-                <label for="asr_models">ASR Models (optional)</label>
-                <input type="text" id="asr_models" name="asr_models"
-                       placeholder="whisper_local,mock">
-                <small>Comma-separated list of models (e.g., "whisper_local,mock").
-                Available: mock, whisper_local. Leave empty for default (mock).</small>
+                <label for="asr_model">ASR Model</label>
+                <select id="asr_model" name="asr_model" onchange="toggleWhisperOptions()">
+                    {% for model in available_asr_models %}
+                    <option value="{{ model.key }}"
+                            {% if model.key == 'whisper_local' %}selected{% endif %}>
+                        {{ model.display_name }}
+                    </option>
+                    {% endfor %}
+                </select>
+                <small>Select transcription model</small>
+            </div>
+            <div class="form-group whisper-options" id="whisper_options" style="display: block;">
+                <label for="whisper_device">Whisper Device</label>
+                <select id="whisper_device" name="whisper_device">
+                    <option value="cpu" selected>CPU (int8)</option>
+                    <option value="cuda">GPU/CUDA (float16)</option>
+                </select>
+                <small>CPU mode uses int8 quantization, GPU uses float16</small>
             </div>
             <button type="submit" class="btn">Submit Job</button>
         </form>
@@ -386,6 +446,22 @@ SESSION_LIST_TEMPLATE = BASE_TEMPLATE.replace(
     """
     {% if worker_enabled %}
     <script>
+    // Toggle Whisper options based on ASR model selection
+    function toggleWhisperOptions() {
+        const asrModel = document.getElementById('asr_model').value;
+        const whisperOptions = document.getElementById('whisper_options');
+        if (asrModel === 'whisper_local') {
+            whisperOptions.style.display = 'block';
+        } else {
+            whisperOptions.style.display = 'none';
+        }
+    }
+
+    // Initialize on page load
+    document.addEventListener('DOMContentLoaded', function() {
+        toggleWhisperOptions();
+    });
+
     // Drag & drop functionality
     const uploadArea = document.getElementById('upload-area');
     const fileInput = document.getElementById('file');
@@ -435,6 +511,7 @@ SESSION_VIEW_TEMPLATE = BASE_TEMPLATE.replace(
         <button class="tab" onclick="showTab('highlights')">Highlights</button>
         <button class="tab" onclick="showTab('timeline')">Timeline</button>
         <button class="tab" onclick="showTab('transcripts')">Transcripts</button>
+        <button class="tab" onclick="showTab('analysis')">Analysis</button>
         <button class="tab" onclick="showTab('manifest')">Manifest</button>
     </div>
     <div id="overview" class="tab-content active">{{ overview_html|safe }}</div>
@@ -447,6 +524,10 @@ SESSION_VIEW_TEMPLATE = BASE_TEMPLATE.replace(
             <div id="transcript-display"></div>
         </div>
     </div>
+    <div id="analysis" class="tab-content">
+        <div id="analysis-loading">Loading analysis...</div>
+        <div id="analysis-content" style="display:none;"></div>
+    </div>
     <div id="manifest" class="tab-content"><pre>{{ manifest_json }}</pre></div>
     """,
 ).replace(
@@ -456,17 +537,66 @@ SESSION_VIEW_TEMPLATE = BASE_TEMPLATE.replace(
     let transcriptsData = null;
     let currentModel = null;
 
-    function showTab(tabName) {
+    function showTab(tabName, skipHashUpdate) {
         document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
         document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-        event.target.classList.add('active');
+
+        // Find and activate the tab button
+        document.querySelectorAll('.tab').forEach(btn => {
+            if (btn.textContent.trim().toLowerCase() === tabName.toLowerCase()) {
+                btn.classList.add('active');
+            }
+        });
+
         document.getElementById(tabName).classList.add('active');
+
+        // Update URL hash (unless called from hashchange to avoid loop)
+        if (!skipHashUpdate) {
+            window.location.hash = 'tab=' + tabName;
+        }
 
         // Load transcripts when tab is clicked
         if (tabName === 'transcripts' && !transcriptsData) {
             loadTranscripts();
         }
+
+        // Load analysis when tab is clicked
+        if (tabName === 'analysis' && !analysisData) {
+            loadAnalysis();
+        }
+
+        // Patch frame links to open in new tab
+        patchFrameLinks();
     }
+
+    function getActiveTabFromHash() {
+        const hash = window.location.hash;
+        const match = hash.match(/tab=(\\w+)/);
+        return match ? match[1] : 'overview';
+    }
+
+    function activateTabFromHash() {
+        const tabName = getActiveTabFromHash();
+        showTab(tabName, true);  // skipHashUpdate=true to avoid loop
+    }
+
+    function patchFrameLinks() {
+        // Find all links that point to frames and make them open in new tab
+        document.querySelectorAll('a[href*="/frames/"]').forEach(link => {
+            link.setAttribute('target', '_blank');
+            link.setAttribute('rel', 'noopener noreferrer');
+        });
+    }
+
+    let analysisData = null;
+
+    // Listen for hash changes (browser back/forward)
+    window.addEventListener('hashchange', activateTabFromHash);
+
+    // Activate tab from hash on page load
+    document.addEventListener('DOMContentLoaded', () => {
+        activateTabFromHash();
+    });
 
     function loadTranscripts() {
         fetch('/s/{{ session_id }}/transcripts')
@@ -562,6 +692,96 @@ SESSION_VIEW_TEMPLATE = BASE_TEMPLATE.replace(
         const div = document.createElement('div');
         div.textContent = text;
         return div.innerHTML;
+    }
+
+    function loadAnalysis() {
+        fetch('/s/{{ session_id }}/analysis')
+            .then(response => response.json())
+            .then(data => {
+                analysisData = data;
+                const parts = data.parts || [];
+
+                if (parts.length === 0) {
+                    document.getElementById('analysis-loading').innerHTML =
+                        data.message || 'No analysis files found.';
+                    return;
+                }
+
+                // Hide loading, show content
+                document.getElementById('analysis-loading').style.display = 'none';
+                document.getElementById('analysis-content').style.display = 'block';
+
+                // Display parts
+                displayAnalysisParts(parts);
+            })
+            .catch(err => {
+                console.error('Failed to load analysis:', err);
+                document.getElementById('analysis-loading').innerHTML =
+                    'Failed to load analysis.';
+            });
+    }
+
+    function displayAnalysisParts(parts) {
+        const content = document.getElementById('analysis-content');
+        let html = '<div class="analysis-parts">';
+
+        parts.forEach(part => {
+            html += `<div class="analysis-part">`;
+            html += `<h3>${part.part_id}</h3>`;
+            html += `<div class="analysis-summary">`;
+            html += `<p><strong>Scene:</strong> ${escapeHtml(part.scene_label || 'N/A')}</p>`;
+            if (part.what_changed) {
+                const truncated = part.what_changed.length > 100
+                    ? part.what_changed.substring(0, 100) + '...'
+                    : part.what_changed;
+                html += `<p><strong>Change:</strong> ${escapeHtml(truncated)}</p>`;
+            }
+            if (part.ui_key_text && part.ui_key_text.length > 0) {
+                const uiText = part.ui_key_text.join(', ');
+                const truncated = uiText.length > 80
+                    ? uiText.substring(0, 80) + '...'
+                    : uiText;
+                html += `<p><strong>UI Text:</strong> ${escapeHtml(truncated)}</p>`;
+            }
+            html += `<p><strong>Counts:</strong> `;
+            html += `OCR: ${part.ocr_count || 0}, `;
+            html += `ASR: ${part.asr_count || 0}, `;
+            html += `Quotes: ${part.quotes_count || 0}, `;
+            html += `Symbols: ${part.symbols_count || 0}`;
+            html += `</p>`;
+            html += `</div>`;
+            html += `<button class="btn" onclick="toggleRawJson('${part.part_id}')">
+                     Toggle Raw JSON</button>`;
+            html += `<pre id="raw-${part.part_id}" class="raw-json"
+                     style="display:none; margin-top: 1em;"></pre>`;
+            html += `</div>`;
+        });
+
+        html += '</div>';
+        content.innerHTML = html;
+    }
+
+    function toggleRawJson(partId) {
+        const pre = document.getElementById(`raw-${partId}`);
+        if (pre.style.display === 'none') {
+            // Load raw JSON if not loaded
+            if (!pre.textContent) {
+                fetch(`/s/{{ session_id }}/analysis/${partId}`)
+                    .then(response => response.json())
+                    .then(data => {
+                        pre.textContent = JSON.stringify(data, null, 2);
+                        pre.style.display = 'block';
+                    })
+                    .catch(err => {
+                        pre.textContent = 'Error loading raw JSON: ' + err;
+                        pre.style.display = 'block';
+                    });
+            } else {
+                pre.style.display = 'block';
+            }
+        } else {
+            pre.style.display = 'none';
+        }
     }
 
     let pollInterval = null;
@@ -943,6 +1163,8 @@ def create_app(
     @app.route("/")
     def index():
         """List all sessions and jobs, newest first."""
+        from yanhu.asr_registry import list_asr_models
+
         sessions_path = Path(app.config["sessions_dir"])
 
         # Load jobs from jobs directory
@@ -1007,6 +1229,7 @@ def create_app(
             raw_dir=str(app.config["raw_dir"]) if app.config["raw_dir"] else None,
             title="Sessions",
             ffmpeg_warning=app.config.get("ffmpeg_error"),
+            available_asr_models=list_asr_models(),
         )
 
     @app.route("/s/<session_id>")
@@ -1114,6 +1337,163 @@ def create_app(
 
         return jsonify({"models": transcripts})
 
+    @app.route("/s/<session_id>/analysis")
+    def session_analysis_list(session_id: str):
+        """Get list of available analysis files for a session.
+
+        Returns JSON with parts list and summary info.
+        """
+        sessions_dir = Path(app.config["sessions_dir"])
+        session_dir = sessions_dir / session_id
+        analysis_dir = session_dir / "analysis"
+
+        # Validate session exists
+        if not session_dir.exists() or not session_dir.is_dir():
+            return jsonify({"error": "Session not found", "parts": []}), 404
+
+        # Check if analysis directory exists
+        if not analysis_dir.exists() or not analysis_dir.is_dir():
+            return jsonify({"message": "No analysis available yet", "parts": []})
+
+        # Find all part_XXXX.json files
+        import re
+
+        parts_data = []
+        for json_file in sorted(analysis_dir.glob("part_*.json")):
+            # Validate filename pattern
+            if not re.match(r"^part_\d{4}\.json$", json_file.name):
+                continue
+
+            part_id = json_file.stem  # e.g., "part_0001"
+
+            try:
+                with open(json_file, encoding="utf-8") as f:
+                    data = json.load(f)
+
+                # Extract summary fields
+                parts_data.append(
+                    {
+                        "part_id": part_id,
+                        "scene_label": data.get("scene_label", ""),
+                        "what_changed": data.get("what_changed", ""),
+                        "ui_key_text": data.get("ui_key_text", []),
+                        "ocr_count": len(data.get("ocr_items", [])),
+                        "asr_count": len(data.get("asr_items", [])),
+                        "quotes_count": len(data.get("aligned_quotes", [])),
+                        "symbols_count": len(data.get("ui_symbol_items", [])),
+                    }
+                )
+            except (json.JSONDecodeError, OSError):
+                # Skip invalid files
+                continue
+
+        return jsonify({"parts": parts_data})
+
+    @app.route("/s/<session_id>/analysis/<part_id>")
+    def session_analysis_part(session_id: str, part_id: str):
+        """Get raw analysis JSON for a specific part.
+
+        Args:
+            session_id: Session identifier
+            part_id: Part identifier (e.g., "part_0001")
+
+        Returns:
+            JSON content of analysis file or 404 if not found
+        """
+        import re
+
+        # Validate session exists
+        sessions_dir = Path(app.config["sessions_dir"])
+        session_dir = sessions_dir / session_id
+
+        if not session_dir.exists() or not session_dir.is_dir():
+            return jsonify({"error": "Session not found"}), 404
+
+        # Validate part_id pattern (security)
+        if not re.match(r"^part_\d{4}$", part_id):
+            return jsonify({"error": "Invalid part_id format"}), 400
+
+        # Construct safe path
+        analysis_dir = session_dir / "analysis"
+        analysis_file = analysis_dir / f"{part_id}.json"
+
+        # Verify file exists and is within expected directory (path traversal protection)
+        try:
+            analysis_file = analysis_file.resolve()
+            analysis_dir = analysis_dir.resolve()
+            if not str(analysis_file).startswith(str(analysis_dir)):
+                return jsonify({"error": "Invalid path"}), 400
+        except (OSError, ValueError):
+            return jsonify({"error": "Invalid path"}), 400
+
+        if not analysis_file.exists() or not analysis_file.is_file():
+            return jsonify({"error": "Analysis file not found"}), 404
+
+        # Load and return JSON
+        try:
+            with open(analysis_file, encoding="utf-8") as f:
+                data = json.load(f)
+            return jsonify(data)
+        except (json.JSONDecodeError, OSError) as e:
+            return jsonify({"error": f"Failed to load analysis: {e}"}), 500
+
+    @app.route("/s/<session_id>/frames/<part_id>/<filename>")
+    def session_frame(session_id: str, part_id: str, filename: str):
+        """Serve a frame image file from a session.
+
+        Args:
+            session_id: Session identifier
+            part_id: Segment/part identifier (e.g., "part_0001")
+            filename: Frame filename (e.g., "frame_0001.jpg")
+
+        Returns:
+            Image file or 404 if not found
+        """
+        from flask import send_from_directory
+
+        # Validate session exists
+        sessions_dir = Path(app.config["sessions_dir"])
+        session_dir = sessions_dir / session_id
+
+        if not session_dir.exists() or not session_dir.is_dir():
+            return jsonify({"error": "Session not found"}), 404
+
+        # Validate part_id and filename for safety (prevent path traversal)
+        # Only allow alphanumeric, underscore, hyphen, and dot
+        import re
+
+        if not re.match(r"^[\w\-]+$", part_id):
+            return jsonify({"error": "Invalid part_id"}), 400
+        if not re.match(r"^[\w\-\.]+$", filename):
+            return jsonify({"error": "Invalid filename"}), 400
+
+        # Check for path traversal attempts
+        if ".." in part_id or ".." in filename:
+            return jsonify({"error": "Invalid path"}), 400
+
+        # Construct safe path
+        frames_dir = session_dir / "frames" / part_id
+
+        if not frames_dir.exists() or not frames_dir.is_dir():
+            return jsonify({"error": "Frame directory not found"}), 404
+
+        frame_path = frames_dir / filename
+
+        # Verify file exists and is within expected directory (additional safety)
+        try:
+            frame_path = frame_path.resolve()
+            frames_dir = frames_dir.resolve()
+            if not str(frame_path).startswith(str(frames_dir)):
+                return jsonify({"error": "Invalid path"}), 400
+        except (OSError, ValueError):
+            return jsonify({"error": "Invalid path"}), 400
+
+        if not frame_path.exists() or not frame_path.is_file():
+            return jsonify({"error": "Frame not found"}), 404
+
+        # Serve the file
+        return send_from_directory(frames_dir, filename)
+
     @app.route("/api/jobs", methods=["POST"])
     def submit_job():
         """Submit a new job to the queue."""
@@ -1125,7 +1505,6 @@ def create_app(
         game = request.form.get("game", "").strip() or None
         transcribe_limit_str = request.form.get("transcribe_limit", "").strip()
         transcribe_max_seconds_str = request.form.get("transcribe_max_seconds", "").strip()
-        asr_models_str = request.form.get("asr_models", "").strip()
 
         # Validate raw_path
         if not raw_path_str:
@@ -1164,15 +1543,22 @@ def create_app(
             except ValueError:
                 return jsonify({"error": "transcribe_max_seconds must be a number"}), 400
 
-        # Parse and validate ASR models
-        asr_models = None
-        if asr_models_str:
+        # Parse ASR model (single selection from dropdown)
+        asr_model = request.form.get("asr_model", "whisper_local").strip()
+        whisper_device = request.form.get("whisper_device", "cpu").strip()
+
+        if asr_model:
             from yanhu.asr_registry import validate_asr_models
 
-            asr_models = [m.strip() for m in asr_models_str.split(",") if m.strip()]
-            is_valid, error_msg = validate_asr_models(asr_models)
+            # Validate single model
+            is_valid, error_msg = validate_asr_models([asr_model])
             if not is_valid:
                 return jsonify({"error": error_msg}), 400
+            asr_models = [asr_model]
+        else:
+            # Fallback to whisper_local
+            asr_models = ["whisper_local"]
+            whisper_device = "cpu"
 
         # Probe media metadata
         from yanhu.watcher import (
@@ -1216,9 +1602,11 @@ def create_app(
                 "transcribe_max_seconds": transcribe_max_seconds,
             }
 
-        # Store ASR models
+        # Store ASR models and Whisper device
         if asr_models is not None:
             job.asr_models = asr_models
+        if whisper_device:
+            job.whisper_device = whisper_device
 
         # Save to per-job file
         jobs_dir = Path(app.config["jobs_dir"])
@@ -1375,7 +1763,6 @@ def create_app(
         preset_override = request.form.get("preset", "").strip() or None
         transcribe_limit_str = request.form.get("transcribe_limit", "").strip()
         transcribe_max_seconds_str = request.form.get("transcribe_max_seconds", "").strip()
-        asr_models_str = request.form.get("asr_models", "").strip()
 
         # Parse transcribe options
         transcribe_limit = None
@@ -1398,17 +1785,24 @@ def create_app(
                 file_path.unlink()
                 return jsonify({"error": "transcribe_max_seconds must be a number"}), 400
 
-        # Parse and validate ASR models
-        asr_models = None
-        if asr_models_str:
+        # Parse ASR model (single selection from dropdown)
+        asr_model = request.form.get("asr_model", "whisper_local").strip()
+        whisper_device = request.form.get("whisper_device", "cpu").strip()
+
+        if asr_model:
             from yanhu.asr_registry import validate_asr_models
 
-            asr_models = [m.strip() for m in asr_models_str.split(",") if m.strip()]
-            is_valid, error_msg = validate_asr_models(asr_models)
+            # Validate single model
+            is_valid, error_msg = validate_asr_models([asr_model])
             if not is_valid:
                 # Clean up uploaded file on error
                 file_path.unlink()
                 return jsonify({"error": error_msg}), 400
+            asr_models = [asr_model]
+        else:
+            # Fallback to whisper_local
+            asr_models = ["whisper_local"]
+            whisper_device = "cpu"
 
         # Probe media metadata
         from yanhu.watcher import (
@@ -1450,9 +1844,11 @@ def create_app(
                 "transcribe_max_seconds": transcribe_max_seconds,
             }
 
-        # Store ASR models
+        # Store ASR models and Whisper device
         if asr_models is not None:
             job.asr_models = asr_models
+        if whisper_device:
+            job.whisper_device = whisper_device
 
         # Save job
         jobs_dir = Path(app.config["jobs_dir"])
@@ -1612,6 +2008,15 @@ class BackgroundWorker:
                 if transcribe_max_seconds is not None:
                     run_config["transcribe_max_seconds"] = transcribe_max_seconds
 
+                # Apply whisper device settings from job
+                if job.whisper_device:
+                    run_config["whisper_device"] = job.whisper_device
+                    # Set compute_type based on device
+                    if job.whisper_device == "cuda":
+                        run_config["transcribe_compute"] = "float16"
+                    else:  # cpu
+                        run_config["transcribe_compute"] = "int8"
+
                 # Check for cancellation before starting
                 current_job = get_job_by_id(job.job_id, self.jobs_dir)
                 if current_job and current_job.status == "cancel_requested":
@@ -1673,6 +2078,7 @@ def run_app(
     allow_any_path: bool = False,
     preset: str = "fast",
     max_upload_size: int = 5 * 1024 * 1024 * 1024,  # 5GB default
+    debug: bool | None = None,
 ):
     """Run the Flask development server with optional background worker.
 
@@ -1685,6 +2091,7 @@ def run_app(
         allow_any_path: Allow any raw_path (skip raw_dir validation)
         preset: Processing preset for worker (fast or quality)
         max_upload_size: Maximum upload file size in bytes (default: 5GB)
+        debug: Enable Flask debug mode (default: False)
     """
     app = create_app(
         sessions_dir,
@@ -1717,7 +2124,8 @@ def run_app(
     print("Press Ctrl+C to stop")
 
     try:
-        app.run(host=host, port=port, debug=False, use_reloader=False)
+        debug_mode = debug if debug is not None else False
+        app.run(host=host, port=port, debug=debug_mode, use_reloader=False)
     finally:
         if worker:
             print("\nStopping background worker...")

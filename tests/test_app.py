@@ -1000,6 +1000,588 @@ class TestUpload:
         assert jobs[0].outputs["transcribe_max_seconds"] == 120.5
 
 
+class TestAsrModelSelection:
+    """Test ASR model dropdown selection UI."""
+
+    def test_submit_job_with_whisper_local_and_cpu(self, tmp_path):
+        """POST /api/jobs accepts whisper_local with CPU device."""
+        from yanhu.app import create_app
+        from yanhu.watcher import list_all_jobs
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+        raw_dir = tmp_path / "raw"
+        raw_dir.mkdir()
+
+        # Create valid video file
+        video_file = raw_dir / "video.mp4"
+        video_file.write_bytes(b"fake video")
+
+        app = create_app(sessions_dir, raw_dir=raw_dir, worker_enabled=True)
+        client = app.test_client()
+
+        # Submit with whisper_local and CPU device
+        response = client.post(
+            "/api/jobs",
+            data={
+                "raw_path": str(video_file),
+                "asr_model": "whisper_local",
+                "whisper_device": "cpu",
+            },
+        )
+
+        # Should redirect to home page
+        assert response.status_code == 302
+        assert response.location == "/"
+
+        # Verify job was written with whisper_local and cpu device
+        jobs_dir = sessions_dir.parent / "_queue" / "jobs"
+        jobs = list_all_jobs(jobs_dir)
+        assert len(jobs) == 1
+        assert jobs[0].asr_models == ["whisper_local"]
+        assert jobs[0].whisper_device == "cpu"
+
+    def test_submit_job_with_whisper_local_and_cuda(self, tmp_path):
+        """POST /api/jobs accepts whisper_local with CUDA device."""
+        from yanhu.app import create_app
+        from yanhu.watcher import list_all_jobs
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+        raw_dir = tmp_path / "raw"
+        raw_dir.mkdir()
+
+        # Create valid video file
+        video_file = raw_dir / "video.mp4"
+        video_file.write_bytes(b"fake video")
+
+        app = create_app(sessions_dir, raw_dir=raw_dir, worker_enabled=True)
+        client = app.test_client()
+
+        # Submit with whisper_local and CUDA device
+        response = client.post(
+            "/api/jobs",
+            data={
+                "raw_path": str(video_file),
+                "asr_model": "whisper_local",
+                "whisper_device": "cuda",
+            },
+        )
+
+        # Should redirect to home page
+        assert response.status_code == 302
+
+        # Verify job has CUDA device
+        jobs_dir = sessions_dir.parent / "_queue" / "jobs"
+        jobs = list_all_jobs(jobs_dir)
+        assert len(jobs) == 1
+        assert jobs[0].asr_models == ["whisper_local"]
+        assert jobs[0].whisper_device == "cuda"
+
+    def test_upload_with_asr_model_and_device(self, tmp_path):
+        """POST /api/uploads accepts ASR model and whisper device."""
+        from io import BytesIO
+
+        from yanhu.app import create_app
+        from yanhu.watcher import list_all_jobs
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+        raw_dir = tmp_path / "raw"
+        raw_dir.mkdir()
+
+        app = create_app(sessions_dir, raw_dir=raw_dir, worker_enabled=True)
+        client = app.test_client()
+
+        # Create fake video file
+        video_data = BytesIO(b"fake video data")
+        video_data.name = "test_video.mp4"
+
+        response = client.post(
+            "/api/uploads",
+            data={
+                "file": (video_data, "test_video.mp4"),
+                "asr_model": "mock",
+                "whisper_device": "cpu",
+            },
+            content_type="multipart/form-data",
+        )
+
+        # Should redirect to job detail page
+        assert response.status_code == 302
+
+        # Verify job has mock model
+        jobs_dir = sessions_dir.parent / "_queue" / "jobs"
+        jobs = list_all_jobs(jobs_dir)
+        assert len(jobs) == 1
+        assert jobs[0].asr_models == ["mock"]
+
+    def test_index_provides_asr_model_dropdown(self, tmp_path):
+        """GET / provides ASR model dropdown UI."""
+        from yanhu.app import create_app
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+
+        app = create_app(sessions_dir, worker_enabled=True)
+        client = app.test_client()
+
+        response = client.get("/")
+
+        assert response.status_code == 200
+        html = response.data.decode("utf-8")
+
+        # Verify dropdown select is present
+        assert '<select id="asr_model"' in html
+        assert 'name="asr_model"' in html
+        assert 'value="mock"' in html
+        assert 'value="whisper_local"' in html
+
+        # Verify whisper_local is selected by default
+        assert 'value="whisper_local"' in html
+        # Check that selected appears near whisper_local option
+        assert 'whisper_local' in html and 'selected' in html
+
+        # Verify Whisper device dropdown is present
+        assert '<select id="whisper_device"' in html
+        assert 'name="whisper_device"' in html
+        assert 'value="cpu"' in html
+        assert 'value="cuda"' in html
+
+        # Verify display names appear
+        assert "Mock ASR" in html
+        assert "Whisper (Local)" in html
+
+
+class TestFrameServing:
+    """Test frame image serving route."""
+
+    def test_serve_frame_returns_200_for_existing_frame(self, tmp_path):
+        """GET /s/<session_id>/frames/<part_id>/<filename> returns 200 for existing frame."""
+        from yanhu.app import create_app
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+
+        # Create session with frame
+        session_id = "2026-01-23_10-00-00_game_run01"
+        session_dir = sessions_dir / session_id
+        session_dir.mkdir()
+        frames_dir = session_dir / "frames" / "part_0001"
+        frames_dir.mkdir(parents=True)
+
+        # Create a dummy frame file
+        frame_file = frames_dir / "frame_0001.jpg"
+        frame_file.write_bytes(b"\xff\xd8\xff\xe0")  # Minimal JPEG header
+
+        app = create_app(sessions_dir)
+        client = app.test_client()
+
+        response = client.get(f"/s/{session_id}/frames/part_0001/frame_0001.jpg")
+
+        assert response.status_code == 200
+        assert response.data == b"\xff\xd8\xff\xe0"
+
+    def test_serve_frame_returns_404_for_missing_frame(self, tmp_path):
+        """GET /s/<session_id>/frames/<part_id>/<filename> returns 404 for missing frame."""
+        from yanhu.app import create_app
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+
+        # Create session without frames
+        session_id = "2026-01-23_10-00-00_game_run01"
+        session_dir = sessions_dir / session_id
+        session_dir.mkdir()
+
+        app = create_app(sessions_dir)
+        client = app.test_client()
+
+        response = client.get(f"/s/{session_id}/frames/part_0001/frame_0001.jpg")
+
+        assert response.status_code == 404
+        data = response.get_json()
+        assert "error" in data
+
+    def test_serve_frame_blocks_dotdot_in_part_id(self, tmp_path):
+        """Frames route validates part_id contains no '..'."""
+        from yanhu.app import create_app
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+
+        session_id = "2026-01-23_10-00-00_game_run01"
+        session_dir = sessions_dir / session_id
+        session_dir.mkdir()
+
+        app = create_app(sessions_dir)
+        client = app.test_client()
+
+        # Try .. in part_id (Flask route still accepts it, but our code rejects)
+        response = client.get(f"/s/{session_id}/frames/part..001/frame_0001.jpg")
+
+        assert response.status_code == 400
+        data = response.get_json()
+        assert "error" in data
+        assert "Invalid" in data["error"]
+
+    def test_serve_frame_blocks_dotdot_in_filename(self, tmp_path):
+        """Frames route validates filename contains no '..'."""
+        from yanhu.app import create_app
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+
+        session_id = "2026-01-23_10-00-00_game_run01"
+        session_dir = sessions_dir / session_id
+        session_dir.mkdir()
+
+        app = create_app(sessions_dir)
+        client = app.test_client()
+
+        # Try .. in filename
+        response = client.get(f"/s/{session_id}/frames/part_0001/frame..jpg")
+
+        assert response.status_code == 400
+        data = response.get_json()
+        assert "error" in data
+        assert "Invalid" in data["error"]
+
+    def test_serve_frame_returns_404_for_nonexistent_session(self, tmp_path):
+        """GET /s/<session_id>/frames/<part_id>/<filename> returns 404 for nonexistent session."""
+        from yanhu.app import create_app
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+
+        app = create_app(sessions_dir)
+        client = app.test_client()
+
+        response = client.get("/s/nonexistent_session/frames/part_0001/frame_0001.jpg")
+
+        assert response.status_code == 404
+        data = response.get_json()
+        assert "error" in data
+
+
+class TestAnalysisTab:
+    """Test analysis tab and routes."""
+
+    def test_analysis_list_returns_parts(self, tmp_path):
+        """GET /s/<session_id>/analysis returns list of analysis parts."""
+        import json
+
+        from yanhu.app import create_app
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+
+        # Create session with analysis files
+        session_id = "2026-01-23_10-00-00_game_run01"
+        session_dir = sessions_dir / session_id
+        session_dir.mkdir()
+        analysis_dir = session_dir / "analysis"
+        analysis_dir.mkdir()
+
+        # Create sample analysis file
+        analysis_data = {
+            "segment_id": "part_0001",
+            "scene_label": "menu",
+            "what_changed": "Player navigates to settings",
+            "ui_key_text": ["Settings", "Audio"],
+            "ocr_items": [{"text": "Settings", "x": 100, "y": 200}],
+            "asr_items": [],
+            "aligned_quotes": [],
+            "ui_symbol_items": [],
+        }
+        (analysis_dir / "part_0001.json").write_text(json.dumps(analysis_data))
+
+        app = create_app(sessions_dir)
+        client = app.test_client()
+
+        response = client.get(f"/s/{session_id}/analysis")
+
+        assert response.status_code == 200
+        data = response.get_json()
+        assert "parts" in data
+        assert len(data["parts"]) == 1
+        assert data["parts"][0]["part_id"] == "part_0001"
+        assert data["parts"][0]["scene_label"] == "menu"
+        assert data["parts"][0]["ocr_count"] == 1
+
+    def test_analysis_list_returns_empty_for_no_analysis(self, tmp_path):
+        """GET /s/<session_id>/analysis returns empty list when no analysis exists."""
+        from yanhu.app import create_app
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+
+        # Create session without analysis directory
+        session_id = "2026-01-23_10-00-00_game_run01"
+        session_dir = sessions_dir / session_id
+        session_dir.mkdir()
+
+        app = create_app(sessions_dir)
+        client = app.test_client()
+
+        response = client.get(f"/s/{session_id}/analysis")
+
+        assert response.status_code == 200
+        data = response.get_json()
+        assert "parts" in data
+        assert len(data["parts"]) == 0
+        assert "message" in data
+
+    def test_analysis_part_returns_json(self, tmp_path):
+        """GET /s/<session_id>/analysis/<part_id> returns analysis JSON."""
+        import json
+
+        from yanhu.app import create_app
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+
+        # Create session with analysis file
+        session_id = "2026-01-23_10-00-00_game_run01"
+        session_dir = sessions_dir / session_id
+        session_dir.mkdir()
+        analysis_dir = session_dir / "analysis"
+        analysis_dir.mkdir()
+
+        analysis_data = {"segment_id": "part_0001", "scene_label": "menu", "facts": ["test fact"]}
+        (analysis_dir / "part_0001.json").write_text(json.dumps(analysis_data))
+
+        app = create_app(sessions_dir)
+        client = app.test_client()
+
+        response = client.get(f"/s/{session_id}/analysis/part_0001")
+
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data["segment_id"] == "part_0001"
+        assert data["scene_label"] == "menu"
+
+    def test_analysis_part_blocks_invalid_part_id(self, tmp_path):
+        """GET /s/<session_id>/analysis/<part_id> blocks invalid part_id patterns."""
+        from yanhu.app import create_app
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+
+        session_id = "2026-01-23_10-00-00_game_run01"
+        session_dir = sessions_dir / session_id
+        session_dir.mkdir()
+
+        app = create_app(sessions_dir)
+        client = app.test_client()
+
+        # Try various invalid patterns
+        invalid_ids = ["part_1", "evil", "part_..01", "part_0001.json"]
+
+        for invalid_id in invalid_ids:
+            response = client.get(f"/s/{session_id}/analysis/{invalid_id}")
+            assert response.status_code == 400, f"Should reject {invalid_id}"
+            data = response.get_json()
+            assert "error" in data
+            assert "Invalid" in data["error"]
+
+    def test_analysis_part_returns_404_for_missing_file(self, tmp_path):
+        """GET /s/<session_id>/analysis/<part_id> returns 404 for missing file."""
+        from yanhu.app import create_app
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+
+        session_id = "2026-01-23_10-00-00_game_run01"
+        session_dir = sessions_dir / session_id
+        session_dir.mkdir()
+
+        # Create analysis dir but no files
+        analysis_dir = session_dir / "analysis"
+        analysis_dir.mkdir()
+
+        app = create_app(sessions_dir)
+        client = app.test_client()
+
+        response = client.get(f"/s/{session_id}/analysis/part_0001")
+
+        assert response.status_code == 404
+        data = response.get_json()
+        assert "error" in data
+
+    def test_session_view_includes_analysis_tab(self, tmp_path):
+        """Session view page includes Analysis tab."""
+        import json
+
+        from yanhu.app import create_app
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+
+        # Create complete session
+        session_id = "2026-01-23_10-00-00_game_run01"
+        session_dir = sessions_dir / session_id
+        session_dir.mkdir()
+
+        # Create required markdown files
+        (session_dir / "overview.md").write_text("# Overview\n\nTest")
+        (session_dir / "highlights.md").write_text("# Highlights\n\n- Test")
+        (session_dir / "timeline.md").write_text("# Timeline\n\nTest")
+        (session_dir / "manifest.json").write_text(json.dumps({"session_id": session_id}))
+
+        app = create_app(sessions_dir)
+        client = app.test_client()
+
+        response = client.get(f"/s/{session_id}")
+
+        assert response.status_code == 200
+        html = response.data.decode("utf-8")
+
+        # Verify Analysis tab exists
+        assert "Analysis" in html
+        assert 'onclick="showTab(\'analysis\')"' in html
+        assert 'id="analysis"' in html
+
+
+class TestSessionNavigation:
+    """Test session navigation UX enhancements."""
+
+    def test_session_view_includes_tab_hash_navigation_js(self, tmp_path):
+        """Session view includes JavaScript for tab hash navigation."""
+        import json
+
+        from yanhu.app import create_app
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+
+        # Create complete session
+        session_id = "2026-01-23_10-00-00_game_run01"
+        session_dir = sessions_dir / session_id
+        session_dir.mkdir()
+
+        (session_dir / "overview.md").write_text("# Overview\n\nTest")
+        (session_dir / "highlights.md").write_text("# Highlights\n\n- Test")
+        (session_dir / "timeline.md").write_text("# Timeline\n\nTest")
+        (session_dir / "manifest.json").write_text(json.dumps({"session_id": session_id}))
+
+        app = create_app(sessions_dir)
+        client = app.test_client()
+
+        response = client.get(f"/s/{session_id}")
+
+        assert response.status_code == 200
+        html = response.data.decode("utf-8")
+
+        # Verify hash navigation functions exist
+        assert "getActiveTabFromHash" in html
+        assert "activateTabFromHash" in html
+        assert "window.location.hash" in html
+        assert "hashchange" in html
+
+    def test_session_view_includes_frame_link_patcher_js(self, tmp_path):
+        """Session view includes JavaScript to patch frame links."""
+        import json
+
+        from yanhu.app import create_app
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+
+        # Create complete session
+        session_id = "2026-01-23_10-00-00_game_run01"
+        session_dir = sessions_dir / session_id
+        session_dir.mkdir()
+
+        (session_dir / "overview.md").write_text("# Overview\n\nTest")
+        (session_dir / "highlights.md").write_text("# Highlights\n\n- Test")
+        (session_dir / "timeline.md").write_text("# Timeline\n\nTest")
+        (session_dir / "manifest.json").write_text(json.dumps({"session_id": session_id}))
+
+        app = create_app(sessions_dir)
+        client = app.test_client()
+
+        response = client.get(f"/s/{session_id}")
+
+        assert response.status_code == 200
+        html = response.data.decode("utf-8")
+
+        # Verify frame link patcher function exists
+        assert "patchFrameLinks" in html
+        assert 'href*="/frames/"' in html
+        assert "target" in html
+        assert "noopener noreferrer" in html
+
+    def test_timeline_with_frames_renders_links(self, tmp_path):
+        """Timeline with frame links renders correctly."""
+        import json
+
+        from yanhu.app import create_app
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+
+        # Create session with timeline containing frame links
+        session_id = "2026-01-23_10-00-00_game_run01"
+        session_dir = sessions_dir / session_id
+        session_dir.mkdir()
+
+        timeline_md = """# Timeline
+
+### part_0001 (00:00 - 00:05)
+
+**Frames**: [frame_0001.jpg](/s/2026-01-23_10-00-00_game_run01/frames/part_0001/frame_0001.jpg)
+
+> Test segment
+"""
+        (session_dir / "overview.md").write_text("# Overview")
+        (session_dir / "highlights.md").write_text("# Highlights")
+        (session_dir / "timeline.md").write_text(timeline_md)
+        (session_dir / "manifest.json").write_text(json.dumps({"session_id": session_id}))
+
+        app = create_app(sessions_dir)
+        client = app.test_client()
+
+        response = client.get(f"/s/{session_id}")
+
+        assert response.status_code == 200
+        html = response.data.decode("utf-8")
+
+        # Verify frame link is present in timeline
+        assert "/frames/part_0001/frame_0001.jpg" in html
+        assert "frame_0001.jpg" in html
+
+    def test_show_tab_function_signature_accepts_skip_hash(self, tmp_path):
+        """showTab function accepts skipHashUpdate parameter."""
+        import json
+
+        from yanhu.app import create_app
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+
+        session_id = "2026-01-23_10-00-00_game_run01"
+        session_dir = sessions_dir / session_id
+        session_dir.mkdir()
+
+        (session_dir / "overview.md").write_text("# Overview")
+        (session_dir / "highlights.md").write_text("# Highlights")
+        (session_dir / "timeline.md").write_text("# Timeline")
+        (session_dir / "manifest.json").write_text(json.dumps({"session_id": session_id}))
+
+        app = create_app(sessions_dir)
+        client = app.test_client()
+
+        response = client.get(f"/s/{session_id}")
+
+        assert response.status_code == 200
+        html = response.data.decode("utf-8")
+
+        # Verify function signature includes skipHashUpdate parameter
+        assert "function showTab(tabName, skipHashUpdate)" in html
+        assert "skipHashUpdate" in html
+
+
 class TestMediaPreflight:
     """Test media probing and estimates."""
 

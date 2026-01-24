@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
+import emoji
+
 from yanhu.manifest import Manifest, SegmentInfo
 
 # OCR normalization patterns: (pattern, replacement)
@@ -70,18 +72,43 @@ class OcrItem:
 
 @dataclass
 class UiSymbolItem:
-    """A UI symbol (emoji/icon) with source tracking for time-based alignment."""
+    """A UI symbol (emoji/icon) with source tracking for time-based alignment.
 
-    symbol: str  # The emoji or symbol (e.g., "❤️", "⭐")
+    Evidence-layer fields (required):
+    - symbol: Raw emoji/icon glyph (e.g., "❤️", "⭐")
+    - t_rel: Relative time in seconds (from session start)
+    - source_frame: Frame filename where symbol appears
+
+    Optional metadata fields:
+    - type: Symbol category (e.g., "emoji", "icon", None for legacy)
+    - name: Canonical name (e.g., "red_heart" from emoji lib, or None)
+    - source_text: Short snippet of surrounding text (optional context)
+    - source_part_id: Part/segment identifier (e.g., "part_0002") for unambiguous binding
+    """
+
+    symbol: str  # Raw emoji/icon glyph (evidence-layer, verbatim)
     t_rel: float  # Relative time in seconds (from session start)
     source_frame: str  # Frame filename where symbol appears
+    type: str | None = None  # Symbol category (e.g., "emoji")
+    name: str | None = None  # Canonical name if available
+    source_text: str | None = None  # Optional surrounding text snippet
+    source_part_id: str | None = None  # Part identifier for unambiguous frame binding
 
     def to_dict(self) -> dict:
-        return {
+        result = {
             "symbol": self.symbol,
             "t_rel": self.t_rel,
             "source_frame": self.source_frame,
         }
+        if self.type is not None:
+            result["type"] = self.type
+        if self.name is not None:
+            result["name"] = self.name
+        if self.source_text is not None:
+            result["source_text"] = self.source_text
+        if self.source_part_id is not None:
+            result["source_part_id"] = self.source_part_id
+        return result
 
     @classmethod
     def from_dict(cls, data: dict) -> "UiSymbolItem":
@@ -89,6 +116,10 @@ class UiSymbolItem:
             symbol=data["symbol"],
             t_rel=data.get("t_rel", 0.0),
             source_frame=data.get("source_frame", ""),
+            type=data.get("type"),
+            name=data.get("name"),
+            source_text=data.get("source_text"),
+            source_part_id=data.get("source_part_id"),
         )
 
 
@@ -247,6 +278,70 @@ def generate_analysis_path(segment_id: str) -> str:
         Relative path like "analysis/part_0001.json"
     """
     return f"analysis/{segment_id}.json"
+
+
+def extract_emojis_from_ocr(
+    ocr_items: list[OcrItem], part_id: str | None = None
+) -> list[UiSymbolItem]:
+    """Extract all emojis from OCR items into ui_symbol_items (evidence layer).
+
+    Scans each OCR item's text for emoji characters and creates UiSymbolItem entries
+    with source frame anchoring. Deduplicates within same frame.
+
+    Args:
+        ocr_items: List of OCR items with text, t_rel, source_frame
+        part_id: Optional part identifier to anchor symbols for unambiguous binding
+
+    Returns:
+        List of UiSymbolItem with extracted emojis (type="emoji", raw glyph preserved)
+    """
+    extracted: list[UiSymbolItem] = []
+    seen_in_frame: dict[tuple[str, str], bool] = {}  # (emoji_glyph, source_frame) -> bool
+
+    for ocr_item in ocr_items:
+        text = ocr_item.text
+        if not text:
+            continue
+
+        # Extract all emojis from text using emoji library
+        # emoji.distinct_emoji_list() returns all unique emojis in the text
+        emojis_in_text = emoji.distinct_emoji_list(text)
+
+        for emoji_char in emojis_in_text:
+            # Deduplicate: same emoji + same frame = only one item
+            dedup_key = (emoji_char, ocr_item.source_frame)
+            if dedup_key in seen_in_frame:
+                continue
+            seen_in_frame[dedup_key] = True
+
+            # Get canonical name if available (e.g., "red_heart")
+            try:
+                emoji_name = emoji.demojize(emoji_char).strip(":")
+            except Exception:
+                emoji_name = None
+
+            # Create optional source text snippet (up to 20 chars around emoji)
+            emoji_pos = text.find(emoji_char)
+            if emoji_pos >= 0:
+                start = max(0, emoji_pos - 10)
+                end = min(len(text), emoji_pos + len(emoji_char) + 10)
+                source_snippet = text[start:end]
+            else:
+                source_snippet = None
+
+            extracted.append(
+                UiSymbolItem(
+                    symbol=emoji_char,  # Raw glyph (evidence-layer verbatim)
+                    t_rel=ocr_item.t_rel,
+                    source_frame=ocr_item.source_frame,
+                    type="emoji",
+                    name=emoji_name,
+                    source_text=source_snippet,
+                    source_part_id=part_id,
+                )
+            )
+
+    return extracted
 
 
 class Analyzer(Protocol):
@@ -431,6 +526,11 @@ class ClaudeAnalyzer:
                             source_frame=item.source_frame,
                         )
                     )
+
+            # Extract emojis from OCR items (evidence layer)
+            # This supplements Claude's ui_symbol_items with deterministic emoji extraction
+            emoji_items = extract_emojis_from_ocr(ocr_items, part_id=segment.id)
+            ui_symbol_items.extend(emoji_items)
 
             return AnalysisResult(
                 segment_id=segment.id,

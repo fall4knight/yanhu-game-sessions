@@ -182,6 +182,7 @@ class QueueJob:
     estimated_segments: int | None = None  # Estimated number of segments
     estimated_runtime_sec: int | None = None  # Estimated processing time in seconds
     asr_models: list[str] | None = None  # ASR models to run (e.g., ["whisper_local", "mock"])
+    whisper_device: str | None = None  # Whisper device mode ("cpu" or "cuda")
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
@@ -222,6 +223,8 @@ class QueueJob:
             result["estimated_runtime_sec"] = self.estimated_runtime_sec
         if self.asr_models is not None:
             result["asr_models"] = self.asr_models
+        if self.whisper_device is not None:
+            result["whisper_device"] = self.whisper_device
         return result
 
     @classmethod
@@ -247,6 +250,7 @@ class QueueJob:
             estimated_segments=data.get("estimated_segments"),
             estimated_runtime_sec=data.get("estimated_runtime_sec"),
             asr_models=data.get("asr_models"),
+            whisper_device=data.get("whisper_device"),
         )
 
     def to_json_line(self) -> str:
@@ -1225,6 +1229,7 @@ def process_job(
             backend=run_config.get("transcribe_backend", "whisper_local"),
             model_size=run_config.get("transcribe_model", "base"),
             compute_type=run_config.get("transcribe_compute", "int8"),
+            device=run_config.get("whisper_device", "cpu"),
             beam_size=run_config.get("transcribe_beam_size", 1),
             vad_filter=run_config.get("transcribe_vad_filter", True),
             limit=transcribe_limit,

@@ -2882,6 +2882,32 @@ class TestGetHighlightTextFunction:
         assert _has_heart_symbol([]) is False
         assert _has_heart_symbol(None) is False
 
+    def test_has_heart_symbol_unicode_variants(self):
+        """Test _has_heart_symbol with Unicode variants (with/without VS16)."""
+        # U+2764 alone (text form)
+        heart_text = "\u2764"
+        assert _has_heart_symbol([heart_text]) is True
+
+        # U+2764 + U+FE0F (emoji form with variation selector)
+        heart_emoji = "\u2764\uFE0F"
+        assert _has_heart_symbol([heart_emoji]) is True
+
+        # Colored heart variants
+        assert _has_heart_symbol(["💛"]) is True  # Yellow heart U+1F49B
+        assert _has_heart_symbol(["💙"]) is True  # Blue heart U+1F499
+        assert _has_heart_symbol(["💚"]) is True  # Green heart U+1F49A
+        assert _has_heart_symbol(["💜"]) is True  # Purple heart U+1F49C
+        assert _has_heart_symbol(["🖤"]) is True  # Black heart U+1F5A4
+        assert _has_heart_symbol(["🤍"]) is True  # White heart U+1F90D
+        assert _has_heart_symbol(["🤎"]) is True  # Brown heart U+1F90E
+        assert _has_heart_symbol(["💔"]) is True  # Broken heart U+1F494
+
+        # Multiple symbols with one heart
+        assert _has_heart_symbol(["🔥", "❤️", "💯"]) is True
+
+        # Non-heart symbols
+        assert _has_heart_symbol(["🔥", "💯", "🎯"]) is False
+
     def test_get_highlight_text_does_not_add_heart(self):
         """Test get_highlight_text does NOT add ❤️ prefix (that's apply_heart_to_chunk's job)."""
         from yanhu.analyzer import AnalysisResult
@@ -3147,3 +3173,213 @@ class TestHighlightSummaryLine:
         text2 = "没有标点的很长很长的文本内容"
         result2 = truncate_at_sentence_boundary(text2, 10)
         assert len(result2) == 10
+
+
+class TestOverviewSummaryGeneration:
+    """Tests for deterministic overview summary and outcome generation."""
+
+    def test_overview_uses_highlights_summaries_when_present(self, tmp_path):
+        """Overview summary should extract bullets from highlights.md when available."""
+        from yanhu.composer import compose_overview
+        from yanhu.manifest import Manifest, SegmentInfo
+
+        # Create session dir with highlights.md
+        session_dir = tmp_path / "session_test"
+        session_dir.mkdir()
+
+        highlights_content = """# Highlights: test_session
+
+**Top 3 moments** (selected by content score)
+
+- [00:00:00] Quote 1 (segment=part_0001, score=150)
+  - summary: First summary line
+- [00:00:05] Quote 2 (segment=part_0002, score=140)
+  - summary: Second summary line
+- [00:00:10] Quote 3 (segment=part_0003, score=130)
+  - summary: Third summary line
+"""
+        (session_dir / "highlights.md").write_text(highlights_content, encoding="utf-8")
+
+        manifest = Manifest(
+            session_id="2026-01-23_10-00-00_testgame_run01",
+            created_at="2026-01-23T10:00:00",
+            source_video="test.mp4",
+            source_video_local="source.mp4",
+            segment_duration_seconds=5,
+            segments=[
+                SegmentInfo("part_0001", 0.0, 5.0, "segments/part_0001.mp4"),
+            ],
+        )
+
+        result = compose_overview(manifest, session_dir)
+
+        # Should include summary bullets from highlights
+        assert "First summary line" in result
+        assert "Second summary line" in result
+        assert "Third summary line" in result
+        assert "TODO" not in result
+
+    def test_overview_falls_back_to_timeline_when_no_highlights(self, tmp_path):
+        """Overview should use timeline facts when highlights.md is missing."""
+        from yanhu.composer import compose_overview
+        from yanhu.manifest import Manifest, SegmentInfo
+
+        # Create session dir with only timeline.md
+        session_dir = tmp_path / "session_test"
+        session_dir.mkdir()
+
+        timeline_content = """# Timeline: test_session
+
+## Timeline
+
+### part_0001 (00:00:00 - 00:00:05)
+
+> First fact from timeline
+- change: Some change
+
+### part_0002 (00:00:05 - 00:00:10)
+
+> Second fact from timeline
+- change: Another change
+
+### part_0003 (00:00:10 - 00:00:15)
+
+> Third fact from timeline
+- asr: Some speech
+"""
+        (session_dir / "timeline.md").write_text(timeline_content, encoding="utf-8")
+
+        manifest = Manifest(
+            session_id="2026-01-23_10-00-00_testgame_run01",
+            created_at="2026-01-23T10:00:00",
+            source_video="test.mp4",
+            source_video_local="source.mp4",
+            segment_duration_seconds=5,
+            segments=[
+                SegmentInfo("part_0001", 0.0, 5.0, "segments/part_0001.mp4"),
+            ],
+        )
+
+        result = compose_overview(manifest, session_dir)
+
+        # Should include facts from timeline
+        assert "First fact from timeline" in result
+        assert "Second fact from timeline" in result
+        assert "Third fact from timeline" in result
+        assert "TODO" not in result
+
+    def test_overview_shows_neutral_message_when_no_outputs(self, tmp_path):
+        """Overview should show neutral message when no highlights or timeline exist."""
+        from yanhu.composer import compose_overview
+        from yanhu.manifest import Manifest, SegmentInfo
+
+        # Create empty session dir
+        session_dir = tmp_path / "session_test"
+        session_dir.mkdir()
+
+        manifest = Manifest(
+            session_id="2026-01-23_10-00-00_testgame_run01",
+            created_at="2026-01-23T10:00:00",
+            source_video="test.mp4",
+            source_video_local="source.mp4",
+            segment_duration_seconds=5,
+            segments=[
+                SegmentInfo("part_0001", 0.0, 5.0, "segments/part_0001.mp4"),
+            ],
+        )
+
+        result = compose_overview(manifest, session_dir)
+
+        # Should show neutral message
+        assert "No summary available yet." in result
+        assert "TODO" not in result
+
+    def test_overview_outcome_shows_partial_when_coverage_exists(self, tmp_path):
+        """Outcome should indicate partial session when transcribe_coverage exists."""
+        from yanhu.composer import compose_overview
+        from yanhu.manifest import Manifest, SegmentInfo
+
+        manifest = Manifest(
+            session_id="2026-01-23_10-00-00_testgame_run01",
+            created_at="2026-01-23T10:00:00",
+            source_video="test.mp4",
+            source_video_local="source.mp4",
+            segment_duration_seconds=5,
+            segments=[
+                SegmentInfo("part_0001", 0.0, 5.0, "segments/part_0001.mp4"),
+            ],
+            transcribe_coverage={
+                "processed": 5,
+                "total": 10,
+                "skipped_limit": 5,
+            },
+        )
+
+        result = compose_overview(manifest)
+
+        # Should indicate partial session
+        assert "Partial session (limited transcription)." in result
+        assert "TODO" not in result
+
+    def test_overview_outcome_shows_success_when_complete(self, tmp_path):
+        """Outcome should show success message for complete sessions."""
+        from yanhu.composer import compose_overview
+        from yanhu.manifest import Manifest, SegmentInfo
+
+        manifest = Manifest(
+            session_id="2026-01-23_10-00-00_testgame_run01",
+            created_at="2026-01-23T10:00:00",
+            source_video="test.mp4",
+            source_video_local="source.mp4",
+            segment_duration_seconds=5,
+            segments=[
+                SegmentInfo("part_0001", 0.0, 5.0, "segments/part_0001.mp4"),
+            ],
+            transcribe_coverage=None,
+        )
+
+        result = compose_overview(manifest)
+
+        # Should show success message
+        assert "Session processed successfully" in result
+        assert "TODO" not in result
+
+    def test_overview_limits_summaries_to_max_items(self, tmp_path):
+        """Overview should limit summary bullets to max_items (5 by default)."""
+        from yanhu.composer import compose_overview
+        from yanhu.manifest import Manifest, SegmentInfo
+
+        # Create session dir with 10 highlights
+        session_dir = tmp_path / "session_test"
+        session_dir.mkdir()
+
+        highlights_lines = ["# Highlights: test_session", "", "**Top moments**", ""]
+        for i in range(10):
+            quote_line = f"- [00:00:{i:02d}] Quote {i} (segment=part_{i:04d}, score=100)"
+            highlights_lines.append(quote_line)
+            highlights_lines.append(f"  - summary: Summary line {i}")
+
+        (session_dir / "highlights.md").write_text(
+            "\n".join(highlights_lines), encoding="utf-8"
+        )
+
+        manifest = Manifest(
+            session_id="2026-01-23_10-00-00_testgame_run01",
+            created_at="2026-01-23T10:00:00",
+            source_video="test.mp4",
+            source_video_local="source.mp4",
+            segment_duration_seconds=5,
+            segments=[
+                SegmentInfo("part_0001", 0.0, 5.0, "segments/part_0001.mp4"),
+            ],
+        )
+
+        result = compose_overview(manifest, session_dir)
+
+        # Should include first 5 summaries
+        for i in range(5):
+            assert f"Summary line {i}" in result
+
+        # Should NOT include summaries 6-9
+        for i in range(6, 10):
+            assert f"Summary line {i}" not in result

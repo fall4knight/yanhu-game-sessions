@@ -290,12 +290,15 @@ def format_time_range(start: float, end: float) -> str:
     return f"{format_timestamp(start)} - {format_timestamp(end)}"
 
 
-def format_frames_list(frames: list[str], max_display: int = 3) -> str:
+def format_frames_list(
+    frames: list[str], max_display: int = 3, session_id: str | None = None
+) -> str:
     """Format frames list as markdown links.
 
     Args:
-        frames: List of relative frame paths
+        frames: List of relative frame paths (e.g., "frames/part_0001/frame_0001.jpg")
         max_display: Maximum frames to show before truncating
+        session_id: Session ID for generating web-accessible URLs
 
     Returns:
         Markdown formatted string with frame links
@@ -304,7 +307,25 @@ def format_frames_list(frames: list[str], max_display: int = 3) -> str:
         return "_No frames extracted_"
 
     displayed = frames[:max_display]
-    links = [f"[{Path(f).name}]({f})" for f in displayed]
+
+    if session_id:
+        # Generate web-accessible URLs: /s/<session_id>/frames/<part_id>/<filename>
+        # Parse frame path: frames/part_XXXX/frame_YYYY.jpg -> part_XXXX, frame_YYYY.jpg
+        links = []
+        for f in displayed:
+            frame_path = Path(f)
+            # Extract part_id (parent directory name) and filename
+            if len(frame_path.parts) >= 2:
+                part_id = frame_path.parts[-2]  # e.g., "part_0001"
+                filename = frame_path.name       # e.g., "frame_0001.jpg"
+                url = f"/s/{session_id}/frames/{part_id}/{filename}"
+                links.append(f"[{filename}]({url})")
+            else:
+                # Fallback: use relative path if structure unexpected
+                links.append(f"[{frame_path.name}]({f})")
+    else:
+        # Backward compatibility: use relative paths
+        links = [f"[{Path(f).name}]({f})" for f in displayed]
 
     result = ", ".join(links)
     remaining = len(frames) - max_display
@@ -421,6 +442,153 @@ def get_segment_quote(segment: SegmentInfo, session_dir: Path | None) -> str | N
     return None
 
 
+def _find_nearest_asr_text(
+    symbol_t_rel: float, segment: SegmentInfo, session_dir: Path | None
+) -> str | None:
+    """Find nearest ASR text snippet to a symbol's timestamp using time-based matching.
+
+    Time base: segment-relative (0..segment_duration).
+    - symbol.t_rel is segment-relative (0..segment_duration)
+    - ASR t_start/t_end are absolute (session time), converted to segment-relative
+    - Matching uses midpoint: mid = (t_start + t_end) / 2
+    - Returns ASR item with minimal |symbol_t_rel - mid|
+
+    Args:
+        symbol_t_rel: Symbol timestamp (segment-relative seconds)
+        segment: Segment info with start_time for time base conversion
+        session_dir: Path to session directory for loading ASR data
+
+    Returns:
+        Nearest ASR text snippet, or None if no ASR data available
+    """
+    if not session_dir or not segment.analysis_path:
+        return None
+
+    analysis_file = session_dir / segment.analysis_path
+    if not analysis_file.exists():
+        return None
+
+    # Load asr_items from analysis JSON
+    try:
+        import json
+
+        with open(analysis_file, encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return None
+
+    asr_items = data.get("asr_items", [])
+    if not asr_items:
+        # Fall back to ui_key_text (first non-empty)
+        ui_key_text = data.get("ui_key_text", [])
+        for text in ui_key_text:
+            if text and text.strip():
+                return text.strip()
+        return None
+
+    # Time-based matching: find ASR item with minimal distance
+    best_text = None
+    min_distance = float("inf")
+
+    for item in asr_items:
+        text = item.get("text")
+        t_start = item.get("t_start")
+        t_end = item.get("t_end")
+
+        if not text or t_start is None or t_end is None:
+            continue
+
+        # Convert ASR times from absolute (session time) to segment-relative
+        # by subtracting segment.start_time
+        t_start_rel = t_start - segment.start_time
+        t_end_rel = t_end - segment.start_time
+
+        # Calculate midpoint in segment-relative time
+        mid = (t_start_rel + t_end_rel) / 2
+
+        # Calculate distance
+        distance = abs(symbol_t_rel - mid)
+
+        if distance < min_distance:
+            min_distance = distance
+            best_text = text.strip()
+
+    return best_text
+
+
+def get_segment_symbols(
+    segment: SegmentInfo, session_dir: Path | None, session_id: str
+) -> str | None:
+    """Get emoji symbols from ui_symbol_items with frame links and nearest ASR text.
+
+    Args:
+        segment: Segment info from manifest
+        session_dir: Path to session directory
+        session_id: Session identifier for frame URL generation
+
+    Returns:
+        Formatted symbols string with frame links and ASR context, or None if no symbols
+    """
+    if not session_dir:
+        return None
+    analysis = get_segment_analysis(segment, session_dir)
+    if not analysis:
+        return None
+
+    # Get ui_symbol_items
+    if not hasattr(analysis, "ui_symbol_items") or not analysis.ui_symbol_items:
+        return None
+
+    # Extract part_id from segment.id (e.g., "part_0002")
+    part_id = segment.id
+
+    # Filter symbols belonging to this part (with backward compat fallback)
+    segment_symbols = []
+    for item in analysis.ui_symbol_items:
+        # Use source_part_id if available for precise binding
+        if hasattr(item, "source_part_id") and item.source_part_id:
+            if item.source_part_id == part_id:
+                segment_symbols.append(item)
+        else:
+            # Backward compatibility: if no source_part_id, include it
+            segment_symbols.append(item)
+
+    if not segment_symbols:
+        return None
+
+    # Deduplicate symbols by (symbol, source_frame)
+    seen = set()
+    unique_symbols = []
+    for item in segment_symbols:
+        key = (item.symbol, item.source_frame)
+        if key not in seen:
+            seen.add(key)
+            unique_symbols.append(item)
+
+    if not unique_symbols:
+        return None
+
+    # Format as linked symbols with optional ASR context
+    symbol_links = []
+    for item in unique_symbols:
+        # Generate frame URL: /s/<session_id>/frames/<part_id>/<filename>
+        frame_filename = item.source_frame
+        frame_url = f"/s/{session_id}/frames/{part_id}/{frame_filename}"
+
+        # Find nearest ASR text for context using time-based matching
+        nearest_asr = _find_nearest_asr_text(item.t_rel, segment, session_dir)
+
+        # Create markdown link: [emoji](url) with optional ASR context
+        if nearest_asr:
+            # Truncate long ASR text
+            asr_display = nearest_asr[:30] + "..." if len(nearest_asr) > 30 else nearest_asr
+            symbol_links.append(f"[{item.symbol}]({frame_url}) (near: '{asr_display}')")
+        else:
+            symbol_links.append(f"[{item.symbol}]({frame_url})")
+
+    return " ".join(symbol_links)
+
+
 def has_valid_claude_analysis(manifest: Manifest, session_dir: Path) -> bool:
     """Check if any segment has valid Claude analysis.
 
@@ -478,11 +646,12 @@ def compose_timeline(manifest: Manifest, session_dir: Path | None = None) -> str
 
     for seg in manifest.segments:
         time_range = format_time_range(seg.start_time, seg.end_time)
-        frames_str = format_frames_list(seg.frames)
+        frames_str = format_frames_list(seg.frames, session_id=manifest.session_id)
         description = get_segment_description(seg, session_dir)
         what_changed, ui_key_text = get_segment_l1_fields(seg, session_dir)
         asr_text = get_segment_asr_text(seg, session_dir)
         quote_text = get_segment_quote(seg, session_dir)
+        symbols_text = get_segment_symbols(seg, session_dir, manifest.session_id)
 
         lines.extend(
             [
@@ -490,9 +659,15 @@ def compose_timeline(manifest: Manifest, session_dir: Path | None = None) -> str
                 "",
                 f"**Frames**: {frames_str}",
                 "",
-                f"> {description}",
             ]
         )
+
+        # Add symbols line if present (right after Frames)
+        if symbols_text:
+            lines.append(f"**Symbols**: {symbols_text}")
+            lines.append("")
+
+        lines.append(f"> {description}")
 
         # Add L1 fields if present
         if what_changed:
@@ -511,11 +686,134 @@ def compose_timeline(manifest: Manifest, session_dir: Path | None = None) -> str
     return "\n".join(lines)
 
 
-def compose_overview(manifest: Manifest) -> str:
+def _extract_highlights_summaries(session_dir: Path, max_items: int = 5) -> list[str]:
+    """Extract summary bullets from highlights.md if present.
+
+    Args:
+        session_dir: Path to session directory
+        max_items: Maximum number of summary items to extract
+
+    Returns:
+        List of summary strings (empty if highlights.md missing or invalid)
+    """
+    highlights_path = session_dir / "highlights.md"
+    if not highlights_path.exists():
+        return []
+
+    try:
+        content = highlights_path.read_text(encoding="utf-8")
+        summaries = []
+
+        # Parse highlights format:
+        # - [HH:MM:SS] <QUOTE> (segment=..., score=...)
+        #   - summary: <SUMMARY>
+        for line in content.splitlines():
+            if line.strip().startswith("- summary:"):
+                summary_text = line.strip()[len("- summary:") :].strip()
+                if summary_text:
+                    summaries.append(summary_text)
+                if len(summaries) >= max_items:
+                    break
+
+        return summaries
+    except Exception:
+        # Graceful degradation if file is malformed
+        return []
+
+
+def _extract_timeline_snippets(session_dir: Path, max_items: int = 5) -> list[str]:
+    """Extract facts/quotes from timeline.md as fallback summary.
+
+    Args:
+        session_dir: Path to session directory
+        max_items: Maximum number of snippets to extract
+
+    Returns:
+        List of fact strings from timeline blockquotes (empty if timeline.md missing)
+    """
+    timeline_path = session_dir / "timeline.md"
+    if not timeline_path.exists():
+        return []
+
+    try:
+        content = timeline_path.read_text(encoding="utf-8")
+        snippets = []
+
+        # Parse timeline format: blockquotes are facts
+        # > <FACT>
+        for line in content.splitlines():
+            stripped = line.strip()
+            if stripped.startswith(">") and len(stripped) > 2:
+                fact = stripped[1:].strip()
+                if fact and not fact.startswith("TODO"):
+                    snippets.append(fact)
+                if len(snippets) >= max_items:
+                    break
+
+        return snippets
+    except Exception:
+        # Graceful degradation if file is malformed
+        return []
+
+
+def _generate_overview_summary(session_dir: Path | None) -> str:
+    """Generate deterministic summary from existing outputs.
+
+    Priority order:
+    1. highlights.md summaries (preferred)
+    2. timeline.md facts (fallback)
+    3. Neutral message if nothing available
+
+    Args:
+        session_dir: Path to session directory (None if not available)
+
+    Returns:
+        Markdown-formatted summary content
+    """
+    if session_dir is None:
+        return "No summary available yet."
+
+    # Try highlights first
+    summaries = _extract_highlights_summaries(session_dir, max_items=5)
+    if summaries:
+        bullets = "\n".join(f"- {s}" for s in summaries)
+        return bullets
+
+    # Fallback to timeline facts
+    snippets = _extract_timeline_snippets(session_dir, max_items=5)
+    if snippets:
+        bullets = "\n".join(f"- {s}" for s in snippets)
+        return bullets
+
+    # Nothing available
+    return "No summary available yet."
+
+
+def _generate_overview_outcome(manifest: Manifest) -> str:
+    """Generate conservative outcome summary.
+
+    Does NOT infer win/loss unless explicit field exists.
+
+    Args:
+        manifest: Session manifest
+
+    Returns:
+        Outcome string
+    """
+    # Check for partial transcription
+    if manifest.transcribe_coverage:
+        return "Partial session (limited transcription)."
+
+    # Default: successful processing
+    return "Session processed successfully. Highlights and timeline generated."
+
+
+def compose_overview(manifest: Manifest, session_dir: Path | None = None) -> str:
     """Generate overview markdown from manifest.
 
     Args:
         manifest: Session manifest
+        session_dir: Path to session directory (optional, for summary generation)
 
     Returns:
         Markdown content for overview.md
@@ -561,16 +859,20 @@ def compose_overview(manifest: Manifest) -> str:
             ]
         )
 
+    # Generate deterministic summary and outcome
+    summary_content = _generate_overview_summary(session_dir)
+    outcome_content = _generate_overview_outcome(manifest)
+
     lines.extend(
         [
             "",
             "## Summary",
             "",
-            "> TODO: AI-generated summary will appear here after Vision/ASR analysis.",
+            summary_content,
             "",
             "## Outcome",
             "",
-            "> TODO: Session outcome (win/loss/progress) to be determined.",
+            outcome_content,
             "",
         ]
     )
@@ -604,7 +906,7 @@ def write_overview(manifest: Manifest, session_dir: Path) -> Path:
     Returns:
         Path to written overview.md
     """
-    content = compose_overview(manifest)
+    content = compose_overview(manifest, session_dir)
     output_path = session_dir / "overview.md"
     output_path.write_text(content, encoding="utf-8")
     return output_path
@@ -669,18 +971,45 @@ def pick_dialogue_text(ocr_texts: list[str] | None) -> str | None:
 def _has_heart_symbol(ui_symbols: list[str] | None) -> bool:
     """Check if ui_symbols contains a heart emoji.
 
+    Detects all heart emoji variants:
+    - ❤️ / ❤ (red heart, with/without VS16)
+    - 💛 💙 💚 💜 🖤 🤍 🤎 (colored hearts)
+    - 💔 (broken heart)
+    - ♥️ / ♥ (heart suit)
+    - "heart" tag (case-insensitive string)
+
     Args:
         ui_symbols: List of detected symbols/emoji
 
     Returns:
-        True if contains ❤️ or heart-like symbol
+        True if contains any heart emoji or "heart" tag
     """
     if not ui_symbols:
         return False
+
+    # Define heart emoji Unicode codepoints (without variation selectors)
+    heart_codepoints = {
+        0x2764,  # ❤ HEAVY BLACK HEART
+        0x2665,  # ♥ HEART SUIT
+        0x1F49B,  # 💛 YELLOW HEART
+        0x1F499,  # 💙 BLUE HEART
+        0x1F49A,  # 💚 GREEN HEART
+        0x1F49C,  # 💜 PURPLE HEART
+        0x1F5A4,  # 🖤 BLACK HEART
+        0x1F90D,  # 🤍 WHITE HEART
+        0x1F90E,  # 🤎 BROWN HEART
+        0x1F494,  # 💔 BROKEN HEART
+    }
+
     for sym in ui_symbols:
         sym_lower = sym.lower()
-        if "❤" in sym or "heart" in sym_lower:
+        # Check for "heart" tag (string form)
+        if "heart" in sym_lower:
             return True
+        # Check for heart emoji codepoints
+        for char in sym:
+            if ord(char) in heart_codepoints:
+                return True
     return False
 
 
@@ -1234,6 +1563,7 @@ class HighlightEntry:
     start_time: float
     quote: str | None  # Quote text (from aligned_quotes or fallback)
     summary: str | None  # Summary text (facts[0] / what_changed)
+    symbols: str | None = None  # Emoji symbols with frame links
 
 
 def compose_highlights(
@@ -1414,6 +1744,17 @@ def compose_highlights(
                 # Merge summaries: prefer first, fallback to second
                 merged_summary = summary1 or summary2
 
+                # Merge symbols from both segments
+                symbols1 = get_segment_symbols(seg1, session_dir, manifest.session_id)
+                symbols2 = get_segment_symbols(seg2, session_dir, manifest.session_id)
+                merged_symbols = None
+                if symbols1 and symbols2:
+                    merged_symbols = f"{symbols1} {symbols2}"
+                elif symbols1:
+                    merged_symbols = symbols1
+                elif symbols2:
+                    merged_symbols = symbols2
+
                 merged_highlights.append(
                     HighlightEntry(
                         score=merged_score,
@@ -1421,6 +1762,7 @@ def compose_highlights(
                         start_time=seg1.start_time,
                         quote=merged_quote,
                         summary=merged_summary,
+                        symbols=merged_symbols,
                     )
                 )
                 i += 2  # Skip both segments
@@ -1429,6 +1771,7 @@ def compose_highlights(
         # No merge - add single segment
         # Note: symbols already applied per-item in get_highlight_text
         final_quote = quote1
+        symbols = get_segment_symbols(seg1, session_dir, manifest.session_id)
         merged_highlights.append(
             HighlightEntry(
                 score=score1,
@@ -1436,6 +1779,7 @@ def compose_highlights(
                 start_time=seg1.start_time,
                 quote=final_quote,
                 summary=summary1,
+                symbols=symbols,
             )
         )
         i += 1
@@ -1486,6 +1830,10 @@ def compose_highlights(
         # Summary line (indented)
         if entry.summary:
             lines.append(f"  - summary: {entry.summary}")
+
+        # Symbols line (indented)
+        if entry.symbols:
+            lines.append(f"  - symbols: {entry.symbols}")
 
     # If no highlights found
     if not top_highlights:

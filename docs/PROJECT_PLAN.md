@@ -468,6 +468,198 @@ No pipeline rewrite, no native GUI redesign—focus on **one-click launch** for 
 
 ---
 
+### Multimodal Backend Options: Gemini 3 Pro + Qwen3 (Cost-Effective Alternatives)
+
+**Motivation**:
+- **Gemini 3 Pro** shows strong native multimodal capabilities (ASR + OCR + summary + highlights in one shot) with competitive pricing
+- **Claude Vision** is costly (~$3/1000 images) and engineering-heavy (separate ASR, multiple API calls per segment)
+- **Qwen3** offers open-source, local-first option for privacy-sensitive deployments
+- Goal: Reduce per-session cost by 50-80% while maintaining quality, enable users to choose backend based on budget/privacy needs
+
+**Scope (Future Work)**:
+
+1. **Analyze Backend Registry**
+   - Add `analyze_backend` registry similar to ASR registry: `{claude, gemini_3pro, qwen3, mock}`
+   - Each backend implements unified interface: `analyze_segment(frames, prompts) -> AnalysisResult`
+   - Backend-specific configuration: API keys, model versions, regional endpoints
+   - Graceful degradation: fallback to mock if backend unavailable
+
+2. **Unified Multimodal Output Schema**
+   - Define L1 fields (facts, what_changed, scene_label, ui_key_text, caption) as contract
+   - Add `ui_symbol_items` (OCR with coordinates) for UI text extraction
+   - Add `aligned_quotes` (quote + summary) for highlights generation
+   - Schema validation: ensure all backends return compatible JSON structure
+   - Version schema to support future extensions without breaking changes
+
+3. **CLI + UI Wiring**
+   - CLI: `--analyze-backend {claude|gemini_3pro|qwen3|mock}` flag (default: current behavior = claude)
+   - App UI: Dropdown selector in job creation form (same as ASR model dropdown)
+   - Store `analyze_backend` in `QueueJob` and `manifest.json` for reproducibility
+   - Display backend used in session overview and job detail pages
+
+4. **Cost Guardrails**
+   - **Per-run budget cap**: `--max-cost-dollars N` flag to abort if estimate exceeds N
+   - **Max calls/frames**: `--analyze-max-segments N` to limit API calls (similar to transcribe limits)
+   - **Dry-run estimate**: `yanhu estimate --session <id>` shows cost breakdown before processing
+   - **Response caching**: Cache API responses by `hash(frames_content + prompt)` to avoid redundant calls on re-runs
+   - Cost tracking: Add `cost_estimate` and `actual_cost` fields to manifest and job JSON
+
+5. **Evaluation & Quality Comparison**
+   - **Side-by-side comparison tool**: Run same session through multiple backends, diff outputs
+   - **Quality metrics**: Precision/recall on known test fixtures (e.g., ❤️ emoji binding cases, Cantonese ASR accuracy)
+   - **Benchmark suite**: 5-10 representative sessions (game clips, actor clips, tutorial videos) with ground truth labels
+   - **Cost vs Quality matrix**: Document tradeoffs (e.g., "Gemini 3 Pro: 60% cost, 90% quality vs Claude")
+   - Add regression tests: ensure emoji binding, watermark filtering, quote alignment work across all backends
+
+**Checklist (Unchecked)**:
+- [ ] **Backend Registry**
+  - [ ] Define `AnalyzeBackend` abstract interface with `analyze_segment()` method
+  - [ ] Implement `GeminiProBackend` with Gemini 3 Pro API integration
+  - [ ] Implement `Qwen3Backend` with local/API options (TBD: Qwen3 API endpoint or local model)
+  - [ ] Update `analyze_session()` to accept `backend` parameter and dispatch to registry
+  - [ ] Add backend validation and error handling (API key missing, rate limits, timeouts)
+- [ ] **Unified Schema**
+  - [ ] Document output schema v2 with all required L1 fields + ui_symbol_items + aligned_quotes
+  - [ ] Add schema validation function: `validate_analysis_result(result, backend_name)`
+  - [ ] Write converter functions for backend-specific responses → unified schema
+  - [ ] Add tests: parse real API responses from each backend, assert schema compliance
+- [ ] **CLI + UI Integration**
+  - [ ] Add `--analyze-backend` flag to `yanhu analyze` command
+  - [ ] Add backend dropdown to job creation form in app UI (default: claude)
+  - [ ] Store `analyze_backend` in QueueJob dataclass and manifest.json
+  - [ ] Display "Analyzed with: Gemini 3 Pro" in session overview metadata
+  - [ ] Update app UI to show backend-specific warnings (e.g., "Gemini: beta quality")
+- [ ] **Cost Guardrails**
+  - [ ] Implement `estimate_cost(backend, num_segments, frames_per_segment) -> dollars`
+  - [ ] Add `--max-cost-dollars` flag with pre-run check and abort if exceeded
+  - [ ] Add `--analyze-max-segments` limit (similar to `--transcribe-limit`)
+  - [ ] Implement response caching: `cache/<backend>/<hash>.json` for API responses
+  - [ ] Add cost tracking fields to manifest: `estimated_cost`, `actual_cost`, `cost_breakdown`
+  - [ ] Display cost summary in job detail page and session overview
+- [ ] **Evaluation Suite**
+  - [ ] Create benchmark fixture: 5 sessions with ground truth labels (facts, ui_text, quotes)
+  - [ ] Implement `yanhu compare --session <id> --backends claude,gemini_3pro,qwen3`
+  - [ ] Generate diff report: show side-by-side outputs, highlight mismatches
+  - [ ] Add quality metrics: emoji binding accuracy, watermark filtering recall, quote alignment F1
+  - [ ] Document cost vs quality tradeoffs in `docs/BACKEND_COMPARISON.md`
+  - [ ] Add regression tests: run benchmark suite on CI, assert no quality degradation
+
+**Acceptance Criteria (Definition of Done)**:
+- User can run `yanhu analyze --analyze-backend gemini_3pro <session>` and get valid outputs
+- App UI shows backend dropdown, stores choice in manifest, displays in overview
+- Cost estimator shows accurate breakdown: "Estimated: $0.50 (Gemini 3 Pro, 10 segments × 6 frames)"
+- Side-by-side comparison report shows Gemini 3 Pro matches Claude on ❤️ emoji binding test case
+- Benchmark suite passes with ≥85% accuracy on all backends (facts extraction, ui_text, quotes)
+- Cost guardrails prevent runaway spending: `--max-cost-dollars 5` aborts if estimate exceeds $5
+- Caching reduces repeat API calls: re-running same session with same backend uses cached responses
+- Documentation includes migration guide: "How to switch from Claude to Gemini 3 Pro"
+
+**Does NOT Include (Out of Scope)**:
+- Multi-backend ensemble (running multiple backends and merging outputs)
+- Real-time streaming analysis (still batch-only per segment)
+- Custom prompt templates per backend (uses same prompts for now)
+- Automatic backend selection based on content type (user must choose explicitly)
+
+---
+
+### OCR Decoupling + Vibe Layer (Gemini/Qwen-Friendly Architecture)
+
+**Motivation**:
+- **Current architecture is expensive and unreliable**: Claude Vision performs both OCR extraction and narrative analysis in one call, making it costly (~$3/1000 images) without guaranteeing better OCR accuracy than specialized tools
+- **Evidence stability critical**: ASR and OCR should be verbatim, timestamped, and immutable; current mixing of extraction + interpretation risks evidence contamination
+- **Gemini/Qwen inference characteristics**: Gemini 3 Pro provides strong narrative summaries and "vibe" capture but may infer/hallucinate details; these should NOT overwrite evidence-layer OCR
+- **Cost control requires separation**: Cannot optimize costs while OCR and analysis are bundled; need to choose cheap OCR + optional expensive analysis
+- **Verification gate depends on evidence**: Current verify gate checks evidence fields (ocr_items, asr_items), which should remain deterministic regardless of analysis backend
+
+**Proposed Architecture**:
+
+**Two-Layer Pipeline**:
+
+1. **Evidence Layer (Strict, Deterministic)**:
+   - **Purpose**: Extract verbatim text, timestamps, frame anchors
+   - **Outputs**: `ocr_items` (text + confidence + source_frame), `asr_items` (text + t_start + t_end)
+   - **Backends**:
+     - `ocr_backend: {open_ocr, claude_vision, gemini_ocr, qwen_ocr}`
+     - `asr_backend: {whisper_local, mock}` (already exists)
+   - **Default**: `open_ocr` (PaddleOCR or Tesseract) for cost-free, deterministic extraction
+   - **Schema**: Confidence scores mandatory; no inference allowed (e.g., cannot add punctuation OCR didn't see)
+   - **Immutable**: Evidence layer outputs never modified by Vibe Layer
+
+2. **Vibe Layer (Interpretation, Inference-Tagged)**:
+   - **Purpose**: Narrative summary, highlights, sentiment, game state inference
+   - **Outputs**: `vibe_summary`, `highlight_moments`, `inferred_context` (all marked as "interpretation")
+   - **Backends**: `analyze_backend: {claude, gemini_3pro, qwen3, mock}`
+   - **Evidence anchors**: Every vibe claim must reference source evidence (e.g., "inferred from OCR 'daddy也叫了' at t=10.0")
+   - **Explicit inference tagging**: UI displays "🔮 Inferred" label for all Vibe Layer content
+   - **Optional**: Users can skip Vibe Layer entirely for privacy/cost (`--evidence-only` mode)
+
+**CLI + UI Wiring**:
+- `--ocr-backend {open_ocr|claude_vision|gemini_ocr|qwen_ocr}` (default: `open_ocr`)
+- `--analyze-backend {claude|gemini_3pro|qwen3|none}` (default: `none` for evidence-only)
+- `--evidence-only` flag: skip Vibe Layer, only extract OCR + ASR
+- UI: Separate tabs for "Evidence" (OCR/ASR verbatim) and "Vibe" (narrative summaries with inference labels)
+
+**Checklist (Unchecked)**:
+- [ ] **OCR Backend Registry**
+  - [ ] Define `OcrBackend` abstract interface: `extract_ocr(frames) -> list[OcrItem]`
+  - [ ] Implement `OpenOcrBackend` using PaddleOCR or Tesseract (default, local, free)
+  - [ ] Add confidence field to OcrItem schema (required for all backends)
+  - [ ] Migrate existing `claude_vision` to dual mode: can serve as `ocr_backend` OR `analyze_backend`
+  - [ ] Add `--ocr-backend` CLI flag and job configuration storage
+  - [ ] Write tests: parse OCR from each backend, assert schema compliance (text, confidence, source_frame)
+- [ ] **Evidence Layer Schema**
+  - [ ] Document Evidence Layer contract: ocr_items + asr_items (verbatim, no inference)
+  - [ ] Add `evidence.json` output: stores only OCR + ASR, no analysis/vibe content
+  - [ ] Enforce immutability: Vibe Layer cannot modify evidence.json
+  - [ ] Update verify gate to check only Evidence Layer outputs (ignore Vibe Layer)
+  - [ ] Add "strict mode" verification: assert no inference in ocr_items (e.g., no added punctuation)
+- [ ] **Vibe Layer Architecture**
+  - [ ] Define `vibe_summary.json` schema: narrative, highlights, inferred_context, evidence_anchors
+  - [ ] Add inference tagging: every inferred claim links to source evidence (ocr_item id or asr_item timestamp)
+  - [ ] Implement `--evidence-only` mode: skip Vibe Layer entirely, only extract OCR + ASR
+  - [ ] Add `--analyze-backend none` support: same as evidence-only mode
+  - [ ] Update composer to generate timeline/highlights from Evidence Layer OR Vibe Layer (user choice)
+- [ ] **UI Updates**
+  - [ ] Add "Evidence" tab: shows verbatim OCR + ASR with confidence scores and frame links
+  - [ ] Add "Vibe" tab: shows narrative summaries with 🔮 inference labels and evidence anchors
+  - [ ] Display OCR confidence scores in Evidence tab (e.g., "都做过 (confidence: 0.95)")
+  - [ ] Show evidence anchors in Vibe tab (e.g., "Inferred game state: victory [from OCR 'WIN' at frame_0042]")
+  - [ ] Add toggle: "Evidence Only" mode hides Vibe tab and shows warning if analyze_backend != none
+- [ ] **Benchmark Suite**
+  - [ ] Create test fixture: actor clip with "❤️都做过" moment (tests emoji + OCR binding)
+  - [ ] Create test fixture: Cantonese game clip (tests ASR fidelity for non-Mandarin)
+  - [ ] Create test fixture: low-confidence OCR scenario (blurry text, tests confidence scoring)
+  - [ ] Implement benchmark script: `yanhu benchmark --backends open_ocr,claude_vision --sessions <fixture_ids>`
+  - [ ] Generate cost matrix: compare cost per session across backend combinations (OCR × Analyze)
+  - [ ] Quality metrics: OCR accuracy (precision/recall vs ground truth), ❤️ binding success rate, Cantonese ASR WER
+  - [ ] Document tradeoffs: "open_ocr + gemini_3pro: $0.20/session, 85% quality vs claude_vision: $3.50/session, 90% quality"
+- [ ] **Cost Guardrails**
+  - [ ] Implement per-session budget cap: `--max-cost-dollars N` aborts if Evidence + Vibe estimate exceeds N
+  - [ ] Add separate cost tracking: `evidence_cost` and `vibe_cost` in manifest.json
+  - [ ] Implement response caching for both layers: `cache/ocr/<hash>.json` and `cache/vibe/<hash>.json`
+  - [ ] Add `yanhu estimate --session <id> --breakdown` to show Evidence vs Vibe cost split
+  - [ ] Display cost savings when using evidence-only mode: "Evidence-only: $0.00 (saved $3.50 on Vibe Layer)"
+
+**Definition of Done**:
+- User can run `yanhu analyze --ocr-backend open_ocr --analyze-backend none <video>` for free, local-only evidence extraction
+- Verify gate passes on evidence-only sessions (no Vibe Layer required for validation)
+- UI clearly separates Evidence tab (verbatim, no 🔮 labels) from Vibe tab (summaries with 🔮 inference markers)
+- Every vibe claim in `vibe_summary.json` has `evidence_anchor` field linking to source ocr_item or asr_item
+- Benchmark suite shows ≥50% cost reduction: "open_ocr + gemini_3pro" vs "claude_vision only" (measured on 5+ sessions)
+- ❤️都做过 binding test passes with `open_ocr` backend (emoji detection works with non-Claude OCR)
+- Cantonese ASR fixture shows no degradation when switching from Claude Vision to open_ocr (ASR quality independent of OCR backend)
+- Strict mode verify gate asserts: no inference in ocr_items (e.g., `assert all(item.source == 'ocr_raw' for item in ocr_items)`)
+- Evidence Layer outputs (`evidence.json`, `ocr_items`, `asr_items`) remain immutable across re-runs with different Vibe backends
+
+**Does NOT Include (Out of Scope)**:
+- Multi-OCR ensemble (running multiple OCR backends and merging results)
+- Real-time OCR streaming (still batch-only per segment)
+- Custom OCR training or fine-tuning (uses off-the-shelf models only)
+- Automatic OCR backend selection based on image quality (user must choose explicitly)
+- Vibe Layer A/B testing or automatic backend routing
+
+---
+
 ## Risks & Mitigations
 
 | Risk | Severity | Likelihood | Mitigation |
@@ -516,7 +708,18 @@ No pipeline rewrite, no native GUI redesign—focus on **one-click launch** for 
 | 2026-01-23 | App v1.4 (ETA Calibration + Metrics) | Done | MetricsStore in _metrics.json persists observed throughput (seg/s) per preset+segment_duration_bucket (auto_short/medium/long); BackgroundWorker._update_metrics() updates after job done using transcribe_processed/elapsed_sec; EMA smoothing (alpha=0.2): avg_rate_ema = 0.2*observed + 0.8*old; calculate_job_estimates() uses metrics when available (runtime = overhead + segments/metrics_rate), falls back to heuristic; UI JavaScript computes calibrated ETA: rate_ema = 0.2*current_rate + 0.8*rate_ema, eta = (total-done)/rate_ema; displays "Observed rate", "Calibrated ETA", "Est. finish time"; metrics are local-only advisory data; does NOT change pipeline behavior; 19 new tests (2 app + 3 watcher + 14 metrics), 736 total |
 | 2026-01-23 | Multi-model ASR v0 | Done | asr_registry.py defines ASR_MODELS (mock, whisper_local) with validate_asr_models(); job.asr_models (comma-separated) accepted in UI forms and validated; transcribe_session(asr_models=[...]) runs models sequentially per segment; per-model outputs saved to outputs/asr/<model_key>/transcript.json (list of segment results); primary model (first in list) also saved to analysis/ for backward compat; manifest.asr_models records models run; UI "Transcripts" tab: GET /s/<session_id>/transcripts endpoint, model selector buttons, per-segment display with text/timestamps; best-effort error handling (one model fails → continue others); compose uses primary model only (v0 limitation); 8 new tests (6 registry + 5 transcriber), 749 total; Does NOT: implement qwen3 ASR, add side-by-side diff view, run models in parallel |
 | 2026-01-23 | M9.0: Desktop Distribution MVP | Done | launcher.py desktop entrypoint: starts Flask app, ensures ~/yanhu-sessions/{sessions,raw} dirs exist, auto-opens browser to http://127.0.0.1:8787, checks ffmpeg availability and shows warning banner if missing; PyInstaller packaging: yanhu.spec builds macOS .app and Windows .exe (no code signing/installer for MVP); UI footer shows "🔒 Local processing only"; ffmpeg warning banner with install instructions if not available; GitHub Actions workflow builds macOS/Windows artifacts on tag push; pyproject.toml adds [build] optional deps (pyinstaller), yanhu-desktop entry point; scripts/build_desktop.sh/.bat for local builds; docs/BUILD.md + RELEASE_NOTES_v0.1.0.md + SMOKE_TEST_CHECKLIST.md; 6 new launcher tests, 761 total; Does NOT: redesign UI, add code signing, create installer, bundle ffmpeg; Distribution-first approach: reuses existing Web UI rather than building native GUI |
-| TBD | Qwen3 Analyze Backend | Not Started | Future milestone: Add qwen3 as optional analyze backend (alternative to claude) or ASR backend; --analyze-backend qwen3 CLI flag; qwen3-specific prompt templates; cost comparison docs |
+| 2026-01-23 | Step 13.8: Launcher Compatibility | Done | run_app() accepts debug: bool \| None = None for backward compatibility; filter_kwargs_by_signature() defensive kwarg filtering in launcher prevents crashes from signature mismatches; logs warnings when dropping unexpected kwargs; applied to create_app() and run_app() calls; 5 new tests verify debug parameter acceptance, kwarg filtering, and full launcher pattern; 769 tests total; prevents packaged launcher crashes when calling app functions |
+| 2026-01-23 | Step 14: ASR Dropdown + Device Selection | Done | Replaced checkbox multi-select with single-model dropdown for ASR model selection; defaults to whisper_local (not mock); added conditional Whisper Device dropdown (CPU/GPU) with JavaScript toggle; CPU mode uses int8 quantization, GPU/CUDA uses float16; QueueJob.whisper_device field stores device preference; BackgroundWorker applies device settings to run_config and transcribe_session; device parameter passed to WhisperLocalBackend constructor; 4 new tests verify dropdown selection, CPU/GPU device storage, and UI rendering; 773 tests total; Does NOT: implement watch integration, change backend registry logic |
+| 2026-01-23 | Bugfix: Timeline Frame Links | Done | Fixed 404 errors when clicking frame links in timeline.md; added Flask route /s/<session_id>/frames/<part_id>/<filename> to serve frame images; modified format_frames_list() to generate web-accessible URLs with session_id; implemented path traversal protection (regex validation + resolve() check); 5 new tests verify frame serving, 404 handling, and security; 778 tests total; Does NOT: change frame extraction logic, affect other routes |
+| 2026-01-23 | Feature: Analysis Tab | Done | Added Analysis tab to session view for browsing per-part analysis JSON files; GET /s/<session_id>/analysis returns list of parts with summary (scene_label, what_changed, ui_key_text, counts); GET /s/<session_id>/analysis/<part_id> returns raw JSON; UI displays parts with preview and collapsible Raw JSON toggle; implemented security: regex validation for part_id (^part_\\d{4}$), path traversal protection via resolve() check, graceful 404 handling; 6 new tests verify list endpoint, JSON endpoint, invalid part_id blocking, missing files, tab rendering; 784 tests total; Does NOT: change analysis generation, modify pipeline behavior |
+| 2026-01-23 | Feature: Session Navigation UX | Done | Implemented URL hash persistence for active tab state using format #tab=<name>; tabs restore on page refresh/back/forward via hashchange listener; added patchFrameLinks() to set target="_blank" and rel="noopener noreferrer" on all frame image links for new-tab opening; getActiveTabFromHash() parses hash, activateTabFromHash() restores tab state on DOMContentLoaded; showTab() updated to accept skipHashUpdate parameter to prevent loops; 4 new tests verify JavaScript functions present and hash navigation behavior; fixed invalid escape sequence deprecation warning in regex (\\w); 784 tests total; Does NOT: change backend routes, affect frame serving logic |
+| 2026-01-24 | Bugfix: Overview TODO Placeholders | Done | Replaced TODO placeholders in Overview with deterministic summaries from existing outputs (no LLM calls); _extract_highlights_summaries() parses highlights.md summary bullets (priority 1), _extract_timeline_snippets() falls back to timeline.md facts (priority 2), neutral "No summary available yet." if nothing exists; _generate_overview_outcome() returns "Partial session (limited transcription)." if transcribe_coverage exists, else "Session processed successfully."; compose_overview() now accepts optional session_dir parameter; 6 new tests verify: highlights extraction, timeline fallback, neutral message, partial outcome, success outcome, max_items limit; 794 tests total; Does NOT: call external LLMs, change pipeline logic, infer win/loss without explicit field |
+| 2026-01-24 | Bugfix: Heart Emoji Detection (Unicode Variants) | Done | Enhanced _has_heart_symbol() to detect all heart emoji Unicode variants: ❤️/❤ (U+2764 with/without VS16), colored hearts (💛💙💚💜🖤🤍🤎), broken heart (💔), heart suit (♥️/♥); added codepoint-based detection for robustness across Unicode normalization; 1 new comprehensive test with 17 variant assertions; verified working in session 2026-01-23_05-28-49_unknown_actor_clip__b999e892/part_0002 (fast preset + whisper_local + CPU: ❤️ at t_rel=8.0, bound to "都做过" correctly); 795 tests total; Does NOT: change pipeline architecture, modify symbol binding logic |
+| 2026-01-24 | Evidence: Extract All Emojis → ui_symbol_items | Done | Implemented evidence-layer emoji extraction using Python emoji>=2.0 library; added extract_emojis_from_ocr() in analyzer.py to scan OCR text and emit UiSymbolItem with type="emoji", name=canonical (e.g., "red_heart"), raw glyph preserved (including VS16), source_frame anchor, optional source_text snippet; deduplicates within same frame; extended UiSymbolItem schema with optional fields (type, name, source_text) maintaining backward compatibility; integrated into ClaudeAnalyzer.analyze_segment() after Claude response processing; 11 new comprehensive tests cover: VS16 variants, colored hearts, multiple emojis, deduplication, skin tone modifiers, flags, source text capture; fixes "❤️都做过" class regressions by construction; 806 tests total; Does NOT: implement meaning inference (Vibe layer deferred), change pipeline architecture; meaning interpretation explicitly deferred |
+| 2026-01-24 | Binding: Emoji ui_symbol_items → Timeline/Highlights | Done | Implemented time/frame-aligned emoji binding in timeline.md and highlights.md output; added get_segment_symbols() in composer.py to extract ui_symbol_items for segment with frame URL generation (/s/<session_id>/frames/<part_id>/<filename>); timeline displays "**Symbols**: [emoji](frame_url)" line after Frames section; highlights displays "- symbols: [emoji](frame_url)" line after summary (indented); merged highlights combine symbols from both segments; deduplicates symbols by (emoji, source_frame) within segment; 7 new tests verify: timeline symbols line, highlights symbols line, no symbols when empty, multiple emojis, merged segment symbol combining, correct URL format; verified with session 2026-01-23_05-28-49_unknown_actor_clip__b999e892/part_0002 (❤️ at frame_0004.jpg bound correctly); 813 tests total; Does NOT: add meaning inference, change OCR/ASR/quote text (evidence verbatim), use keyword special-casing (time/frame alignment only) |
+| 2026-01-24 | Precision: Emoji Binding with source_part_id + ASR Context (UPDATED: Fixed timebase bug) | Done | Fixed emoji binding precision by anchoring symbols to part_id and displaying nearest ASR text with correct time-based matching; extended UiSymbolItem with source_part_id field for unambiguous frame binding; modified extract_emojis_from_ocr() to accept part_id parameter and set source_part_id; updated ClaudeAnalyzer.analyze_segment() to pass segment.id; enhanced get_segment_symbols() to filter by source_part_id (with backward compat fallback); **FIXED timebase bug**: implemented proper time-based ASR matching in _find_nearest_asr_text() using segment-relative time base (symbol.t_rel is segment-relative 0..duration, ASR t_start/t_end are absolute/session-relative, converted by subtracting segment.start_time); matches by midpoint distance: mid=(t_start+t_end)/2, finds minimal |symbol_t_rel - mid|; timeline/highlights display format: "[emoji](frame_url) (near: 'ASR text')" with 30-char truncation; added 9 new tests: source_part_id set when provided, None when not provided, timeline filtering, highlights filtering, timeline/highlights ASR context, nearest binding by midpoint (t_rel=3.7→"愛都做了" mid=3.70), early symbol binding (t_rel=0.9→first ASR mid=0.82), realistic integration (t_rel=3.0→"愛都做了" not first sentence); 822 tests total; Does NOT: change evidence layer verbatim requirement |
+| 2026-01-24 | Backlog: Multimodal Backend Options | TODO Added | Added TODO for Gemini 3 Pro + Qwen3 multimodal backends as cost-effective alternatives to Claude Vision; see detailed milestone below |
+| 2026-01-24 | Backlog: OCR Decoupling + Vibe Layer | TODO Added | Added TODO for two-layer architecture separating Evidence Layer (strict OCR+ASR verbatim) from Vibe Layer (inference-tagged summaries); addresses Claude Vision cost/reliability issues and enables Gemini/Qwen-friendly pipelines; see detailed milestone below |
 | TBD | M9.1: Desktop Polish | Not Started | Code signing (macOS/Windows); Installer packages (.dmg, .msi); Auto-updater; Keychain integration for API keys; Menu bar/system tray icon; Crash reporting |
 
 ---

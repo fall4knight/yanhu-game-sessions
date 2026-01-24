@@ -5,6 +5,8 @@ Provides a double-click entrypoint for non-programmers.
 
 from __future__ import annotations
 
+import inspect
+import logging
 import shutil
 import sys
 import threading
@@ -13,6 +15,31 @@ import webbrowser
 from pathlib import Path
 
 from yanhu.app import create_app, run_app
+
+logger = logging.getLogger(__name__)
+
+
+def filter_kwargs_by_signature(func, kwargs: dict) -> dict:
+    """Filter kwargs to only include parameters accepted by func's signature.
+
+    Logs a warning when dropping unexpected kwargs.
+
+    Args:
+        func: The function to inspect
+        kwargs: Dictionary of keyword arguments
+
+    Returns:
+        Filtered dictionary with only valid parameters
+    """
+    sig = inspect.signature(func)
+    valid_params = set(sig.parameters.keys())
+    filtered = {}
+    for key, value in kwargs.items():
+        if key in valid_params:
+            filtered[key] = value
+        else:
+            logger.warning(f"Dropping unexpected kwarg '{key}' when calling {func.__name__}")
+    return filtered
 
 
 def check_ffmpeg_availability() -> tuple[bool, str | None]:
@@ -91,17 +118,20 @@ def run_launcher():
     print(f"\nSessions directory: {sessions_dir}")
     print(f"Raw videos directory: {raw_dir}")
 
-    # Create app
+    # Create app with defensive kwarg filtering
     host = "127.0.0.1"
     port = 8787
-    app = create_app(
-        sessions_dir=str(sessions_dir),
-        raw_dir=str(raw_dir),
-        jobs_dir=str(sessions_dir.parent / "_queue" / "jobs"),
-        worker_enabled=True,
-        allow_any_path=False,
-        preset="fast",
-    )
+
+    create_app_kwargs = {
+        "sessions_dir": str(sessions_dir),
+        "raw_dir": str(raw_dir),
+        "jobs_dir": str(sessions_dir.parent / "_queue" / "jobs"),
+        "worker_enabled": True,
+        "allow_any_path": False,
+        "preset": "fast",
+    }
+    create_app_kwargs = filter_kwargs_by_signature(create_app, create_app_kwargs)
+    app = create_app(**create_app_kwargs)
 
     # Set ffmpeg check flag for app to display warning
     app.config["ffmpeg_available"] = ffmpeg_ok
@@ -117,9 +147,20 @@ def run_launcher():
     browser_thread = threading.Thread(target=open_browser, args=(url,), daemon=True)
     browser_thread.start()
 
-    # Start Flask app (blocking)
+    # Start Flask app (blocking) with defensive kwarg filtering
     try:
-        run_app(app, host=host, port=port, debug=False)
+        run_app_kwargs = {
+            "sessions_dir": sessions_dir,
+            "host": host,
+            "port": port,
+            "raw_dir": raw_dir,
+            "worker_enabled": True,
+            "allow_any_path": False,
+            "preset": "fast",
+            "debug": False,
+        }
+        run_app_kwargs = filter_kwargs_by_signature(run_app, run_app_kwargs)
+        run_app(**run_app_kwargs)
     except KeyboardInterrupt:
         print("\n\nShutting down...")
         sys.exit(0)
