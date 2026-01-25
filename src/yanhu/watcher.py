@@ -1230,10 +1230,13 @@ def process_job(
         manifest.save(session_dir)
 
         # Step 4: Analyze (params from run_config)
+        # Auto-detect analyze backend based on API key availability
+        import os
+        analyze_backend = "claude" if os.environ.get("ANTHROPIC_API_KEY") else "mock"
         analyze_session(
             manifest=manifest,
             session_dir=session_dir,
-            backend="claude",
+            backend=analyze_backend,
             max_frames=run_config.get("max_frames", 3),
             detail_level=run_config.get("detail_level", "L1"),
             max_facts=run_config.get("max_facts", 3),

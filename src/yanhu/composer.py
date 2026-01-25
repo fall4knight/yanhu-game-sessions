@@ -341,7 +341,7 @@ def get_segment_description(
 ) -> str:
     """Get description for a segment from analysis or return placeholder.
 
-    Priority: error check > facts (first) > caption > TODO
+    Priority: error check > facts (first) > caption > ASR fallback (for mock) > neutral message
 
     Args:
         segment: Segment info from manifest
@@ -349,23 +349,37 @@ def get_segment_description(
 
     Returns:
         Description from analysis (facts or caption) if available,
-        error message if analysis failed, otherwise TODO
+        ASR-based description for mock analyzer, or neutral message
     """
     if segment.analysis_path and session_dir:
         analysis_file = session_dir / segment.analysis_path
         if analysis_file.exists():
             try:
                 analysis = AnalysisResult.load(analysis_file)
-                # Check for error first - do not output raw_text
+                # Check if this is mock analyzer (no API key)
+                is_mock = analysis.model == "mock"
+
+                # For mock analyzer, use ASR text if available
+                if is_mock:
+                    asr_text = get_segment_asr_text(segment, session_dir)
+                    if asr_text:
+                        # Return truncated ASR text as description
+                        return asr_text[:60] + "..." if len(asr_text) > 60 else asr_text
+                    # Fallback for mock: neutral message
+                    return "Segment processed (ASR-only mode)"
+
+                # For Claude analyzer with error, skip this segment
                 if analysis.error:
-                    return f"TODO: analysis failed (see {segment.analysis_path})"
+                    # Don't show TODO for real failures - return neutral message
+                    return "Analysis unavailable"
+
                 description = analysis.get_description()
                 if description:
                     return description
             except (OSError, KeyError):
-                pass  # Fall through to TODO
+                pass  # Fall through to neutral message
 
-    return "TODO: describe what happened"
+    return "Segment processed"
 
 
 def get_segment_l1_fields(

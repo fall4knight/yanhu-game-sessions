@@ -610,6 +610,12 @@ SESSION_VIEW_TEMPLATE = BASE_TEMPLATE.replace(
     <div id="progress-container"></div>
     <h2>{{ session_id }}</h2>
 
+    {% if not has_api_key %}
+    <div class="info-banner" style="background: #d4edda; color: #155724; padding: 15px; margin: 15px 0; border-radius: 4px; border: 1px solid #c3e6cb;">
+        <strong>ℹ️ ASR-Only Mode:</strong> Vision/OCR analysis disabled (no ANTHROPIC_API_KEY). Timeline and highlights generated from audio transcription only.
+    </div>
+    {% endif %}
+
     {% if asr_error_summary %}
     {% if asr_error_summary.dependency_error %}
     <div class="error-banner" style="background: #e74c3c; color: white; padding: 15px; margin: 15px 0; border-radius: 4px;">
@@ -1378,6 +1384,10 @@ def create_app(
 
     app.config["shutdown_token"] = secrets.token_urlsafe(32)
 
+    # Check if ANTHROPIC_API_KEY is available
+    import os
+    app.config["has_api_key"] = bool(os.environ.get("ANTHROPIC_API_KEY"))
+
     @app.route("/")
     def index():
         """List all sessions and jobs, newest first."""
@@ -1511,6 +1521,7 @@ def create_app(
             ffmpeg_warning=app.config.get("ffmpeg_error"),
             asr_error_summary=asr_error_summary,
             shutdown_token=app.config.get("shutdown_token", ""),
+            has_api_key=app.config.get("has_api_key", False),
         )
 
     @app.route("/s/<session_id>/progress")
