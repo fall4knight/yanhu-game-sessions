@@ -25,9 +25,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[app,build,asr]"
 
-      - name: Runtime self-check (pre-packaging)
+      - name: Debug installed packages
         run: |
-          python scripts/runtime_selfcheck.py
+          echo "=== Checking installed ASR-related packages ==="
+          pip freeze | grep -E "tiktoken|regex|safetensors|faster-whisper|ctranslate2|tokenizers|huggingface-hub|onnxruntime|av|tqdm" || echo "No matching packages found"
+
+      - name: Runtime self-check (pre-packaging - Release Gate)
+        run: |
+          python scripts/runtime_selfcheck.py --profile all
 
       - name: Build macOS app
         run: |
@@ -36,22 +41,44 @@ jobs:
       - name: Verify ASR dependencies bundled in macOS app
         run: |
           echo "=== Checking for bundled ASR dependencies ==="
-          APP_PATH="dist/Yanhu Sessions.app/Contents/MacOS"
 
-          # Check if faster_whisper is bundled (look in the frozen app)
-          if [ -d "$APP_PATH" ]; then
-            echo "✓ Found MacOS directory"
-            # PyInstaller bundles everything into the executable or _internal directory
-            # Check for key library files
-            if ls dist/yanhu/*.dylib 2>/dev/null | grep -q "ctranslate2\|onnxruntime"; then
-              echo "✓ Found ASR runtime libraries"
-            else
-              echo "⚠ ASR runtime libraries not found in dist/yanhu/"
-            fi
-          else
-            echo "✗ ERROR: MacOS directory not found"
+          # Check if yanhu directory exists (PyInstaller output)
+          if [ ! -d "dist/yanhu" ]; then
+            echo "✗ ERROR: dist/yanhu directory not found"
             exit 1
           fi
+          echo "✓ Found dist/yanhu directory"
+
+          # Check for key ASR Python modules in the frozen app
+          echo ""
+          echo "Checking for ASR Python modules:"
+
+          # faster_whisper
+          if find dist/yanhu -name "*faster_whisper*" -type f | grep -q .; then
+            echo "  ✓ faster_whisper"
+          else
+            echo "  ✗ faster_whisper (MISSING)"
+            exit 1
+          fi
+
+          # ctranslate2
+          if find dist/yanhu -name "*ctranslate2*" -type f | grep -q .; then
+            echo "  ✓ ctranslate2"
+          else
+            echo "  ✗ ctranslate2 (MISSING)"
+            exit 1
+          fi
+
+          # tiktoken
+          if find dist/yanhu -name "*tiktoken*" -type f | grep -q .; then
+            echo "  ✓ tiktoken"
+          else
+            echo "  ✗ tiktoken (MISSING)"
+            exit 1
+          fi
+
+          echo ""
+          echo "✓ All critical ASR dependencies bundled"
 
       - name: Debug dist directory
         run: |
@@ -124,9 +151,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[app,build,asr]"
 
-      - name: Runtime self-check (pre-packaging)
+      - name: Debug installed packages
         run: |
-          python scripts/runtime_selfcheck.py
+          echo "=== Checking installed ASR-related packages ==="
+          pip freeze | findstr /R "tiktoken regex safetensors faster-whisper ctranslate2 tokenizers huggingface-hub onnxruntime av tqdm"
+          if ($LASTEXITCODE -ne 0) { echo "No matching packages found" }
+
+      - name: Runtime self-check (pre-packaging - Release Gate)
+        run: |
+          python scripts/runtime_selfcheck.py --profile all
 
       - name: Build Windows executable
         run: |
@@ -136,17 +169,46 @@ jobs:
         run: |
           echo "=== Checking for bundled ASR dependencies ==="
 
-          # Check if faster_whisper related files are present
-          if (Test-Path "dist/yanhu/*.pyd") {
-            $pydFiles = Get-ChildItem -Path "dist/yanhu" -Filter "*.pyd" -Recurse
-            if ($pydFiles | Where-Object { $_.Name -match "ctranslate2|onnxruntime" }) {
-              echo "✓ Found ASR runtime libraries"
-            } else {
-              echo "⚠ ASR runtime libraries not found"
-            }
-          } else {
-            echo "⚠ No .pyd files found"
+          # Check if yanhu directory exists
+          if (-not (Test-Path "dist/yanhu")) {
+            echo "✗ ERROR: dist/yanhu directory not found"
+            exit 1
           }
+          echo "✓ Found dist/yanhu directory"
+
+          # Check for key ASR Python modules
+          echo ""
+          echo "Checking for ASR Python modules:"
+
+          # faster_whisper
+          $fasterWhisper = Get-ChildItem -Path "dist/yanhu" -Recurse -File | Where-Object { $_.Name -like "*faster_whisper*" }
+          if ($fasterWhisper) {
+            echo "  ✓ faster_whisper"
+          } else {
+            echo "  ✗ faster_whisper (MISSING)"
+            exit 1
+          }
+
+          # ctranslate2
+          $ctranslate = Get-ChildItem -Path "dist/yanhu" -Recurse -File | Where-Object { $_.Name -like "*ctranslate2*" }
+          if ($ctranslate) {
+            echo "  ✓ ctranslate2"
+          } else {
+            echo "  ✗ ctranslate2 (MISSING)"
+            exit 1
+          }
+
+          # tiktoken
+          $tiktoken = Get-ChildItem -Path "dist/yanhu" -Recurse -File | Where-Object { $_.Name -like "*tiktoken*" }
+          if ($tiktoken) {
+            echo "  ✓ tiktoken"
+          } else {
+            echo "  ✗ tiktoken (MISSING)"
+            exit 1
+          }
+
+          echo ""
+          echo "✓ All critical ASR dependencies bundled"
 
       - name: Package Windows executable
         run: |

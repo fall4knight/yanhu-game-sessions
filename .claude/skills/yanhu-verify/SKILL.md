@@ -171,8 +171,176 @@ G) ASR whisper_local backend check (requires faster-whisper installed):
   ```
 - If AUDIO MISSING and no asr_error, **FAIL**
 
+## Self-Recommendation Checklist (REQUIRED)
+
+**CRITICAL**: Claude Code must ALWAYS run these checks before claiming any work is complete. Failure of ANY check means the work is NOT done.
+
+### 1. Code Quality Check (ruff)
+```bash
+ruff check src/ tests/ scripts/
+```
+
+**Expected Output**: No errors (exit code 0)
+
+**If FAILED**:
+- Print all ruff errors verbatim
+- **FAIL** with message: "Code quality check failed. Fix ruff errors before proceeding."
+- Do NOT claim work is done
+
+### 2. Test Suite Check (pytest)
+```bash
+pytest -q
+```
+
+**Expected Output**:
+- All tests pass
+- Exit code 0
+- No failures, no errors
+
+**If FAILED**:
+- Print pytest output showing failures
+- **FAIL** with message: "Test suite has failures. Fix failing tests before proceeding."
+- Do NOT claim work is done
+
+### 3. Runtime Dependency Check (Default Gate)
+
+**ALWAYS run these profiles for standard development work**:
+
+```bash
+python scripts/runtime_selfcheck.py --profile core
+python scripts/runtime_selfcheck.py --profile app
+python scripts/runtime_selfcheck.py --profile desktop
+```
+
+**Expected Output** (for each):
+```
+============================================================
+SELF-CHECK PASSED: All dependencies present for profile '<name>'
+============================================================
+```
+
+**If ANY profile FAILS**:
+- Print full selfcheck output showing missing imports
+- **FAIL** with message: "Runtime dependencies missing for profile '<name>'. See docs/DEPENDENCY_MATRIX.md for installation."
+- Do NOT claim work is done
+
+**These profiles do NOT require ASR dependencies** (faster-whisper, tiktoken, etc.), so they MUST pass in all dev environments.
+
+---
+
+### 4. Release Gate (ASR + CI Rehearsal)
+
+**ONLY run when preparing desktop releases or ASR-related changes**:
+
+**When to run**: If ANY of these conditions are true:
+- Files in `.github/workflows/` were modified
+- `yanhu.spec` was modified
+- `scripts/ci_rehearsal_desktop.sh` was modified
+- `docs/DEPENDENCY_MATRIX.md` was modified
+- User intends to create a release tag (v*)
+- User explicitly requests "desktop ASR build" or ASR features
+- Any packaging or build-related changes
+
+**Commands**:
+```bash
+# Full ASR dependency check
+python scripts/runtime_selfcheck.py --profile asr
+python scripts/runtime_selfcheck.py --profile all
+
+# Full CI rehearsal (installs deps in clean venv)
+bash scripts/ci_rehearsal_desktop.sh
+```
+
+**Expected Output** (selfcheck):
+```
+============================================================
+SELF-CHECK PASSED: All dependencies present for profile 'asr'
+============================================================
+SELF-CHECK PASSED: All dependencies present for profile 'all'
+============================================================
+```
+
+**Expected Output** (CI rehearsal):
+```
+============================================================
+CI REHEARSAL PASSED
+============================================================
+
+All checks completed successfully:
+  ✓ ruff check
+  ✓ pytest
+  ✓ runtime self-check (--profile all)
+  ✓ PyInstaller build
+  ✓ macOS bundle structure
+
+Build artifacts:
+  dist/Yanhu Sessions.app (macOS)
+  dist/yanhu/ (Windows)
+
+Ready for release tagging!
+============================================================
+```
+
+**If FAILED**:
+- Print full output showing which check/step failed
+- **FAIL** with message: "Release gate failed. Install missing dependencies or fix build issues before proceeding."
+- Do NOT claim work is done
+- Do NOT suggest creating a tag or release
+
+**Note**: The CI rehearsal script creates a clean venv and installs all deps, so it WILL pass on a clean machine (unlike local dev selfchecks).
+
+### Self-Recommendation Output Format
+
+After running all applicable checks, report:
+
+**Default Gate (standard work)**:
+```
+## Self-Recommendation: [PASS|FAIL]
+
+Default Gate checks:
+  [✓|✗] ruff check src/ tests/ scripts/
+  [✓|✗] pytest -q
+  [✓|✗] runtime selfcheck --profile core
+  [✓|✗] runtime selfcheck --profile app
+  [✓|✗] runtime selfcheck --profile desktop
+
+[If any check failed, list details here]
+
+[If all passed:]
+All default gate checks passed. Work is ready.
+
+[If any failed:]
+Work is NOT complete. Fix failures above and rerun verification.
+```
+
+**Release Gate (packaging/ASR work)**:
+```
+## Self-Recommendation: [PASS|FAIL]
+
+Release Gate checks:
+  [✓|✗] ruff check src/ tests/ scripts/
+  [✓|✗] pytest -q
+  [✓|✗] runtime selfcheck --profile core
+  [✓|✗] runtime selfcheck --profile app
+  [✓|✗] runtime selfcheck --profile desktop
+  [✓|✗] runtime selfcheck --profile asr
+  [✓|✗] runtime selfcheck --profile all
+  [✓|✗] bash scripts/ci_rehearsal_desktop.sh
+
+[If any check failed, list details here]
+
+[If all passed:]
+All release gate checks passed. Ready for release tagging.
+
+[If any failed:]
+Release NOT ready. Fix failures above and rerun verification.
+```
+
+---
+
 ## Output
 
 - PASS/FAIL with reasons
 - Commands executed
 - Key artifact snippets (analysis JSON and timeline block)
+- Self-Recommendation results (REQUIRED)

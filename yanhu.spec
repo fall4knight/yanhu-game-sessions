@@ -3,6 +3,7 @@
 
 import sys
 from pathlib import Path
+from PyInstaller.utils.hooks import collect_submodules, collect_data_files
 
 block_cipher = None
 
@@ -10,44 +11,66 @@ block_cipher = None
 is_macos = sys.platform == 'darwin'
 is_windows = sys.platform == 'win32'
 
+# Collect all submodules for packages with dynamic imports
+hiddenimports_base = [
+    'yanhu.app',
+    'yanhu.cli',
+    'yanhu.session',
+    'yanhu.manifest',
+    'yanhu.segmenter',
+    'yanhu.extractor',
+    'yanhu.analyzer',
+    'yanhu.transcriber',
+    'yanhu.aligner',
+    'yanhu.composer',
+    'yanhu.watcher',
+    'yanhu.progress',
+    'yanhu.verify',
+    'yanhu.metrics',
+    'yanhu.asr_registry',
+    'flask',
+    'markdown',
+    'jinja2',
+    'werkzeug',
+]
+
+# ASR dependencies with comprehensive submodule collection
+hiddenimports_asr = [
+    'faster_whisper',
+    'av',
+    'ctranslate2',
+    'tokenizers',
+    'huggingface_hub',
+    'onnxruntime',
+    'tqdm',
+    'tiktoken',
+    'regex',
+    'safetensors',
+]
+
+# Collect submodules for packages that use dynamic imports
+hiddenimports_collected = []
+for pkg in ['faster_whisper', 'tokenizers', 'huggingface_hub', 'tiktoken', 'safetensors']:
+    try:
+        hiddenimports_collected += collect_submodules(pkg)
+    except Exception:
+        # If collection fails, package may not be installed (skip gracefully)
+        pass
+
+# Collect data files for huggingface packages
+datas_collected = []
+for pkg in ['tokenizers', 'huggingface_hub']:
+    try:
+        datas_collected += collect_data_files(pkg, include_py_files=True)
+    except Exception:
+        pass
+
 a = Analysis(
     ['src/yanhu/launcher.py'],
     pathex=[],
     binaries=[],
-    datas=[],
-    hiddenimports=[
-        'yanhu.app',
-        'yanhu.cli',
-        'yanhu.session',
-        'yanhu.manifest',
-        'yanhu.segmenter',
-        'yanhu.extractor',
-        'yanhu.analyzer',
-        'yanhu.transcriber',
-        'yanhu.aligner',
-        'yanhu.composer',
-        'yanhu.watcher',
-        'yanhu.progress',
-        'yanhu.verify',
-        'yanhu.metrics',
-        'yanhu.asr_registry',
-        'flask',
-        'markdown',
-        'jinja2',
-        'werkzeug',
-        # ASR dependencies (faster-whisper and its runtime deps)
-        'faster_whisper',
-        'av',
-        'ctranslate2',
-        'tokenizers',
-        'huggingface_hub',
-        'onnxruntime',
-        'tqdm',
-        # Additional submodules that may be dynamically imported
-        'tiktoken',
-        'regex',
-        'safetensors',
-    ],
+    datas=datas_collected,
+    hiddenimports=hiddenimports_base + hiddenimports_asr + hiddenimports_collected,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
