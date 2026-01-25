@@ -124,7 +124,9 @@ Output ONLY valid JSON:"""
                 import anthropic
             except ImportError:
                 raise ClaudeClientError(
-                    "anthropic package not installed. Install with:\n  pip install anthropic"
+                    "anthropic package not installed. "
+                    "This is a packaging error in desktop builds. "
+                    "Download the latest release from the official website."
                 )
             self._client = anthropic.Anthropic(api_key=self.api_key)
         return self._client

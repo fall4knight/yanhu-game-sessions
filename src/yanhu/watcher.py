@@ -891,7 +891,8 @@ def start_watcher(
     except ImportError as e:
         raise ImportError(
             "watchdog is required for file watching. "
-            "Install with: pip install yanhu-game-sessions[watcher]"
+            "This feature is not available in the desktop build. "
+            "Use the CLI version for file watching capabilities."
         ) from e
 
     # Build a map from directory path to raw_dir for proper tracking

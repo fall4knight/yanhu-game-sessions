@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import subprocess
+import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Protocol
@@ -122,6 +124,7 @@ class MockAsrBackend:
         segment: SegmentInfo,
         session_dir: Path,
         max_seconds: int | None = None,
+        session_id: str | None = None,
     ) -> AsrResult:
         """Generate mock ASR items from existing OCR data.
 
@@ -236,6 +239,29 @@ class WhisperLocalBackend:
         self._model = None
         self._backend_type: str | None = None
 
+    def _check_model_cached(self) -> bool:
+        """Check if Whisper model is already cached locally.
+
+        Returns:
+            True if model is cached, False if needs download
+        """
+        try:
+            from pathlib import Path
+
+            # Check faster-whisper cache location
+            cache_dir = Path.home() / ".cache" / "huggingface" / "hub"
+            if not cache_dir.exists():
+                return False
+
+            # Model names in huggingface format
+            model_name = f"models--Systran--faster-whisper-{self.model_size}"
+            model_path = cache_dir / model_name
+
+            return model_path.exists()
+        except Exception:
+            # If we can't determine, assume not cached (will trigger progress)
+            return False
+
     def _extract_audio(
         self, segment: SegmentInfo, session_dir: Path
     ) -> tuple[Path | None, str | None]:
@@ -296,8 +322,14 @@ class WhisperLocalBackend:
         except FileNotFoundError:
             return None, "ffmpeg not found. Install ffmpeg to use whisper_local backend."
 
-    def _load_model(self) -> str | None:
-        """Load Whisper model (lazy initialization).
+    def _load_model(
+        self, session_id: str | None = None, session_dir: Path | None = None
+    ) -> str | None:
+        """Load Whisper model (lazy initialization with download progress).
+
+        Args:
+            session_id: Session ID for progress tracking
+            session_dir: Session directory for progress.json
 
         Returns:
             Error message if loading failed, None on success.
@@ -305,15 +337,76 @@ class WhisperLocalBackend:
         if self._model is not None:
             return None
 
+        # Check if model needs download and create progress tracker
+        model_cached = self._check_model_cached()
+        progress_tracker = None
+
+        if not model_cached and session_id and session_dir:
+            from yanhu.progress import ProgressTracker
+
+            # Model sizes (approximate, for display only)
+            model_sizes = {
+                "tiny": "75 MB",
+                "base": "145 MB",
+                "small": "490 MB",
+                "medium": "1.5 GB",
+                "large": "3.0 GB",
+            }
+            size_str = model_sizes.get(self.model_size, "unknown size")
+
+            progress_tracker = ProgressTracker(
+                session_id=session_id,
+                session_dir=session_dir,
+                stage="download_model",
+                total=1,
+                message=f"Downloading Whisper model '{self.model_size}' (~{size_str}). "
+                "This may take a few minutes on first run...",
+            )
+
         # Try faster-whisper first, fall back to openai-whisper
         try:
             from faster_whisper import WhisperModel
 
-            self._model = WhisperModel(
-                self.model_size,
-                device=self.device,
-                compute_type=self.compute_type,
-            )
+            # If downloading, start a background thread to update progress
+            if progress_tracker:
+                stop_event = threading.Event()
+
+                def update_download_progress():
+                    """Update progress message periodically during download."""
+                    elapsed = 0
+                    while not stop_event.is_set():
+                        time.sleep(2)
+                        elapsed += 2
+                        if not stop_event.is_set():
+                            progress_tracker.update(
+                                done=0,
+                                message=f"Downloading Whisper model '{self.model_size}'... "
+                                f"({elapsed}s elapsed)",
+                            )
+
+                progress_thread = threading.Thread(target=update_download_progress, daemon=True)
+                progress_thread.start()
+
+                try:
+                    self._model = WhisperModel(
+                        self.model_size,
+                        device=self.device,
+                        compute_type=self.compute_type,
+                    )
+                finally:
+                    stop_event.set()
+                    progress_thread.join(timeout=1)
+                    # Mark download complete
+                    progress_tracker.update(
+                        done=1, message=f"Model '{self.model_size}' ready"
+                    )
+            else:
+                self._model = WhisperModel(
+                    self.model_size,
+                    device=self.device,
+                    compute_type=self.compute_type,
+                )
+
             self._backend_type = "faster_whisper"
             return None
         except ImportError:
@@ -328,9 +421,12 @@ class WhisperLocalBackend:
         except ImportError:
             pass
 
+        # If we get here, ASR dependencies are missing
+        # In packaged desktop apps, this should NEVER happen (packaging bug)
         return (
-            "Neither faster-whisper nor openai-whisper is installed. "
-            "Install with: pip install 'yanhu-game-sessions[asr]'"
+            "ASR dependency missing: neither faster-whisper nor openai-whisper found. "
+            "This is a packaging error in desktop builds. "
+            "Download the latest release from the official website."
         )
 
     def _get_asr_config(self) -> AsrConfig:
@@ -349,6 +445,7 @@ class WhisperLocalBackend:
         segment: SegmentInfo,
         session_dir: Path,
         max_seconds: int | None = None,
+        session_id: str | None = None,
     ) -> AsrResult:
         """Transcribe a segment using local Whisper model.
 
@@ -356,6 +453,7 @@ class WhisperLocalBackend:
             segment: Segment info
             session_dir: Session directory
             max_seconds: Optional limit on audio duration
+            session_id: Optional session ID for progress tracking
 
         Returns:
             ASR result with transcription items
@@ -372,8 +470,8 @@ class WhisperLocalBackend:
                 asr_config=asr_config,
             )
 
-        # Load model
-        model_error = self._load_model()
+        # Load model (with download progress if needed)
+        model_error = self._load_model(session_id=session_id, session_dir=session_dir)
         if model_error:
             return AsrResult(
                 segment_id=segment.id,
@@ -764,8 +862,10 @@ def transcribe_session(
                     beam_size=beam_size,
                 )
 
-                # Transcribe
-                result = model_backend.transcribe_segment(segment, session_dir, max_seconds)
+                # Transcribe (pass session_id for progress tracking)
+                result = model_backend.transcribe_segment(
+                    segment, session_dir, max_seconds, session_id=manifest.session_id
+                )
 
                 # Save to per-model transcript
                 save_asr_result_per_model(result, session_dir, model_key)

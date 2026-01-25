@@ -19,13 +19,14 @@ class ProgressSnapshot:
     """A snapshot of pipeline progress at a point in time."""
 
     session_id: str
-    stage: str  # "transcribe", "compose", "done"
+    stage: str  # "download_model", "transcribe", "compose", "done"
     done: int  # Number of items completed in current stage
     total: int  # Total items in current stage
     elapsed_sec: float  # Elapsed time since stage started
     eta_sec: float | None  # Estimated time to completion (None if unknown)
     updated_at: str  # ISO timestamp (UTC)
     coverage: dict[str, int] | None = None  # Optional coverage info if limited
+    message: str | None = None  # Optional status message (e.g., "Downloading model...")
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
@@ -41,6 +42,8 @@ class ProgressSnapshot:
             result["eta_sec"] = round(self.eta_sec, 2)
         if self.coverage is not None:
             result["coverage"] = self.coverage
+        if self.message is not None:
+            result["message"] = self.message
         return result
 
 
@@ -60,21 +63,24 @@ class ProgressTracker:
         stage: str,
         total: int,
         coverage: dict[str, int] | None = None,
+        message: str | None = None,
     ):
         """Initialize progress tracker.
 
         Args:
             session_id: Session identifier
             session_dir: Path to session directory
-            stage: Current stage name (e.g., "transcribe")
+            stage: Current stage name (e.g., "transcribe", "download_model")
             total: Total number of items to process in this stage
             coverage: Optional coverage metadata if processing is limited
+            message: Optional status message
         """
         self.session_id = session_id
         self.session_dir = session_dir
         self.stage = stage
         self.total = total
         self.coverage = coverage
+        self.message = message
         self.done = 0
         self.start_time = time.time()
         self.progress_file = session_dir / "outputs" / "progress.json"
@@ -85,13 +91,16 @@ class ProgressTracker:
         # Write initial progress
         self._write_progress()
 
-    def update(self, done: int) -> None:
+    def update(self, done: int, message: str | None = None) -> None:
         """Update progress with current completion count.
 
         Args:
             done: Number of items completed so far
+            message: Optional status message to update
         """
         self.done = done
+        if message is not None:
+            self.message = message
         self._write_progress()
 
     def finalize(self, stage: str = "done") -> None:
@@ -124,6 +133,7 @@ class ProgressTracker:
             eta_sec=eta,
             updated_at=datetime.now(timezone.utc).isoformat(),
             coverage=self.coverage,
+            message=self.message,
         )
 
         # Write atomically (temp file + rename)

@@ -939,6 +939,7 @@ SESSION_VIEW_TEMPLATE = BASE_TEMPLATE.replace(
                 }
 
                 const isDone = data.stage === 'done';
+                const isDownloading = data.stage === 'download_model';
                 const barClass = isDone ? 'progress-bar done' : 'progress-bar';
                 const eta = data.eta_sec ? `, ETA ${formatDuration(data.eta_sec)}` : '';
                 const coverage = data.coverage
@@ -946,15 +947,26 @@ SESSION_VIEW_TEMPLATE = BASE_TEMPLATE.replace(
                       `${data.coverage.processed}/${data.coverage.total} segments transcribed`
                     : '';
 
+                // Display message prominently if present (especially for download_model)
+                const messageHtml = data.message
+                    ? `<div style="margin-top: 8px; font-size: 14px; color: #555;">${data.message}</div>`
+                    : '';
+
+                // For download_model, don't show segment progress (not applicable)
+                const progressDetails = isDownloading
+                    ? `<strong>Elapsed:</strong> ${formatDuration(data.elapsed_sec)}`
+                    : `<strong>Progress:</strong> ${data.done}/${data.total} segments
+                       &nbsp;|&nbsp;
+                       <strong>Elapsed:</strong> ${formatDuration(data.elapsed_sec)}${eta}`;
+
                 document.getElementById('progress-container').innerHTML = `
                     <div class="${barClass}">
                         <div class="progress-info">
                             <strong>Stage:</strong> ${data.stage}
                             &nbsp;|&nbsp;
-                            <strong>Progress:</strong> ${data.done}/${data.total} segments
-                            &nbsp;|&nbsp;
-                            <strong>Elapsed:</strong> ${formatDuration(data.elapsed_sec)}${eta}
+                            ${progressDetails}
                             ${coverage}
+                            ${messageHtml}
                         </div>
                     </div>
                 `;
@@ -1216,11 +1228,12 @@ JOB_DETAIL_TEMPLATE = BASE_TEMPLATE.replace(
                 }
 
                 const isDone = data.stage === 'done';
+                const isDownloading = data.stage === 'download_model';
                 const barClass = isDone ? 'progress-bar done' : 'progress-bar';
 
-                // Compute calibrated ETA if we have progress
+                // Compute calibrated ETA if we have progress (not for download_model)
                 let calibratedInfo = '';
-                if (data.done >= 1 && data.elapsed_sec > 0 && !isDone) {
+                if (!isDownloading && data.done >= 1 && data.elapsed_sec > 0 && !isDone) {
                     const currentRate = data.done / data.elapsed_sec;
 
                     // Apply EMA smoothing (alpha = 0.2)
@@ -1255,16 +1268,27 @@ JOB_DETAIL_TEMPLATE = BASE_TEMPLATE.replace(
                       `${data.coverage.processed}/${data.coverage.total} segments transcribed`
                     : '';
 
+                // Display message prominently if present (especially for download_model)
+                const messageHtml = data.message
+                    ? `<div style="margin-top: 8px; font-size: 14px; color: #555;">${data.message}</div>`
+                    : '';
+
+                // For download_model, don't show segment progress (not applicable)
+                const progressDetails = isDownloading
+                    ? `<strong>Elapsed:</strong> ${formatDuration(data.elapsed_sec)}`
+                    : `<strong>Progress:</strong> ${data.done}/${data.total} segments
+                       &nbsp;|&nbsp;
+                       <strong>Elapsed:</strong> ${formatDuration(data.elapsed_sec)}${eta}`;
+
                 document.getElementById('progress-container').innerHTML = `
                     <div class="${barClass}">
                         <div class="progress-info">
                             <strong>Stage:</strong> ${data.stage}
                             &nbsp;|&nbsp;
-                            <strong>Progress:</strong> ${data.done}/${data.total} segments
-                            &nbsp;|&nbsp;
-                            <strong>Elapsed:</strong> ${formatDuration(data.elapsed_sec)}${eta}
+                            ${progressDetails}
                             ${coverage}
                             ${calibratedInfo}
+                            ${messageHtml}
                         </div>
                     </div>
                 `;

@@ -35,6 +35,18 @@ a = Analysis(
         'markdown',
         'jinja2',
         'werkzeug',
+        # ASR dependencies (faster-whisper and its runtime deps)
+        'faster_whisper',
+        'av',
+        'ctranslate2',
+        'tokenizers',
+        'huggingface_hub',
+        'onnxruntime',
+        'tqdm',
+        # Additional submodules that may be dynamically imported
+        'tiktoken',
+        'regex',
+        'safetensors',
     ],
     hookspath=[],
     hooksconfig={},

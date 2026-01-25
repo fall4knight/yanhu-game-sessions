@@ -34,7 +34,7 @@ class TestTranscribeLimits:
         # Mock the ASR backend to track which segments were called
         transcribed_segments = []
 
-        def mock_transcribe(segment, session_dir, max_seconds):
+        def mock_transcribe(segment, session_dir, max_seconds, session_id=None):
             transcribed_segments.append(segment.id)
             from yanhu.transcriber import AsrResult
 

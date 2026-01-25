@@ -23,11 +23,35 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[app,build]"
+          pip install -e ".[app,build,asr]"
+
+      - name: Runtime self-check (pre-packaging)
+        run: |
+          python scripts/runtime_selfcheck.py
 
       - name: Build macOS app
         run: |
           pyinstaller yanhu.spec
+
+      - name: Verify ASR dependencies bundled in macOS app
+        run: |
+          echo "=== Checking for bundled ASR dependencies ==="
+          APP_PATH="dist/Yanhu Sessions.app/Contents/MacOS"
+
+          # Check if faster_whisper is bundled (look in the frozen app)
+          if [ -d "$APP_PATH" ]; then
+            echo "✓ Found MacOS directory"
+            # PyInstaller bundles everything into the executable or _internal directory
+            # Check for key library files
+            if ls dist/yanhu/*.dylib 2>/dev/null | grep -q "ctranslate2\|onnxruntime"; then
+              echo "✓ Found ASR runtime libraries"
+            else
+              echo "⚠ ASR runtime libraries not found in dist/yanhu/"
+            fi
+          else
+            echo "✗ ERROR: MacOS directory not found"
+            exit 1
+          fi
 
       - name: Debug dist directory
         run: |
@@ -98,11 +122,31 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[app,build]"
+          pip install -e ".[app,build,asr]"
+
+      - name: Runtime self-check (pre-packaging)
+        run: |
+          python scripts/runtime_selfcheck.py
 
       - name: Build Windows executable
         run: |
           pyinstaller yanhu.spec
+
+      - name: Verify ASR dependencies bundled in Windows exe
+        run: |
+          echo "=== Checking for bundled ASR dependencies ==="
+
+          # Check if faster_whisper related files are present
+          if (Test-Path "dist/yanhu/*.pyd") {
+            $pydFiles = Get-ChildItem -Path "dist/yanhu" -Filter "*.pyd" -Recurse
+            if ($pydFiles | Where-Object { $_.Name -match "ctranslate2|onnxruntime" }) {
+              echo "✓ Found ASR runtime libraries"
+            } else {
+              echo "⚠ ASR runtime libraries not found"
+            }
+          } else {
+            echo "⚠ No .pyd files found"
+          }
 
       - name: Package Windows executable
         run: |

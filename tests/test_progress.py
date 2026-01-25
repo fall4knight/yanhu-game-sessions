@@ -164,7 +164,7 @@ class TestProgressDuringTranscribe:
         # Track progress updates
         progress_snapshots = []
 
-        def mock_transcribe(segment, session_dir, max_seconds):
+        def mock_transcribe(segment, session_dir, max_seconds, session_id=None):
             from yanhu.transcriber import AsrResult
 
             return AsrResult(
@@ -297,7 +297,7 @@ class TestProgressWithTranscribeLimit:
         analysis_dir = session_dir / "analysis"
         analysis_dir.mkdir()
 
-        def mock_transcribe(segment, session_dir, max_seconds):
+        def mock_transcribe(segment, session_dir, max_seconds, session_id=None):
             from yanhu.transcriber import AsrResult
 
             return AsrResult(
