@@ -1,8 +1,9 @@
 """Tests for desktop launcher."""
 
 import shutil
+import sys
 
-from yanhu.launcher import check_ffmpeg_availability, ensure_default_directories
+from yanhu.launcher import check_ffmpeg_availability, ensure_default_directories, selfcheck_asr
 
 
 class TestCheckFfmpegAvailability:
@@ -262,3 +263,141 @@ class TestKwargFiltering:
         # Should not crash when creating app
         app = create_app(**filtered)
         assert app is not None
+
+
+class TestAsrSelfcheck:
+    """Test ASR import selfcheck for packaged builds."""
+
+    def test_selfcheck_asr_returns_zero_when_all_imports_succeed(self, monkeypatch, capsys):
+        """selfcheck_asr returns 0 when all ASR modules import successfully."""
+        import builtins
+
+        # Mock __import__ to succeed for all modules
+        original_import = builtins.__import__
+
+        def mock_import(name, *args, **kwargs):
+            # Allow actual imports for non-ASR modules, mock ASR modules
+            asr_modules = [
+                "faster_whisper",
+                "ctranslate2",
+                "tokenizers",
+                "huggingface_hub",
+                "tiktoken",
+                "regex",
+                "safetensors",
+                "av",
+                "onnxruntime",
+            ]
+            if name in asr_modules:
+                # Return a mock module
+                from types import ModuleType
+
+                return ModuleType(name)
+            return original_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", mock_import)
+
+        # Run selfcheck
+        exit_code = selfcheck_asr()
+
+        # Should return 0 (success)
+        assert exit_code == 0
+
+        # Verify output contains success indicators
+        captured = capsys.readouterr()
+        assert "ASR SELFCHECK PASSED" in captured.out
+        assert "Successful: 9/9" in captured.out
+
+    def test_selfcheck_asr_returns_one_when_imports_fail(self, monkeypatch, capsys):
+        """selfcheck_asr returns 1 when ASR modules fail to import."""
+        import builtins
+
+        # Mock __import__ to fail for ASR modules
+        original_import = builtins.__import__
+
+        def mock_import(name, *args, **kwargs):
+            asr_modules = [
+                "faster_whisper",
+                "ctranslate2",
+                "tokenizers",
+                "huggingface_hub",
+                "tiktoken",
+                "regex",
+                "safetensors",
+                "av",
+                "onnxruntime",
+            ]
+            if name in asr_modules:
+                raise ImportError(f"No module named '{name}'")
+            return original_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", mock_import)
+
+        # Run selfcheck
+        exit_code = selfcheck_asr()
+
+        # Should return 1 (failure)
+        assert exit_code == 1
+
+        # Verify output contains failure indicators
+        captured = capsys.readouterr()
+        assert "ASR SELFCHECK FAILED" in captured.out
+        assert "Failed: 9" in captured.out
+
+    def test_launcher_with_selfcheck_asr_flag_exits_without_starting_server(
+        self, monkeypatch, capsys
+    ):
+        """run_launcher with --selfcheck-asr flag runs selfcheck and exits."""
+        import builtins
+
+        # Mock sys.argv to include --selfcheck-asr
+        monkeypatch.setattr(sys, "argv", ["yanhu-desktop", "--selfcheck-asr"])
+
+        # Mock __import__ to succeed
+        original_import = builtins.__import__
+
+        def mock_import(name, *args, **kwargs):
+            asr_modules = [
+                "faster_whisper",
+                "ctranslate2",
+                "tokenizers",
+                "huggingface_hub",
+                "tiktoken",
+                "regex",
+                "safetensors",
+                "av",
+                "onnxruntime",
+            ]
+            if name in asr_modules:
+                from types import ModuleType
+
+                return ModuleType(name)
+            return original_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", mock_import)
+
+        # Mock sys.exit to capture exit code
+        exit_code = []
+
+        def mock_exit(code):
+            exit_code.append(code)
+            raise SystemExit(code)
+
+        monkeypatch.setattr(sys, "exit", mock_exit)
+
+        # Run launcher (should exit via selfcheck)
+        from yanhu.launcher import run_launcher
+
+        try:
+            run_launcher()
+        except SystemExit:
+            pass
+
+        # Verify it exited with code 0 (selfcheck passed)
+        assert len(exit_code) == 1
+        assert exit_code[0] == 0
+
+        # Verify output contains selfcheck message (not launcher startup)
+        captured = capsys.readouterr()
+        assert "ASR Import Selfcheck" in captured.out
+        assert "Desktop Launcher" not in captured.out  # Should NOT start launcher

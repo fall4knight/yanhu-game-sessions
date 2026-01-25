@@ -38,9 +38,9 @@ jobs:
         run: |
           pyinstaller yanhu.spec
 
-      - name: Verify ASR dependencies bundled in macOS app
+      - name: Verify ASR dependencies bundled in macOS app (packaged import selfcheck)
         run: |
-          echo "=== Checking for bundled ASR dependencies ==="
+          echo "=== Verifying ASR dependencies via packaged executable ==="
 
           # Discover the built .app bundle
           APP=$(find dist -maxdepth 2 -name "*.app" | head -1)
@@ -50,45 +50,26 @@ jobs:
           fi
           echo "✓ Found app bundle: $APP"
 
-          # Check for key ASR Python modules inside the .app bundle
-          echo ""
-          echo "Checking for ASR Python modules inside .app bundle:"
+          # Get executable name from Info.plist
+          EXEC_NAME=$(defaults read "$APP/Contents/Info.plist" CFBundleExecutable)
+          EXEC="$APP/Contents/MacOS/$EXEC_NAME"
 
-          # faster_whisper
-          echo ""
-          echo "Searching for faster_whisper..."
-          FASTER_WHISPER=$(find "$APP" -iname "*faster_whisper*" -type f | head -3)
-          if [ -z "$FASTER_WHISPER" ]; then
-            echo "  ✗ faster_whisper (MISSING)"
+          if [ ! -f "$EXEC" ]; then
+            echo "✗ ERROR: Executable not found at: $EXEC"
             exit 1
           fi
-          echo "  ✓ faster_whisper (found)"
-          echo "$FASTER_WHISPER" | sed 's/^/    /'
+          echo "✓ Found executable: $EXEC"
 
-          # ctranslate2
+          # Run packaged import selfcheck
           echo ""
-          echo "Searching for ctranslate2..."
-          CTRANSLATE2=$(find "$APP" -iname "*ctranslate2*" -type f | head -3)
-          if [ -z "$CTRANSLATE2" ]; then
-            echo "  ✗ ctranslate2 (MISSING)"
+          "$EXEC" --selfcheck-asr || {
+            echo ""
+            echo "✗ ERROR: ASR selfcheck failed - dependencies not bundled correctly"
             exit 1
-          fi
-          echo "  ✓ ctranslate2 (found)"
-          echo "$CTRANSLATE2" | sed 's/^/    /'
-
-          # tiktoken
-          echo ""
-          echo "Searching for tiktoken..."
-          TIKTOKEN=$(find "$APP" -iname "*tiktoken*" -type f | head -3)
-          if [ -z "$TIKTOKEN" ]; then
-            echo "  ✗ tiktoken (MISSING)"
-            exit 1
-          fi
-          echo "  ✓ tiktoken (found)"
-          echo "$TIKTOKEN" | sed 's/^/    /'
+          }
 
           echo ""
-          echo "✓ All critical ASR dependencies bundled in .app"
+          echo "✓ Packaged ASR import selfcheck passed"
 
       - name: Debug dist directory
         run: |
@@ -175,9 +156,9 @@ jobs:
         run: |
           pyinstaller yanhu.spec
 
-      - name: Verify ASR dependencies bundled in Windows exe
+      - name: Verify ASR dependencies bundled in Windows exe (packaged import selfcheck)
         run: |
-          echo "=== Checking for bundled ASR dependencies ==="
+          echo "=== Verifying ASR dependencies via packaged executable ==="
 
           # Check if yanhu directory exists
           if (-not (Test-Path "dist/yanhu")) {
@@ -186,39 +167,25 @@ jobs:
           }
           echo "✓ Found dist/yanhu directory"
 
-          # Check for key ASR Python modules
+          # Find the executable
+          $EXEC = "dist/yanhu/yanhu.exe"
+          if (-not (Test-Path $EXEC)) {
+            echo "✗ ERROR: Executable not found at: $EXEC"
+            exit 1
+          }
+          echo "✓ Found executable: $EXEC"
+
+          # Run packaged import selfcheck
           echo ""
-          echo "Checking for ASR Python modules:"
-
-          # faster_whisper
-          $fasterWhisper = Get-ChildItem -Path "dist/yanhu" -Recurse -File | Where-Object { $_.Name -like "*faster_whisper*" }
-          if ($fasterWhisper) {
-            echo "  ✓ faster_whisper"
-          } else {
-            echo "  ✗ faster_whisper (MISSING)"
-            exit 1
-          }
-
-          # ctranslate2
-          $ctranslate = Get-ChildItem -Path "dist/yanhu" -Recurse -File | Where-Object { $_.Name -like "*ctranslate2*" }
-          if ($ctranslate) {
-            echo "  ✓ ctranslate2"
-          } else {
-            echo "  ✗ ctranslate2 (MISSING)"
-            exit 1
-          }
-
-          # tiktoken
-          $tiktoken = Get-ChildItem -Path "dist/yanhu" -Recurse -File | Where-Object { $_.Name -like "*tiktoken*" }
-          if ($tiktoken) {
-            echo "  ✓ tiktoken"
-          } else {
-            echo "  ✗ tiktoken (MISSING)"
+          & $EXEC --selfcheck-asr
+          if ($LASTEXITCODE -ne 0) {
+            echo ""
+            echo "✗ ERROR: ASR selfcheck failed - dependencies not bundled correctly"
             exit 1
           }
 
           echo ""
-          echo "✓ All critical ASR dependencies bundled"
+          echo "✓ Packaged ASR import selfcheck passed"
 
       - name: Package Windows executable
         run: |

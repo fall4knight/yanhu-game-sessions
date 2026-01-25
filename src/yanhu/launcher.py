@@ -5,6 +5,7 @@ Provides a double-click entrypoint for non-programmers.
 
 from __future__ import annotations
 
+import argparse
 import inspect
 import logging
 import sys
@@ -81,6 +82,64 @@ def ensure_default_directories() -> tuple[Path, Path]:
     return sessions_dir, raw_dir
 
 
+def selfcheck_asr() -> int:
+    """Run ASR import selfcheck for packaged builds.
+
+    Verifies that all required ASR runtime modules can be imported.
+    This is used by CI to validate that PyInstaller bundled ASR dependencies correctly.
+
+    Returns:
+        Exit code: 0 if all imports succeed, 1 otherwise
+    """
+    print("=" * 60)
+    print("Yanhu Desktop - ASR Import Selfcheck")
+    print("=" * 60)
+    print()
+
+    # List of required ASR runtime modules
+    required_modules = [
+        "faster_whisper",
+        "ctranslate2",
+        "tokenizers",
+        "huggingface_hub",
+        "tiktoken",
+        "regex",
+        "safetensors",
+        "av",
+        "onnxruntime",
+    ]
+
+    successful = []
+    failed = []
+
+    for module_name in required_modules:
+        try:
+            __import__(module_name)
+            successful.append(module_name)
+            print(f"  ✓ {module_name}")
+        except ImportError as e:
+            failed.append(f"{module_name}: {e}")
+            print(f"  ✗ {module_name} - {e}")
+
+    print()
+    print(f"Successful: {len(successful)}/{len(required_modules)}")
+    print(f"Failed: {len(failed)}")
+    print()
+
+    if failed:
+        print("=" * 60)
+        print("ASR SELFCHECK FAILED")
+        print("=" * 60)
+        print()
+        print("Missing ASR dependencies - packaging error.")
+        return 1
+
+    print("=" * 60)
+    print("ASR SELFCHECK PASSED")
+    print("=" * 60)
+    return 0
+
+
 def open_browser(url: str, delay: float = 1.5):
     """Open browser after a delay.
 
@@ -96,7 +155,23 @@ def run_launcher():
     """Run the desktop launcher.
 
     This is the main entrypoint for the packaged desktop app.
+    Supports --selfcheck-asr flag for CI verification.
     """
+    # Parse arguments
+    parser = argparse.ArgumentParser(
+        description="Yanhu Sessions Desktop Launcher", add_help=False
+    )
+    parser.add_argument(
+        "--selfcheck-asr",
+        action="store_true",
+        help="Run ASR import selfcheck and exit (for CI verification)",
+    )
+    args, _ = parser.parse_known_args()
+
+    # Handle selfcheck mode
+    if args.selfcheck_asr:
+        sys.exit(selfcheck_asr())
+
     print("=" * 60)
     print("Yanhu Game Sessions - Desktop Launcher")
     print("=" * 60)
