@@ -2242,3 +2242,217 @@ class TestFFmpegErrorBannerStyling:
 
         # Check for copy button functionality
         assert "copyCommand" in html
+
+
+class TestSettingsRoutes:
+    """Test Settings page and API key management routes."""
+
+    def test_settings_page_loads(self, tmp_path):
+        """Settings page should load successfully."""
+        from yanhu.app import create_app
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+
+        app = create_app(sessions_dir)
+        client = app.test_client()
+
+        response = client.get("/settings")
+        assert response.status_code == 200
+
+        html = response.get_data(as_text=True)
+        assert "Settings" in html
+        assert "API Keys" in html
+
+    def test_get_api_keys_returns_masked_values(self, tmp_path, monkeypatch):
+        """GET /api/settings/keys returns masked values only."""
+        from yanhu.app import create_app
+        from yanhu.keystore import EnvFileKeyStore
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+
+        # Create a key store with a test key
+        env_file = tmp_path / ".env"
+        store = EnvFileKeyStore(env_file)
+        store.set_key("ANTHROPIC_API_KEY", "sk-ant-1234567890abcdef")
+
+        # Mock get_default_keystore to return our test store
+        def mock_get_default_keystore():
+            return store
+
+        import yanhu.keystore
+        monkeypatch.setattr(yanhu.keystore, "get_default_keystore", mock_get_default_keystore)
+
+        app = create_app(sessions_dir)
+        client = app.test_client()
+
+        response = client.get("/api/settings/keys")
+        assert response.status_code == 200
+
+        data = response.get_json()
+        assert "keys" in data
+        assert "backend" in data
+
+        # Check ANTHROPIC_API_KEY status
+        anthropic_status = data["keys"]["ANTHROPIC_API_KEY"]
+        assert anthropic_status["set"] is True
+        assert anthropic_status["masked"] == "sk-ant…cdef"
+        assert "1234567890ab" not in anthropic_status["masked"]  # Full key not exposed
+
+    def test_post_api_keys_requires_local_only(self, tmp_path):
+        """POST /api/settings/keys requires local-only access."""
+        from yanhu.app import create_app
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+
+        app = create_app(sessions_dir)
+        client = app.test_client()
+
+        # Simulate non-local request
+        response = client.post(
+            "/api/settings/keys",
+            json={"key_name": "ANTHROPIC_API_KEY", "key_value": "test-key"},
+            environ_base={"REMOTE_ADDR": "192.168.1.100"},
+        )
+
+        assert response.status_code == 403
+        data = response.get_json()
+        assert "localhost" in data["error"]
+
+    def test_post_api_keys_requires_token(self, tmp_path):
+        """POST /api/settings/keys requires valid token."""
+        from yanhu.app import create_app
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+
+        app = create_app(sessions_dir)
+        client = app.test_client()
+
+        # Request without token
+        response = client.post(
+            "/api/settings/keys",
+            json={"key_name": "ANTHROPIC_API_KEY", "key_value": "test-key"},
+        )
+
+        assert response.status_code == 403
+        data = response.get_json()
+        assert "token" in data["error"].lower()
+
+    def test_post_api_keys_save_and_retrieve(self, tmp_path, monkeypatch):
+        """POST /api/settings/keys saves key and returns masked value."""
+        from yanhu.app import create_app
+        from yanhu.keystore import EnvFileKeyStore
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+
+        # Create a key store
+        env_file = tmp_path / ".env"
+        store = EnvFileKeyStore(env_file)
+
+        # Mock get_default_keystore
+        def mock_get_default_keystore():
+            return store
+
+        import yanhu.keystore
+        monkeypatch.setattr(yanhu.keystore, "get_default_keystore", mock_get_default_keystore)
+
+        app = create_app(sessions_dir)
+        client = app.test_client()
+
+        # Get shutdown token
+        token = app.config["shutdown_token"]
+
+        # Save key
+        response = client.post(
+            "/api/settings/keys",
+            json={
+                "token": token,
+                "key_name": "ANTHROPIC_API_KEY",
+                "key_value": "sk-ant-test123456789",
+            },
+        )
+
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data["ok"] is True
+        assert data["status"]["set"] is True
+        assert data["status"]["masked"] == "sk-ant…6789"
+        assert "test12345" not in data["status"]["masked"]  # Full key not exposed
+
+        # Verify key was saved
+        saved_key = store.get_key("ANTHROPIC_API_KEY")
+        assert saved_key == "sk-ant-test123456789"
+
+    def test_post_api_keys_clear(self, tmp_path, monkeypatch):
+        """POST /api/settings/keys can clear a key."""
+        from yanhu.app import create_app
+        from yanhu.keystore import EnvFileKeyStore
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+
+        # Create a key store with an existing key
+        env_file = tmp_path / ".env"
+        store = EnvFileKeyStore(env_file)
+        store.set_key("ANTHROPIC_API_KEY", "sk-ant-existing")
+
+        # Mock get_default_keystore
+        def mock_get_default_keystore():
+            return store
+
+        import yanhu.keystore
+        monkeypatch.setattr(yanhu.keystore, "get_default_keystore", mock_get_default_keystore)
+
+        app = create_app(sessions_dir)
+        client = app.test_client()
+
+        # Get shutdown token
+        token = app.config["shutdown_token"]
+
+        # Clear key (null value)
+        response = client.post(
+            "/api/settings/keys",
+            json={
+                "token": token,
+                "key_name": "ANTHROPIC_API_KEY",
+                "key_value": None,
+            },
+        )
+
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data["ok"] is True
+        assert data["status"]["set"] is False
+
+        # Verify key was cleared
+        saved_key = store.get_key("ANTHROPIC_API_KEY")
+        assert saved_key is None
+
+    def test_post_api_keys_rejects_unsupported_key(self, tmp_path):
+        """POST /api/settings/keys rejects unsupported key names."""
+        from yanhu.app import create_app
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+
+        app = create_app(sessions_dir)
+        client = app.test_client()
+
+        token = app.config["shutdown_token"]
+
+        response = client.post(
+            "/api/settings/keys",
+            json={
+                "token": token,
+                "key_name": "UNSUPPORTED_KEY",
+                "key_value": "test-value",
+            },
+        )
+
+        assert response.status_code == 400
+        data = response.get_json()
+        assert "Unsupported key" in data["error"]

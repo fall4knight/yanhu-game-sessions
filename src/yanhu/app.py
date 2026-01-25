@@ -310,6 +310,9 @@ BASE_TEMPLATE = """
         <h1>Yanhu Sessions</h1>
         <div class="nav">
             <a href="/">← All Sessions</a>
+            <span style="margin-left: 15px;">
+                <a href="/settings">⚙️ Settings</a>
+            </span>
             <span style="float: right;">
                 <span style="color: #7f8c8d; font-size: 0.9em; margin-right: 15px;">
                     🔒 Local processing only
@@ -1325,6 +1328,163 @@ JOB_DETAIL_TEMPLATE = BASE_TEMPLATE.replace(
     """,
 )
 
+SETTINGS_TEMPLATE = BASE_TEMPLATE.replace(
+    "{% block content %}{% endblock %}",
+    """
+    <h2>Settings</h2>
+
+    <div class="settings-section">
+        <h3>API Keys</h3>
+        <p style="color: #666; margin-bottom: 20px;">
+            Manage API keys for vision and analysis backends. Keys are stored securely
+            <span id="storage-backend">(loading...)</span>.
+        </p>
+
+        <div id="keys-container">
+            <p>Loading...</p>
+        </div>
+    </div>
+
+    <script>
+    const shutdownToken = '{{ shutdown_token }}';
+    let keysData = {};
+
+    async function loadKeys() {
+        try {
+            const response = await fetch('/api/settings/keys');
+            const data = await response.json();
+            keysData = data.keys;
+
+            // Update storage backend display
+            const backendName = data.backend === 'keychain' ? 'in OS keychain' : 'in ~/.yanhu-sessions/.env';
+            document.getElementById('storage-backend').textContent = backendName;
+
+            // Render keys
+            renderKeys();
+        } catch (err) {
+            console.error('Failed to load keys:', err);
+            document.getElementById('keys-container').innerHTML =
+                '<p class="error">Failed to load API keys</p>';
+        }
+    }
+
+    function renderKeys() {
+        const container = document.getElementById('keys-container');
+        container.innerHTML = '';
+
+        const keyNames = ['ANTHROPIC_API_KEY', 'GEMINI_API_KEY', 'OPENAI_API_KEY'];
+        const keyLabels = {
+            'ANTHROPIC_API_KEY': 'Anthropic API Key',
+            'GEMINI_API_KEY': 'Gemini API Key',
+            'OPENAI_API_KEY': 'OpenAI API Key',
+        };
+
+        keyNames.forEach(keyName => {
+            const keyStatus = keysData[keyName] || { set: false, masked: '' };
+            const keyDiv = document.createElement('div');
+            keyDiv.className = 'key-item';
+            keyDiv.style.cssText = 'margin-bottom: 20px; padding: 15px; background: #f8f9fa; border-radius: 6px;';
+
+            const statusText = keyStatus.set
+                ? `<strong>Status:</strong> Set (${keyStatus.masked})`
+                : '<strong>Status:</strong> Not set';
+
+            keyDiv.innerHTML = `
+                <div style="margin-bottom: 10px;">
+                    <strong>${keyLabels[keyName]}</strong><br>
+                    <span style="color: #666; font-size: 14px;">${statusText}</span>
+                </div>
+                <div>
+                    <input type="text" id="${keyName}-input" placeholder="Paste new key here"
+                           style="width: 60%; padding: 8px; margin-right: 10px; border: 1px solid #ddd; border-radius: 4px;">
+                    <button class="btn" onclick="saveKey('${keyName}')">Save</button>
+                    ${keyStatus.set ? `<button class="btn" style="background: #e74c3c; margin-left: 5px;" onclick="clearKey('${keyName}')">Clear</button>` : ''}
+                </div>
+                <div id="${keyName}-status" style="margin-top: 8px; font-size: 14px;"></div>
+            `;
+
+            container.appendChild(keyDiv);
+        });
+    }
+
+    async function saveKey(keyName) {
+        const input = document.getElementById(`${keyName}-input`);
+        const statusDiv = document.getElementById(`${keyName}-status`);
+        const keyValue = input.value.trim();
+
+        if (!keyValue) {
+            statusDiv.innerHTML = '<span style="color: #e74c3c;">Please enter a key value</span>';
+            return;
+        }
+
+        statusDiv.innerHTML = '<span style="color: #666;">Saving...</span>';
+
+        try {
+            const response = await fetch('/api/settings/keys', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    token: shutdownToken,
+                    key_name: keyName,
+                    key_value: keyValue,
+                }),
+            });
+
+            const data = await response.json();
+
+            if (response.ok) {
+                statusDiv.innerHTML = '<span style="color: #27ae60;">✓ Key saved successfully</span>';
+                input.value = '';
+                // Reload keys to show updated masked value
+                setTimeout(loadKeys, 500);
+            } else {
+                statusDiv.innerHTML = `<span style="color: #e74c3c;">Error: ${data.error}</span>`;
+            }
+        } catch (err) {
+            console.error('Failed to save key:', err);
+            statusDiv.innerHTML = '<span style="color: #e74c3c;">Failed to save key</span>';
+        }
+    }
+
+    async function clearKey(keyName) {
+        if (!confirm(`Clear ${keyName}?`)) {
+            return;
+        }
+
+        const statusDiv = document.getElementById(`${keyName}-status`);
+        statusDiv.innerHTML = '<span style="color: #666;">Clearing...</span>';
+
+        try {
+            const response = await fetch('/api/settings/keys', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    token: shutdownToken,
+                    key_name: keyName,
+                    key_value: null,
+                }),
+            });
+
+            const data = await response.json();
+
+            if (response.ok) {
+                statusDiv.innerHTML = '<span style="color: #27ae60;">✓ Key cleared</span>';
+                setTimeout(loadKeys, 500);
+            } else {
+                statusDiv.innerHTML = `<span style="color: #e74c3c;">Error: ${data.error}</span>`;
+            }
+        } catch (err) {
+            console.error('Failed to clear key:', err);
+            statusDiv.innerHTML = '<span style="color: #e74c3c;">Failed to clear key</span>';
+        }
+    }
+
+    // Load keys on page load
+    loadKeys();
+    </script>
+    """,
+)
+
 
 def create_app(
     sessions_dir: str | Path,
@@ -2161,6 +2321,101 @@ def create_app(
         Timer(0.3, terminate).start()
 
         return jsonify({"ok": True}), 200
+
+    @app.route("/settings")
+    def settings_page():
+        """Settings page for API key management."""
+        return render_template_string(
+            SETTINGS_TEMPLATE,
+            title="Settings",
+            shutdown_token=app.config.get("shutdown_token", ""),
+        )
+
+    @app.route("/api/settings/keys", methods=["GET"])
+    def get_api_keys():
+        """Get API key status (masked values only).
+
+        Returns JSON with masked key status for supported API keys.
+        Never returns full key values.
+        """
+        from yanhu.keystore import SUPPORTED_KEYS, get_default_keystore, get_key_status
+
+        keystore = get_default_keystore()
+        backend = keystore.get_backend_name()
+
+        keys_status = {}
+        for key_name in SUPPORTED_KEYS:
+            key_value = keystore.get_key(key_name)
+            keys_status[key_name] = get_key_status(key_value)
+            keys_status[key_name]["source"] = backend
+
+        return jsonify(
+            {
+                "keys": keys_status,
+                "backend": backend,
+            }
+        )
+
+    @app.route("/api/settings/keys", methods=["POST"])
+    def update_api_keys():
+        """Update or clear API keys (local requests only, requires token).
+
+        Accepts JSON:
+        {
+            "key_name": "ANTHROPIC_API_KEY",
+            "key_value": "sk-ant-..." or null to clear
+        }
+
+        Returns masked status after save.
+        """
+        # Check if request is from localhost
+        remote_addr = request.remote_addr
+        if remote_addr not in ("127.0.0.1", "localhost", "::1"):
+            return jsonify({"error": "Settings only allowed from localhost"}), 403
+
+        # Verify token (use shutdown token for now)
+        provided_token = request.json.get("token", "") if request.json else ""
+        expected_token = app.config.get("shutdown_token", "")
+
+        if not expected_token or provided_token != expected_token:
+            return jsonify({"error": "Invalid token"}), 403
+
+        # Get key name and value
+        if not request.json:
+            return jsonify({"error": "JSON body required"}), 400
+
+        key_name = request.json.get("key_name")
+        key_value = request.json.get("key_value")
+
+        from yanhu.keystore import SUPPORTED_KEYS, get_default_keystore, get_key_status
+
+        if key_name not in SUPPORTED_KEYS:
+            return jsonify({"error": f"Unsupported key: {key_name}"}), 400
+
+        keystore = get_default_keystore()
+
+        try:
+            if key_value is None or key_value == "":
+                # Clear key
+                keystore.delete_key(key_name)
+            else:
+                # Set key
+                keystore.set_key(key_name, key_value)
+
+            # Return masked status (never full key)
+            updated_value = keystore.get_key(key_name)
+            status = get_key_status(updated_value)
+            status["source"] = keystore.get_backend_name()
+
+            return jsonify(
+                {
+                    "ok": True,
+                    "key_name": key_name,
+                    "status": status,
+                }
+            )
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
 
     @app.errorhandler(413)
     def request_entity_too_large(error):

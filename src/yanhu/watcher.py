@@ -1230,8 +1230,17 @@ def process_job(
         manifest.save(session_dir)
 
         # Step 4: Analyze (params from run_config)
-        # Auto-detect analyze backend based on API key availability
+        # Load API keys from key store and populate environment
         import os
+        from yanhu.keystore import get_default_keystore, SUPPORTED_KEYS
+
+        keystore = get_default_keystore()
+        for key_name in SUPPORTED_KEYS:
+            key_value = keystore.get_key(key_name)
+            if key_value:
+                os.environ[key_name] = key_value
+
+        # Auto-detect analyze backend based on API key availability
         analyze_backend = "claude" if os.environ.get("ANTHROPIC_API_KEY") else "mock"
         analyze_session(
             manifest=manifest,
