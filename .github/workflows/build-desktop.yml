@@ -42,43 +42,53 @@ jobs:
         run: |
           echo "=== Checking for bundled ASR dependencies ==="
 
-          # Check if yanhu directory exists (PyInstaller output)
-          if [ ! -d "dist/yanhu" ]; then
-            echo "✗ ERROR: dist/yanhu directory not found"
+          # Discover the built .app bundle
+          APP=$(find dist -maxdepth 2 -name "*.app" | head -1)
+          if [ -z "$APP" ]; then
+            echo "✗ ERROR: No .app bundle found in dist/"
             exit 1
           fi
-          echo "✓ Found dist/yanhu directory"
+          echo "✓ Found app bundle: $APP"
 
-          # Check for key ASR Python modules in the frozen app
+          # Check for key ASR Python modules inside the .app bundle
           echo ""
-          echo "Checking for ASR Python modules:"
+          echo "Checking for ASR Python modules inside .app bundle:"
 
           # faster_whisper
-          if find dist/yanhu -name "*faster_whisper*" -type f | grep -q .; then
-            echo "  ✓ faster_whisper"
-          else
+          echo ""
+          echo "Searching for faster_whisper..."
+          FASTER_WHISPER=$(find "$APP" -iname "*faster_whisper*" -type f | head -3)
+          if [ -z "$FASTER_WHISPER" ]; then
             echo "  ✗ faster_whisper (MISSING)"
             exit 1
           fi
+          echo "  ✓ faster_whisper (found)"
+          echo "$FASTER_WHISPER" | sed 's/^/    /'
 
           # ctranslate2
-          if find dist/yanhu -name "*ctranslate2*" -type f | grep -q .; then
-            echo "  ✓ ctranslate2"
-          else
+          echo ""
+          echo "Searching for ctranslate2..."
+          CTRANSLATE2=$(find "$APP" -iname "*ctranslate2*" -type f | head -3)
+          if [ -z "$CTRANSLATE2" ]; then
             echo "  ✗ ctranslate2 (MISSING)"
             exit 1
           fi
+          echo "  ✓ ctranslate2 (found)"
+          echo "$CTRANSLATE2" | sed 's/^/    /'
 
           # tiktoken
-          if find dist/yanhu -name "*tiktoken*" -type f | grep -q .; then
-            echo "  ✓ tiktoken"
-          else
+          echo ""
+          echo "Searching for tiktoken..."
+          TIKTOKEN=$(find "$APP" -iname "*tiktoken*" -type f | head -3)
+          if [ -z "$TIKTOKEN" ]; then
             echo "  ✗ tiktoken (MISSING)"
             exit 1
           fi
+          echo "  ✓ tiktoken (found)"
+          echo "$TIKTOKEN" | sed 's/^/    /'
 
           echo ""
-          echo "✓ All critical ASR dependencies bundled"
+          echo "✓ All critical ASR dependencies bundled in .app"
 
       - name: Debug dist directory
         run: |
