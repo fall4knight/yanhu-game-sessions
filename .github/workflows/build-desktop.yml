@@ -50,12 +50,57 @@ jobs:
           fi
           echo "✓ Found app bundle: $APP"
 
-          # Get executable name from Info.plist
-          EXEC_NAME=$(defaults read "$APP/Contents/Info.plist" CFBundleExecutable)
+          # Debug: Show .app structure
+          echo ""
+          echo "Debug: .app structure"
+          ls -la "$APP" || true
+          ls -la "$APP/Contents" || true
+          find "$APP" -maxdepth 3 -name Info.plist -print || true
+          echo ""
+
+          # Check Info.plist exists
+          if [ ! -f "$APP/Contents/Info.plist" ]; then
+            echo "✗ ERROR: Info.plist not found at: $APP/Contents/Info.plist"
+            echo "Debug: Contents directory listing:"
+            ls -la "$APP/Contents" || echo "Contents directory not found"
+            exit 1
+          fi
+          echo "✓ Found Info.plist: $APP/Contents/Info.plist"
+
+          # Check MacOS directory exists
+          if [ ! -d "$APP/Contents/MacOS" ]; then
+            echo "✗ ERROR: MacOS directory not found at: $APP/Contents/MacOS"
+            echo "Debug: Contents directory listing:"
+            ls -la "$APP/Contents"
+            exit 1
+          fi
+          echo "✓ Found MacOS directory: $APP/Contents/MacOS"
+
+          # Get executable name from Info.plist (using plutil for robustness)
+          EXEC_NAME=$(plutil -extract CFBundleExecutable raw -o - "$APP/Contents/Info.plist" 2>/dev/null || true)
+
+          # Fallback: if plutil fails, list MacOS directory and take first file
+          if [ -z "$EXEC_NAME" ]; then
+            echo "Warning: plutil failed to extract CFBundleExecutable, using fallback"
+            EXEC_NAME=$(ls "$APP/Contents/MacOS" | head -1)
+          fi
+
+          if [ -z "$EXEC_NAME" ]; then
+            echo "✗ ERROR: Could not determine executable name"
+            echo "Debug: MacOS directory listing:"
+            ls -la "$APP/Contents/MacOS"
+            exit 1
+          fi
+          echo "✓ Executable name: $EXEC_NAME"
+
+          # Build full executable path
           EXEC="$APP/Contents/MacOS/$EXEC_NAME"
 
+          # Check executable exists
           if [ ! -f "$EXEC" ]; then
             echo "✗ ERROR: Executable not found at: $EXEC"
+            echo "Debug: MacOS directory listing:"
+            ls -la "$APP/Contents/MacOS"
             exit 1
           fi
           echo "✓ Found executable: $EXEC"
