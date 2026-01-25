@@ -211,6 +211,44 @@ BASE_TEMPLATE = """
             color: #666;
             margin: 10px 0;
         }
+        /* Command blocks for error banners */
+        .cmd-block {
+            background: #1a1a1a;
+            border-radius: 4px;
+            padding: 8px 12px;
+            margin: 8px 0;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-family: 'Monaco', 'Courier New', monospace;
+        }
+        .cmd-label {
+            color: #aaa;
+            font-size: 13px;
+            min-width: 60px;
+        }
+        .cmd-text {
+            color: #f0f0f0;
+            font-size: 13px;
+            flex: 1;
+            user-select: all;
+        }
+        .cmd-copy-btn {
+            background: #444;
+            color: #fff;
+            border: none;
+            padding: 4px 10px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 11px;
+            transition: background 0.2s;
+        }
+        .cmd-copy-btn:hover {
+            background: #555;
+        }
+        .cmd-copy-btn.copied {
+            background: #27ae60;
+        }
         table {
             width: 100%;
             border-collapse: collapse;
@@ -326,6 +364,25 @@ BASE_TEMPLATE = """
             .catch(error => {
                 // Expected: connection error after shutdown
                 alert("Server stopped. You can close this tab.");
+            });
+        }
+
+        // Copy command to clipboard
+        function copyCommand(button, text) {
+            navigator.clipboard.writeText(text).then(function() {
+                const originalText = button.textContent;
+                button.textContent = "Copied!";
+                button.classList.add("copied");
+                setTimeout(function() {
+                    button.textContent = originalText;
+                    button.classList.remove("copied");
+                }, 2000);
+            }).catch(function(err) {
+                console.error("Failed to copy: ", err);
+                button.textContent = "Failed";
+                setTimeout(function() {
+                    button.textContent = "Copy";
+                }, 2000);
             });
         }
     </script>
@@ -552,6 +609,42 @@ SESSION_VIEW_TEMPLATE = BASE_TEMPLATE.replace(
     """
     <div id="progress-container"></div>
     <h2>{{ session_id }}</h2>
+
+    {% if asr_error_summary %}
+    {% if asr_error_summary.dependency_error %}
+    <div class="error-banner" style="background: #e74c3c; color: white; padding: 15px; margin: 15px 0; border-radius: 4px;">
+        <strong>⚠️ ASR Processing Failed:</strong> {{ asr_error_summary.dependency_error }}<br>
+        <div style="margin-top: 10px;">
+            <strong>How to fix:</strong>
+            <div class="cmd-block">
+                <span class="cmd-label">macOS:</span>
+                <span class="cmd-text">brew install ffmpeg</span>
+                <button class="cmd-copy-btn" onclick="copyCommand(this, 'brew install ffmpeg')">Copy</button>
+            </div>
+            <div class="cmd-block">
+                <span class="cmd-label">Ubuntu:</span>
+                <span class="cmd-text">sudo apt install ffmpeg</span>
+                <button class="cmd-copy-btn" onclick="copyCommand(this, 'sudo apt install ffmpeg')">Copy</button>
+            </div>
+            <div class="cmd-block">
+                <span class="cmd-label">Windows:</span>
+                <span class="cmd-text">Download from <a href="https://ffmpeg.org/download.html" style="color: #3498db; text-decoration: underline;" target="_blank">ffmpeg.org</a></span>
+            </div>
+            <div style="margin-top: 10px; font-size: 0.9em;">
+                After installing, re-run the pipeline for this session.
+            </div>
+        </div>
+    </div>
+    {% elif asr_error_summary.failed_segments > 0 %}
+    <div class="warning-banner" style="background: #f39c12; color: white; padding: 15px; margin: 15px 0; border-radius: 4px;">
+        <strong>⚠️ Partial ASR Failures:</strong> {{ asr_error_summary.failed_segments }}/{{ asr_error_summary.total_segments }} segments failed transcription.<br>
+        <div style="margin-top: 5px; font-size: 0.9em;">
+            Check the Transcripts tab for details. Timeline and highlights may be incomplete.
+        </div>
+    </div>
+    {% endif %}
+    {% endif %}
+
     <div class="tabs">
         <button class="tab active" onclick="showTab('overview')">Overview</button>
         <button class="tab" onclick="showTab('highlights')">Highlights</button>
@@ -904,6 +997,46 @@ JOB_DETAIL_TEMPLATE = BASE_TEMPLATE.replace(
     <div class="session-meta">
         <strong>Status:</strong> <span class="status-{{ job.status }}">{{ job.status }}</span>
     </div>
+
+    {% if job.status == 'failed' and job.error %}
+    <div class="error-banner" style="background: #e74c3c; color: white; padding: 15px; margin: 15px 0; border-radius: 4px;">
+        <strong>⚠️ Job Failed:</strong> {{ job.error }}<br>
+        {% if 'ffmpeg' in job.error %}
+        <div style="margin-top: 10px;">
+            <strong>How to fix:</strong>
+            <div class="cmd-block">
+                <span class="cmd-label">macOS:</span>
+                <span class="cmd-text">brew install ffmpeg</span>
+                <button class="cmd-copy-btn" onclick="copyCommand(this, 'brew install ffmpeg')">Copy</button>
+            </div>
+            <div class="cmd-block">
+                <span class="cmd-label">Ubuntu:</span>
+                <span class="cmd-text">sudo apt install ffmpeg</span>
+                <button class="cmd-copy-btn" onclick="copyCommand(this, 'sudo apt install ffmpeg')">Copy</button>
+            </div>
+            <div class="cmd-block">
+                <span class="cmd-label">Windows:</span>
+                <span class="cmd-text">Download from <a href="https://ffmpeg.org/download.html" style="color: #3498db; text-decoration: underline;" target="_blank">ffmpeg.org</a></span>
+            </div>
+            <div style="margin-top: 10px; font-size: 0.9em;">
+                After installing, retry this job or create a new one.
+            </div>
+        </div>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    {% if job.outputs and job.outputs.get('asr_error_summary') %}
+    {% set asr_errors = job.outputs.asr_error_summary %}
+    {% if asr_errors.failed_segments > 0 and not asr_errors.dependency_error %}
+    <div class="warning-banner" style="background: #f39c12; color: white; padding: 15px; margin: 15px 0; border-radius: 4px;">
+        <strong>⚠️ Partial ASR Failures:</strong> {{ asr_errors.failed_segments }}/{{ asr_errors.total_segments }} segments failed transcription.<br>
+        <div style="margin-top: 5px; font-size: 0.9em;">
+            Check the Transcripts tab for details. The session was still created successfully.
+        </div>
+    </div>
+    {% endif %}
+    {% endif %}
 
     {% if job.media %}
     <h3>Media Info</h3>
@@ -1330,12 +1463,18 @@ def create_app(
 
         # Load manifest
         manifest_json = ""
+        asr_models = None
         if manifest_file.exists():
             try:
                 manifest_data = json.loads(manifest_file.read_text(encoding="utf-8"))
                 manifest_json = json.dumps(manifest_data, indent=2, ensure_ascii=False)
+                asr_models = manifest_data.get("asr_models")
             except (json.JSONDecodeError, OSError):
                 manifest_json = "Error loading manifest"
+
+        # Aggregate ASR errors
+        from yanhu.watcher import aggregate_asr_errors
+        asr_error_summary = aggregate_asr_errors(session_dir, asr_models)
 
         return render_template_string(
             SESSION_VIEW_TEMPLATE,
@@ -1346,6 +1485,8 @@ def create_app(
             manifest_json=manifest_json,
             title=session_id,
             ffmpeg_warning=app.config.get("ffmpeg_error"),
+            asr_error_summary=asr_error_summary,
+            shutdown_token=app.config.get("shutdown_token", ""),
         )
 
     @app.route("/s/<session_id>/progress")
@@ -1741,6 +1882,7 @@ def create_app(
             format_duration=format_duration,
             format_size=format_size,
             ffmpeg_warning=app.config.get("ffmpeg_error"),
+            shutdown_token=app.config.get("shutdown_token", ""),
         )
 
     @app.route("/api/jobs/<job_id>", methods=["GET"])

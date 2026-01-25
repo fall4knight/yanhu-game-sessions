@@ -2122,3 +2122,123 @@ class TestQuitButtonRendering:
         # Should have called os._exit(0)
         assert exit_called == [0]
 
+
+
+class TestFFmpegErrorBannerStyling:
+    """Test readable ffmpeg fix instructions banner (hotfix)."""
+
+    def test_session_error_banner_has_readable_commands(self, tmp_path):
+        """Session page error banner should have readable command blocks with copy buttons."""
+        from yanhu.app import create_app
+        from yanhu.manifest import Manifest, SegmentInfo
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+
+        session_id = "test_error_banner"
+        session_dir = sessions_dir / session_id
+        session_dir.mkdir()
+
+        # Create session with ASR errors
+        manifest = Manifest(
+            session_id=session_id,
+            created_at="2026-01-24T00:00:00",
+            source_video="/path/to/video.mp4",
+            source_video_local="source/video.mp4",
+            segment_duration_seconds=10,
+            segments=[SegmentInfo("part_0001", 0.0, 10.0, "segments/seg1.mp4")],
+            asr_models=["whisper_local"],
+        )
+        manifest.save(session_dir)
+
+        # Create markdown files
+        (session_dir / "overview.md").write_text("# Overview", encoding="utf-8")
+        (session_dir / "highlights.md").write_text("# Highlights", encoding="utf-8")
+        (session_dir / "timeline.md").write_text("# Timeline", encoding="utf-8")
+
+        # Create ASR transcript with ffmpeg error
+        asr_dir = session_dir / "outputs" / "asr" / "whisper_local"
+        asr_dir.mkdir(parents=True)
+        import json
+
+        (asr_dir / "transcript.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "segment_id": "part_0001",
+                        "asr_backend": "whisper_local",
+                        "asr_error": (
+                            "ffmpeg not found. "
+                            "Install ffmpeg to use whisper_local backend."
+                        ),
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        app = create_app(sessions_dir=str(sessions_dir))
+        client = app.test_client()
+
+        response = client.get(f"/s/{session_id}")
+        assert response.status_code == 200
+
+        html = response.get_data(as_text=True)
+
+        # Check for command block CSS classes
+        assert "cmd-block" in html
+        assert "cmd-label" in html
+        assert "cmd-text" in html
+        assert "cmd-copy-btn" in html
+
+        # Check for actual commands
+        assert "brew install ffmpeg" in html
+        assert "sudo apt install ffmpeg" in html
+
+        # Check for copy button functionality
+        assert "copyCommand" in html
+
+    def test_job_error_banner_has_readable_commands(self, tmp_path):
+        """Job page error banner should have readable command blocks with copy buttons."""
+        from yanhu.app import create_app
+        from yanhu.watcher import QueueJob, save_job_to_file
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+
+        jobs_dir = tmp_path / "_queue" / "jobs"
+        jobs_dir.mkdir(parents=True)
+
+        # Create job with ffmpeg error
+        job = QueueJob(
+            job_id="test_error_job",
+            raw_path="/path/to/video.mp4",
+            status="failed",
+            created_at="2026-01-24T00:00:00",
+            error=(
+                "ffmpeg not found - whisper_local requires ffmpeg to extract audio. "
+                "Install ffmpeg and retry."
+            ),
+        )
+        save_job_to_file(job, jobs_dir)
+
+        app = create_app(sessions_dir=str(sessions_dir), worker_enabled=True)
+        client = app.test_client()
+
+        response = client.get("/jobs/test_error_job")
+        assert response.status_code == 200
+
+        html = response.get_data(as_text=True)
+
+        # Check for command block CSS classes
+        assert "cmd-block" in html
+        assert "cmd-label" in html
+        assert "cmd-text" in html
+        assert "cmd-copy-btn" in html
+
+        # Check for actual commands
+        assert "brew install ffmpeg" in html
+        assert "sudo apt install ffmpeg" in html
+
+        # Check for copy button functionality
+        assert "copyCommand" in html

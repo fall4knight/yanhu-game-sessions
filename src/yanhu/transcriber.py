@@ -262,10 +262,16 @@ class WhisperLocalBackend:
             return None, f"Video file not found: {video_path}"
 
         try:
+            # Find ffmpeg executable (supports packaged apps without PATH)
+            from yanhu.ffmpeg_utils import find_ffmpeg
+            ffmpeg_path = find_ffmpeg()
+            if not ffmpeg_path:
+                return None, "ffmpeg not found. Install ffmpeg to use whisper_local backend."
+
             # Extract audio using ffmpeg
             # -vn: no video, -ac 1: mono, -ar 16000: 16kHz, -f wav: WAV format
             cmd = [
-                "ffmpeg",
+                ffmpeg_path,
                 "-y",
                 "-i",
                 str(video_path),

@@ -1252,3 +1252,44 @@ class TestMultiModelTranscription:
         # Verify per-model output also exists
         mock_transcript = session_dir / "outputs" / "asr" / "mock" / "transcript.json"
         assert mock_transcript.exists()
+
+
+class TestWhisperLocalFfmpegDiscovery:
+    """Test whisper_local uses find_ffmpeg() for packaged app support (Step 23)."""
+
+    def test_whisper_local_ffmpeg_missing_error(self, tmp_path, monkeypatch):
+        """When ffmpeg missing, whisper_local should produce asr_error for Step 22."""
+        from yanhu.manifest import SegmentInfo
+        from yanhu.transcriber import WhisperLocalBackend
+
+        # Mock find_ffmpeg to return None (ffmpeg not found)
+        def mock_find_ffmpeg():
+            return None
+
+        monkeypatch.setattr("yanhu.ffmpeg_utils.find_ffmpeg", mock_find_ffmpeg)
+
+        # Create test session and segment
+        session_dir = tmp_path / "session"
+        session_dir.mkdir()
+        segments_dir = session_dir / "segments"
+        segments_dir.mkdir()
+
+        # Create dummy video file
+        video_file = segments_dir / "part_0001.mp4"
+        video_file.write_bytes(b"dummy video")
+
+        segment = SegmentInfo(
+            id="part_0001",
+            start_time=0.0,
+            end_time=10.0,
+            video_path="segments/part_0001.mp4",
+        )
+
+        backend = WhisperLocalBackend(model_size="base")
+        result = backend.transcribe_segment(segment, session_dir, max_seconds=None)
+
+        # Should have error about ffmpeg not found
+        assert result.asr_error is not None
+        assert "ffmpeg not found" in result.asr_error
+        # Error should trigger Step 22 dependency failure detection
+        assert result.asr_items == []

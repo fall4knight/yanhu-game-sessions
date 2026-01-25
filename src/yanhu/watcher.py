@@ -1022,6 +1022,90 @@ def update_job_status(
 
 
 @dataclass
+class AsrErrorSummary:
+    """Summary of ASR errors for a session."""
+
+    total_segments: int = 0
+    failed_segments: int = 0
+    dependency_error: str | None = None  # ffmpeg missing, etc.
+    error_samples: list[str] = field(default_factory=list)  # First few error messages
+
+
+def aggregate_asr_errors(session_dir: Path, asr_models: list[str] | None) -> AsrErrorSummary | None:
+    """Aggregate ASR errors from per-model transcript files.
+
+    Checks for:
+    - Dependency failures (ffmpeg missing) - affects all segments
+    - Partial failures - some segments failed
+
+    Args:
+        session_dir: Path to session directory
+        asr_models: List of ASR models that were run
+
+    Returns:
+        AsrErrorSummary if errors found, None otherwise
+    """
+    if not asr_models:
+        return None
+
+    # Check each model for errors
+    for model_key in asr_models:
+        transcript_path = session_dir / "outputs" / "asr" / model_key / "transcript.json"
+        if not transcript_path.exists():
+            continue
+
+        try:
+            with open(transcript_path, encoding="utf-8") as f:
+                results = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            continue
+
+        if not results:
+            continue
+
+        # Collect error information
+        total = len(results)
+        failed = 0
+        ffmpeg_missing_count = 0
+        error_samples = []
+
+        for entry in results:
+            error_msg = entry.get("asr_error")
+            if error_msg:
+                failed += 1
+                # Check for ffmpeg dependency error
+                error_lower = error_msg.lower()
+                is_ffmpeg_error = (
+                    "ffmpeg" in error_lower
+                    and ("not found" in error_lower or "no such file" in error_lower)
+                )
+                if is_ffmpeg_error:
+                    ffmpeg_missing_count += 1
+                # Collect first few error samples
+                if len(error_samples) < 3:
+                    error_samples.append(error_msg[:200])  # Truncate long errors
+
+        if failed > 0:
+            summary = AsrErrorSummary(
+                total_segments=total,
+                failed_segments=failed,
+                error_samples=error_samples,
+            )
+
+            # Determine if this is a dependency failure
+            # If all segments failed with ffmpeg missing, it's a dependency error
+            if ffmpeg_missing_count == total:
+                summary.dependency_error = (
+                    "ffmpeg not found - whisper_local requires ffmpeg to extract audio. "
+                    "Install ffmpeg and retry."
+                )
+
+            return summary
+
+    return None
+
+
+@dataclass
 class JobResult:
     """Result of processing a job."""
 
@@ -1029,6 +1113,7 @@ class JobResult:
     session_id: str | None = None
     error: str | None = None
     outputs: dict | None = None
+    asr_errors: AsrErrorSummary | None = None  # ASR error aggregation
 
 
 
@@ -1266,7 +1351,10 @@ def process_job(
         # Update progress to done
         progress_tracker.finalize(stage="done")
 
-        # Step 7: Validate outputs
+        # Step 7: Aggregate ASR errors
+        asr_error_summary = aggregate_asr_errors(session_dir, asr_models)
+
+        # Step 8: Validate outputs
         valid, error_msg = validate_outputs(session_dir)
 
         # Prepare outputs with transcribe stats
@@ -1281,18 +1369,41 @@ def process_job(
             "transcribe_limited": transcribe_stats.skipped_limit > 0,
         }
 
+        # Add ASR error info to outputs if present
+        if asr_error_summary:
+            outputs["asr_error_summary"] = {
+                "total_segments": asr_error_summary.total_segments,
+                "failed_segments": asr_error_summary.failed_segments,
+                "dependency_error": asr_error_summary.dependency_error,
+                "error_samples": asr_error_summary.error_samples,
+            }
+
         if not valid:
             return JobResult(
                 success=False,
                 session_id=session_id,
                 error=f"Output validation failed: {error_msg}",
                 outputs=outputs,
+                asr_errors=asr_error_summary,
             )
 
+        # Check for dependency failures - these should fail the job
+        if asr_error_summary and asr_error_summary.dependency_error:
+            return JobResult(
+                success=False,
+                session_id=session_id,
+                error=asr_error_summary.dependency_error,
+                outputs=outputs,
+                asr_errors=asr_error_summary,
+            )
+
+        # Check for partial failures - mark as success with warnings
+        # (User can see errors in Transcripts tab)
         return JobResult(
             success=True,
             session_id=session_id,
             outputs=outputs,
+            asr_errors=asr_error_summary,
         )
 
     except Exception as e:
