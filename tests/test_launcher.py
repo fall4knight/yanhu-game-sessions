@@ -401,3 +401,45 @@ class TestAsrSelfcheck:
         captured = capsys.readouterr()
         assert "ASR Import Selfcheck" in captured.out
         assert "Desktop Launcher" not in captured.out  # Should NOT start launcher
+
+    def test_selfcheck_asr_output_uses_ascii_symbols_no_unicode(self, monkeypatch, capsys):
+        """selfcheck_asr output uses ASCII-safe symbols (no Unicode for Windows cp1252)."""
+        import builtins
+
+        # Mock __import__ to succeed for all modules
+        original_import = builtins.__import__
+
+        def mock_import(name, *args, **kwargs):
+            asr_modules = [
+                "faster_whisper",
+                "ctranslate2",
+                "tokenizers",
+                "huggingface_hub",
+                "tiktoken",
+                "regex",
+                "safetensors",
+                "av",
+                "onnxruntime",
+            ]
+            if name in asr_modules:
+                from types import ModuleType
+
+                return ModuleType(name)
+            return original_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", mock_import)
+
+        # Run selfcheck
+        selfcheck_asr()
+
+        # Verify output
+        captured = capsys.readouterr()
+        output = captured.out
+
+        # Should NOT contain Unicode checkmarks (causes UnicodeEncodeError on Windows cp1252)
+        assert "✓" not in output, "Should not use Unicode checkmark ✓ (Windows cp1252 incompatible)"
+        assert "✗" not in output, "Should not use Unicode X-mark ✗ (Windows cp1252 incompatible)"
+
+        # Should contain ASCII-safe alternatives
+        assert "[OK]" in output, "Should use ASCII-safe [OK] token"
+        assert "ASR SELFCHECK PASSED" in output

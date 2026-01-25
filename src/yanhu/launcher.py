@@ -91,6 +91,14 @@ def selfcheck_asr() -> int:
     Returns:
         Exit code: 0 if all imports succeed, 1 otherwise
     """
+    # Attempt to set UTF-8 encoding for Windows compatibility
+    # (but we still use ASCII symbols for maximum robustness)
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding="utf-8")
+        except Exception:
+            pass  # Silently continue with default encoding
+
     print("=" * 60)
     print("Yanhu Desktop - ASR Import Selfcheck")
     print("=" * 60)
@@ -116,10 +124,10 @@ def selfcheck_asr() -> int:
         try:
             __import__(module_name)
             successful.append(module_name)
-            print(f"  ✓ {module_name}")
+            print(f"  [OK] {module_name}")
         except ImportError as e:
             failed.append(f"{module_name}: {e}")
-            print(f"  ✗ {module_name} - {e}")
+            print(f"  [FAIL] {module_name} - {e}")
 
     print()
     print(f"Successful: {len(successful)}/{len(required_modules)}")
