@@ -2456,3 +2456,40 @@ class TestSettingsRoutes:
         assert response.status_code == 400
         data = response.get_json()
         assert "Unsupported key" in data["error"]
+
+    def test_settings_page_includes_mode_indicator(self, tmp_path):
+        """Settings page includes mode indicator in header."""
+        from yanhu.app import create_app
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+
+        app = create_app(sessions_dir)
+        client = app.test_client()
+
+        response = client.get("/settings")
+        assert response.status_code == 200
+
+        html = response.get_data(as_text=True)
+        # Mode indicator should be present
+        assert "mode-indicator" in html
+        assert "updateModeIndicator" in html  # JavaScript function
+
+    def test_index_page_includes_mode_indicator(self, tmp_path):
+        """Index page includes mode indicator in header."""
+        from yanhu.app import create_app
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+
+        app = create_app(sessions_dir)
+        client = app.test_client()
+
+        response = client.get("/")
+        assert response.status_code == 200
+
+        html = response.get_data(as_text=True)
+        # Mode indicator should be present in global header
+        assert "mode-indicator" in html
+        assert "Mode: Loading..." in html  # Initial text
+        assert "updateModeIndicator" in html

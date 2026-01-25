@@ -314,6 +314,9 @@ BASE_TEMPLATE = """
                 <a href="/settings">⚙️ Settings</a>
             </span>
             <span style="float: right;">
+                <span id="mode-indicator" style="color: #7f8c8d; font-size: 0.9em; margin-right: 15px;">
+                    Mode: Loading...
+                </span>
                 <span style="color: #7f8c8d; font-size: 0.9em; margin-right: 15px;">
                     🔒 Local processing only
                 </span>
@@ -369,6 +372,46 @@ BASE_TEMPLATE = """
                 alert("Server stopped. You can close this tab.");
             });
         }
+
+        // Load and display mode indicator
+        function updateModeIndicator() {
+            fetch('/api/settings/keys')
+                .then(response => response.json())
+                .then(data => {
+                    const keys = data.keys || {};
+                    const setKeys = [];
+
+                    if (keys.ANTHROPIC_API_KEY && keys.ANTHROPIC_API_KEY.set) {
+                        setKeys.push('Claude');
+                    }
+                    if (keys.GEMINI_API_KEY && keys.GEMINI_API_KEY.set) {
+                        setKeys.push('Gemini');
+                    }
+                    if (keys.OPENAI_API_KEY && keys.OPENAI_API_KEY.set) {
+                        setKeys.push('OpenAI');
+                    }
+
+                    const indicator = document.getElementById('mode-indicator');
+                    if (setKeys.length === 0) {
+                        indicator.textContent = 'Mode: ASR-only (Vision disabled)';
+                        indicator.style.color = '#95a5a6';
+                    } else if (setKeys.length === 1) {
+                        indicator.textContent = `Mode: ${setKeys[0]} enabled`;
+                        indicator.style.color = '#27ae60';
+                    } else {
+                        indicator.textContent = `Mode: Keys set (${setKeys.join('/')})`;
+                        indicator.style.color = '#27ae60';
+                        indicator.title = `API keys configured: ${setKeys.join(', ')}`;
+                    }
+                })
+                .catch(err => {
+                    console.error('Failed to load mode indicator:', err);
+                    document.getElementById('mode-indicator').textContent = 'Mode: Unknown';
+                });
+        }
+
+        // Update mode indicator on page load
+        updateModeIndicator();
 
         // Copy command to clipboard
         function copyCommand(button, text) {
