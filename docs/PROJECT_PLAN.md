@@ -402,6 +402,11 @@ No pipeline rewrite, no native GUI redesign—focus on **one-click launch** for 
   - [x] Checks launcher compatibility (create_app/run_app kwargs)
   - [x] CI integration: runs automatically in GitHub Actions
   - [x] RUNBOOK: "Release Smoke Test" section with manual checklist
+- [x] macOS release zip packaging fix:
+  - [x] Debug step shows dist/ contents and verifies .app bundle exists
+  - [x] Package step uses variable for app name with error checking
+  - [x] Verification step ensures zip contains Info.plist and MacOS/ directory
+  - [x] CI fails if .app bundle missing or zip structure invalid
 - [ ] Code signing / notarization (defer to M9.1)
 - [ ] Installer packages (.dmg/.msi) + auto-updater (defer to M9.1)
 - [ ] Bundle ffmpeg binaries (license/compliance review; defer to M9.1)

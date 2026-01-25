@@ -29,10 +29,55 @@ jobs:
         run: |
           pyinstaller yanhu.spec
 
+      - name: Debug dist directory
+        run: |
+          echo "=== Contents of dist/ directory ==="
+          ls -la dist/
+          echo ""
+          echo "=== Finding .app bundles ==="
+          find dist -maxdepth 2 -name "*.app" -print
+          echo ""
+          echo "=== Verifying app bundle structure ==="
+          if [ -d "dist/Yanhu Sessions.app" ]; then
+            echo "✓ Found: dist/Yanhu Sessions.app"
+            ls -la "dist/Yanhu Sessions.app/Contents/"
+          else
+            echo "✗ ERROR: dist/Yanhu Sessions.app not found"
+            exit 1
+          fi
+
       - name: Package macOS app
         run: |
           cd dist
-          zip -r "Yanhu-Sessions-macOS.zip" "Yanhu Sessions.app"
+          APP_NAME="Yanhu Sessions.app"
+          if [ ! -d "$APP_NAME" ]; then
+            echo "ERROR: $APP_NAME not found in dist/"
+            exit 1
+          fi
+          zip -r "Yanhu-Sessions-macOS.zip" "$APP_NAME"
+          echo "Created Yanhu-Sessions-macOS.zip"
+
+      - name: Verify macOS zip contents
+        run: |
+          cd dist
+          echo "=== Verifying zip contains .app bundle ==="
+          if unzip -l "Yanhu-Sessions-macOS.zip" | grep -q "Yanhu Sessions.app/Contents/Info.plist"; then
+            echo "✓ Found Info.plist in zip"
+          else
+            echo "✗ ERROR: Info.plist not found in zip"
+            exit 1
+          fi
+
+          if unzip -l "Yanhu-Sessions-macOS.zip" | grep -q "Yanhu Sessions.app/Contents/MacOS/"; then
+            echo "✓ Found MacOS/ directory in zip"
+          else
+            echo "✗ ERROR: MacOS/ directory not found in zip"
+            exit 1
+          fi
+
+          echo ""
+          echo "=== First 20 entries in zip ==="
+          unzip -l "Yanhu-Sessions-macOS.zip" | head -n 25
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
