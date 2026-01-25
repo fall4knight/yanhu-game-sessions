@@ -80,6 +80,7 @@ class UiSymbolItem:
     - source_frame: Frame filename where symbol appears
 
     Optional metadata fields:
+    - origin: Symbol origin ("evidence_ocr" for OCR-extracted, "inferred_llm" for LLM-provided)
     - type: Symbol category (e.g., "emoji", "icon", None for legacy)
     - name: Canonical name (e.g., "red_heart" from emoji lib, or None)
     - source_text: Short snippet of surrounding text (optional context)
@@ -89,6 +90,7 @@ class UiSymbolItem:
     symbol: str  # Raw emoji/icon glyph (evidence-layer, verbatim)
     t_rel: float  # Relative time in seconds (from session start)
     source_frame: str  # Frame filename where symbol appears
+    origin: str | None = None  # Origin: "evidence_ocr" or "inferred_llm"
     type: str | None = None  # Symbol category (e.g., "emoji")
     name: str | None = None  # Canonical name if available
     source_text: str | None = None  # Optional surrounding text snippet
@@ -100,6 +102,8 @@ class UiSymbolItem:
             "t_rel": self.t_rel,
             "source_frame": self.source_frame,
         }
+        if self.origin is not None:
+            result["origin"] = self.origin
         if self.type is not None:
             result["type"] = self.type
         if self.name is not None:
@@ -116,6 +120,7 @@ class UiSymbolItem:
             symbol=data["symbol"],
             t_rel=data.get("t_rel", 0.0),
             source_frame=data.get("source_frame", ""),
+            origin=data.get("origin"),
             type=data.get("type"),
             name=data.get("name"),
             source_text=data.get("source_text"),
@@ -334,6 +339,7 @@ def extract_emojis_from_ocr(
                     symbol=emoji_char,  # Raw glyph (evidence-layer verbatim)
                     t_rel=ocr_item.t_rel,
                     source_frame=ocr_item.source_frame,
+                    origin="evidence_ocr",  # Evidence layer: extracted from OCR
                     type="emoji",
                     name=emoji_name,
                     source_text=source_snippet,
@@ -524,6 +530,7 @@ class ClaudeAnalyzer:
                             symbol=item.symbol,
                             t_rel=round(t_rel, 2),
                             source_frame=item.source_frame,
+                            origin="inferred_llm",  # Inference layer: provided by Claude
                         )
                     )
 

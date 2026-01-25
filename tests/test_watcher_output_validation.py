@@ -287,7 +287,7 @@ class TestOutputValidation:
         assert "- [" in highlights_content
 
     def test_process_job_validation_failure_marks_failed(self, tmp_path, monkeypatch):
-        """Process job should fail if output validation fails."""
+        """Process job should succeed with fallback when highlights have low content."""
         raw_dir = tmp_path / "raw"
         raw_dir.mkdir()
         output_dir = tmp_path / "sessions"
@@ -323,7 +323,7 @@ class TestOutputValidation:
             pass
 
         def mock_analyze_session(manifest, session_dir, **kwargs):
-            # Create analysis but with no facts (will produce empty highlights)
+            # Create analysis but with no facts (will produce fallback highlights)
             analysis_dir = session_dir / "analysis"
             analysis_dir.mkdir(exist_ok=True)
             analysis_json = (
@@ -348,10 +348,13 @@ class TestOutputValidation:
         # Process job
         result = process_job(job, output_dir, force=False)
 
-        # Should fail due to validation
-        assert not result.success
-        assert "Output validation failed" in result.error
-        # Could fail on either highlights or timeline depending on composer logic
-        assert (
-            "highlights.md" in result.error or "timeline.md" in result.error
-        ), f"Expected validation error, got: {result.error}"
+        # Should succeed with fallback highlight
+        assert result.success, f"Job should succeed with fallback, got error: {result.error}"
+
+        # Verify fallback was created
+        session_dir = output_dir / result.session_id
+        highlights_file = session_dir / "highlights.md"
+        assert highlights_file.exists()
+        highlights_content = highlights_file.read_text()
+        assert "score=0" in highlights_content, "Should have fallback with score=0"
+        assert "fallback" in highlights_content.lower(), "Should have fallback marker"

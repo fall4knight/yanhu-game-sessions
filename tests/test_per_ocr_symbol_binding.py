@@ -199,7 +199,7 @@ class TestPerOcrSymbolBindingIntegration:
         assert not result.startswith("- [00:00:00] ❤️ 知不知道")
 
     def test_highlights_without_matching_ocr(self, tmp_path):
-        """Symbol far from all OCR items should not appear in quote."""
+        """Symbol far from all OCR items should NOT create standalone highlight (Step 18c)."""
         from yanhu.composer import compose_highlights
 
         analysis_dir = tmp_path / "analysis"
@@ -217,7 +217,7 @@ class TestPerOcrSymbolBindingIntegration:
                 OcrItem(text="第二句", t_rel=8.0, source_frame="frame_0004.jpg"),
             ],
             ui_symbol_items=[
-                # Symbol far away (no match)
+                # Symbol far away (no match) - should NOT create standalone highlight
                 UiSymbolItem(symbol="❤️", t_rel=20.0, source_frame="frame_0010.jpg")
             ],
         )
@@ -242,16 +242,16 @@ class TestPerOcrSymbolBindingIntegration:
 
         result = compose_highlights(manifest, tmp_path, min_score=0)
 
-        # Symbol far from OCR should appear as standalone entry
-        assert "❤️" in result
-        # The main quote should be unaffected
+        # The main quote with readable text should appear
         assert "第一句 / 第二句" in result
-        # Should have two separate entries: one with text, one with just symbol
+        # Should have only ONE entry (readable text), NOT a standalone symbol entry
         lines = [line for line in result.split("\n") if line.startswith("- [")]
-        assert len(lines) == 2
+        assert len(lines) == 1, "Should only have 1 readable highlight, not standalone symbol"
+        # Standalone symbols should NOT appear as separate highlights
+        # (they may appear as metadata in symbols line, but not as quote)
 
     def test_standalone_symbol_quote_format(self, tmp_path):
-        """Standalone symbol should generate quote with just the symbol."""
+        """Standalone symbols should NOT create separate highlights (Step 18c)."""
         from yanhu.composer import compose_highlights
 
         analysis_dir = tmp_path / "analysis"
@@ -293,7 +293,10 @@ class TestPerOcrSymbolBindingIntegration:
 
         result = compose_highlights(manifest, tmp_path, min_score=0)
 
-        # Should have standalone symbol entry at correct time
-        assert "- [00:00:25] ⭐" in result
-        # Should also have main quote
+        # Should have main quote with readable text
         assert "对话内容" in result
+        # Should have only ONE entry (readable text), NOT a standalone symbol entry
+        lines = [line for line in result.split("\n") if line.startswith("- [")]
+        assert len(lines) == 1, "Should only have 1 readable highlight, not standalone symbol"
+        # Standalone symbols should NOT appear as separate highlights (Step 18c)
+        assert "- [00:00:25] ⭐" not in result

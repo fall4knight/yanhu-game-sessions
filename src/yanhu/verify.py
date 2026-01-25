@@ -203,15 +203,24 @@ def validate_outputs(session_dir: Path) -> tuple[bool, str]:
         if not filepath.exists():
             return False, f"Missing required output: {filename}"
 
-    # Validate highlights.md has at least one highlight entry
+    # Validate highlights.md has at least one highlight entry or fallback
     highlights_path = session_dir / "highlights.md"
     try:
         highlights_content = highlights_path.read_text(encoding="utf-8")
     except OSError as e:
         return False, f"Failed to read highlights.md: {e}"
 
-    if "- [" not in highlights_content:
-        return False, "highlights.md contains no highlight entries (no '- [' line found)"
+    # Accept either canonical "- [HH:MM:SS]" format or fallback marker
+    has_canonical_entry = "- [" in highlights_content
+    has_fallback_marker = (
+        "fallback" in highlights_content.lower() and "score=0" in highlights_content
+    )
+
+    if not (has_canonical_entry or has_fallback_marker):
+        return False, (
+            "highlights.md contains no highlight entries "
+            "(expected '- [' format or fallback marker with score=0)"
+        )
 
     # Validate timeline.md has content (segments or quotes)
     timeline_path = session_dir / "timeline.md"

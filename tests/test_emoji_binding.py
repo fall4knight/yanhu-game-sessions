@@ -22,6 +22,7 @@ class TestEmojiBindingInTimeline:
             ui_key_text=["都做過"],
             ui_symbol_items=[
                 UiSymbolItem(
+                    origin="evidence_ocr",
                     symbol="❤️",
                     t_rel=5.0,
                     source_frame="frame_0003.jpg",
@@ -111,12 +112,14 @@ class TestEmojiBindingInTimeline:
             ui_key_text=["測試"],
             ui_symbol_items=[
                 UiSymbolItem(
+                    origin="evidence_ocr",
                     symbol="❤️",
                     t_rel=3.0,
                     source_frame="frame_0002.jpg",
                     type="emoji",
                 ),
                 UiSymbolItem(
+                    origin="evidence_ocr",
                     symbol="💛",
                     t_rel=5.0,
                     source_frame="frame_0003.jpg",
@@ -171,6 +174,7 @@ class TestEmojiBindingInHighlights:
             ui_key_text=["❤️都做過", "daddy也叫了"],
             ui_symbol_items=[
                 UiSymbolItem(
+                    origin="evidence_ocr",
                     symbol="❤️",
                     t_rel=5.0,
                     source_frame="frame_0003.jpg",
@@ -261,6 +265,7 @@ class TestEmojiBindingInHighlights:
             ui_key_text=["第一段"],
             ui_symbol_items=[
                 UiSymbolItem(
+                    origin="evidence_ocr",
                     symbol="❤️",
                     t_rel=3.0,
                     source_frame="frame_0002.jpg",
@@ -278,6 +283,7 @@ class TestEmojiBindingInHighlights:
             ui_key_text=["第二段"],
             ui_symbol_items=[
                 UiSymbolItem(
+                    origin="evidence_ocr",
                     symbol="💛",
                     t_rel=8.0,
                     source_frame="frame_0002.jpg",
@@ -334,6 +340,7 @@ class TestEmojiBindingInHighlights:
             ui_key_text=["都做過"],
             ui_symbol_items=[
                 UiSymbolItem(
+                    origin="evidence_ocr",
                     symbol="❤️",
                     t_rel=8.0,
                     source_frame="frame_0004.jpg",
@@ -387,6 +394,7 @@ class TestEmojiPartIdFiltering:
             ui_key_text=["測試"],
             ui_symbol_items=[
                 UiSymbolItem(
+                    origin="evidence_ocr",
                     symbol="❤️",
                     t_rel=3.0,
                     source_frame="frame_0002.jpg",
@@ -394,6 +402,7 @@ class TestEmojiPartIdFiltering:
                     source_part_id="part_0001",  # Belongs to this part
                 ),
                 UiSymbolItem(
+                    origin="evidence_ocr",
                     symbol="💛",
                     t_rel=8.0,
                     source_frame="frame_0003.jpg",
@@ -448,6 +457,7 @@ class TestEmojiPartIdFiltering:
             ui_key_text=["第一段"],
             ui_symbol_items=[
                 UiSymbolItem(
+                    origin="evidence_ocr",
                     symbol="❤️",
                     t_rel=3.0,
                     source_frame="frame_0002.jpg",
@@ -474,6 +484,7 @@ class TestEmojiPartIdFiltering:
             ui_key_text=["第三段"],
             ui_symbol_items=[
                 UiSymbolItem(
+                    origin="evidence_ocr",
                     symbol="💛",
                     t_rel=13.0,
                     source_frame="frame_0003.jpg",
@@ -552,16 +563,16 @@ class TestEmojiAsrTimeBasedMatching:
     """Test emoji→ASR binding uses correct time-based matching with segment-relative times."""
 
     def test_nearest_asr_binding_by_midpoint_distance(self, tmp_path):
-        """Test symbol binds to ASR with nearest midpoint (segment-relative time base).
+        """Test symbol binds to ASR with nearest midpoint (global time base).
 
         Setup:
         - Segment starts at 5.0s (absolute), duration 10s (5.0–15.0s absolute)
         - ASR items (absolute times):
-          [5.00–6.64] "你知道自己在做什麼嗎" (mid=5.82, rel=0.82)
-          [6.64–7.92] "我和你" (mid=7.28, rel=2.28)
-          [7.92–9.48] "愛都做了" (mid=8.70, rel=3.70)
-          [9.48–11.16] "爸爸也做了" (mid=10.32, rel=5.32)
-        - Symbol at t_rel=3.7 (segment-relative)
+          [5.00–6.64] "你知道自己在做什麼嗎" (mid=5.82)
+          [6.64–7.92] "我和你" (mid=7.28)
+          [7.92–9.48] "愛都做了" (mid=8.70)
+          [9.48–11.16] "爸爸也做了" (mid=10.32)
+        - Symbol at t_rel=8.7 (global time)
 
         Expected: symbol should bind to "愛都做了" (distance 0.0)
         """
@@ -569,7 +580,7 @@ class TestEmojiAsrTimeBasedMatching:
         analysis_dir = session_dir / "analysis"
         analysis_dir.mkdir()
 
-        # Create analysis with asr_items (absolute times) and symbol (segment-relative time)
+        # Create analysis with asr_items (absolute times) and symbol (global time)
         analysis_data = {
             "segment_id": "part_0001",
             "scene_type": "dialogue",
@@ -589,8 +600,9 @@ class TestEmojiAsrTimeBasedMatching:
             "ui_symbol_items": [
                 {
                     "symbol": "❤️",
-                    "t_rel": 3.7,  # Segment-relative: should match mid=3.70
+                    "t_rel": 8.7,  # Global time: matches ASR mid=8.70
                     "source_frame": "frame_0003.jpg",
+                    "origin": "evidence_ocr",
                     "type": "emoji",
                     "source_part_id": "part_0001",
                 }
@@ -637,8 +649,8 @@ class TestEmojiAsrTimeBasedMatching:
 
         Setup:
         - Segment starts at 5.0s, duration 10s
-        - Symbol at t_rel=0.9 (segment-relative)
-        - Should bind to first ASR item (mid=0.82, distance=0.08)
+        - Symbol at t_rel=5.82 (global time)
+        - Should bind to first ASR item (mid=5.82, distance=0.0)
         """
         session_dir = tmp_path
         analysis_dir = session_dir / "analysis"
@@ -656,8 +668,9 @@ class TestEmojiAsrTimeBasedMatching:
             "ui_symbol_items": [
                 {
                     "symbol": "💙",
-                    "t_rel": 0.9,  # Near start, closest to first ASR
+                    "t_rel": 5.82,  # Global time, matches first ASR mid
                     "source_frame": "frame_0001.jpg",
+                    "origin": "evidence_ocr",
                     "type": "emoji",
                     "source_part_id": "part_0001",
                 }
@@ -698,9 +711,9 @@ class TestEmojiAsrTimeBasedMatching:
 
         Simulates part_0002 scenario:
         - Segment at 5.0s–10.0s (duration 5s)
-        - Symbol at t_rel=3.0 (segment-relative, 8.0s absolute)
-        - ASR at 7.92–9.48 "愛都做了" (mid=8.70 absolute, 3.70 rel)
-        - Distance: |3.0 - 3.70| = 0.70
+        - Symbol at t_rel=8.0 (global time)
+        - ASR at 7.92–9.48 "愛都做了" (mid=8.70 global)
+        - Distance: |8.0 - 8.70| = 0.70
 
         Should display: Symbols: ❤️ (near: "愛都做了")
         """
@@ -721,8 +734,9 @@ class TestEmojiAsrTimeBasedMatching:
             "ui_symbol_items": [
                 {
                     "symbol": "❤️",
-                    "t_rel": 3.0,  # 8.0s absolute
+                    "t_rel": 8.0,  # Global time
                     "source_frame": "frame_0004.jpg",
+                    "origin": "evidence_ocr",
                     "type": "emoji",
                     "name": "red_heart",
                     "source_part_id": "part_0002",
@@ -785,6 +799,7 @@ class TestEmojiAsrContext:
             ui_key_text=["都做過", "daddy也叫了"],
             ui_symbol_items=[
                 UiSymbolItem(
+                    origin="evidence_ocr",
                     symbol="❤️",
                     t_rel=5.0,
                     source_frame="frame_0003.jpg",
@@ -836,6 +851,7 @@ class TestEmojiAsrContext:
             ui_key_text=["❤️都做過", "daddy也叫了"],
             ui_symbol_items=[
                 UiSymbolItem(
+                    origin="evidence_ocr",
                     symbol="❤️",
                     t_rel=5.0,
                     source_frame="frame_0003.jpg",

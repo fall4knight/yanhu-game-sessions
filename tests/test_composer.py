@@ -1439,7 +1439,7 @@ class TestComposeHighlights:
         assert "part_0002" not in result
 
     def test_highlights_empty_when_no_analysis(self, tmp_path):
-        """Should show placeholder when no analysis available."""
+        """Should create fallback highlight when no analysis available."""
         from yanhu.composer import compose_highlights
 
         manifest = Manifest(
@@ -1455,7 +1455,13 @@ class TestComposeHighlights:
 
         result = compose_highlights(manifest, tmp_path)
 
-        assert "No highlights available" in result
+        # Should have fallback with canonical format
+        assert "- [00:00:00]" in result, "Should have canonical timestamp format"
+        assert "score=0" in result, "Should have score=0"
+        assert "part_0001" in result, "Should reference the segment"
+        assert (
+            "analysis unavailable" in result.lower() or "fallback" in result.lower()
+        ), "Should indicate fallback/missing analysis"
 
 
 class TestWriteHighlights:

@@ -516,10 +516,126 @@ def _find_nearest_asr_text(
     return best_text
 
 
+def _find_nearest_context(
+    symbol_t_rel: float,
+    symbol_source_frame: str,
+    segment: SegmentInfo,
+    session_dir: Path | None,
+) -> str | None:
+    """Find nearest context text for a symbol with deterministic priority.
+
+    Priority (stable, evidence-first):
+    A1) Same-frame OCR item (spatial locality - highest priority)
+    A2) Nearest OCR item by time distance (fallback)
+    B) Nearest aligned_quote (if available)
+    C) Nearest ASR item (fallback only)
+
+    Time base: Global session time (t_rel is absolute seconds from session start).
+
+    Args:
+        symbol_t_rel: Symbol timestamp (global session time in seconds)
+        symbol_source_frame: Symbol source frame filename for same-frame matching
+        segment: Segment info with start_time for filtering
+        session_dir: Path to session directory for loading analysis data
+
+    Returns:
+        Nearest context text snippet, or None if no context available
+    """
+    if not session_dir or not segment.analysis_path:
+        return None
+
+    analysis_file = session_dir / segment.analysis_path
+    if not analysis_file.exists():
+        return None
+
+    # Load analysis JSON
+    try:
+        import json
+
+        with open(analysis_file, encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return None
+
+    # Priority A: Nearest OCR item
+    # A1: Same-frame OCR (highest priority - spatial locality)
+    # A2: Time-distance OCR (fallback)
+    ocr_items = data.get("ocr_items", [])
+    if ocr_items:
+        # First try: same frame as symbol (spatial match)
+        same_frame_ocr = []
+        for ocr in ocr_items:
+            ocr_frame = ocr.get("source_frame", "")
+            if ocr_frame and ocr_frame == symbol_source_frame:
+                text = ocr.get("text", "").strip()
+                if text:
+                    same_frame_ocr.append((ocr.get("t_rel", 0.0), text))
+
+        if same_frame_ocr:
+            # Return the nearest same-frame OCR by time (or first if equal)
+            same_frame_ocr.sort(key=lambda x: abs(symbol_t_rel - x[0]))
+            return same_frame_ocr[0][1]
+
+        # Fallback: nearest OCR by time distance
+        nearest_ocr = None
+        min_distance = float("inf")
+        for ocr in ocr_items:
+            ocr_t_rel = ocr.get("t_rel", 0.0)
+            distance = abs(symbol_t_rel - ocr_t_rel)
+            if distance < min_distance:
+                min_distance = distance
+                nearest_ocr = ocr.get("text", "").strip()
+        if nearest_ocr:
+            return nearest_ocr
+
+    # Priority B: Nearest aligned_quote
+    aligned_quotes = data.get("aligned_quotes", [])
+    if aligned_quotes:
+        from yanhu.aligner import AlignedQuote
+
+        nearest_quote = None
+        min_distance = float("inf")
+        for quote_data in aligned_quotes:
+            quote = AlignedQuote.from_dict(quote_data)
+            quote_t = quote.t  # Global session time
+            distance = abs(symbol_t_rel - quote_t)
+            if distance < min_distance:
+                min_distance = distance
+                # Prefer OCR over ASR in quotes
+                nearest_quote = quote.ocr or quote.asr
+        if nearest_quote:
+            return nearest_quote
+
+    # Priority C: Nearest ASR item (fallback)
+    asr_items = data.get("asr_items", [])
+    if asr_items:
+        nearest_asr = None
+        min_distance = float("inf")
+        for asr in asr_items:
+            # ASR uses midpoint: (t_start + t_end) / 2
+            t_start = asr.get("t_start", 0.0)
+            t_end = asr.get("t_end", 0.0)
+            asr_mid = (t_start + t_end) / 2.0
+            distance = abs(symbol_t_rel - asr_mid)
+            if distance < min_distance:
+                min_distance = distance
+                nearest_asr = asr.get("text", "").strip()
+        if nearest_asr:
+            return nearest_asr
+
+    # Fallback: ui_key_text (first non-empty)
+    ui_key_text = data.get("ui_key_text", [])
+    for text in ui_key_text:
+        if text and text.strip():
+            return text.strip()
+
+    return None
+
+
 def get_segment_symbols(
     segment: SegmentInfo, session_dir: Path | None, session_id: str
 ) -> str | None:
-    """Get emoji symbols from ui_symbol_items with frame links and nearest ASR text.
+    """Get emoji symbols from ui_symbol_items with frame links and nearest context text.
 
     Args:
         segment: Segment info from manifest
@@ -542,15 +658,21 @@ def get_segment_symbols(
     # Extract part_id from segment.id (e.g., "part_0002")
     part_id = segment.id
 
-    # Filter symbols belonging to this part (with backward compat fallback)
+    # Filter symbols belonging to this part
+    # ONLY include evidence_ocr symbols for display (conservative default)
     segment_symbols = []
     for item in analysis.ui_symbol_items:
+        # Only display symbols with explicit origin="evidence_ocr"
+        # Filter out: inferred_llm, None, missing origin
+        if not hasattr(item, "origin") or item.origin != "evidence_ocr":
+            continue
+
         # Use source_part_id if available for precise binding
         if hasattr(item, "source_part_id") and item.source_part_id:
             if item.source_part_id == part_id:
                 segment_symbols.append(item)
         else:
-            # Backward compatibility: if no source_part_id, include it
+            # If no source_part_id, include it (backward compat)
             segment_symbols.append(item)
 
     if not segment_symbols:
@@ -575,14 +697,18 @@ def get_segment_symbols(
         frame_filename = item.source_frame
         frame_url = f"/s/{session_id}/frames/{part_id}/{frame_filename}"
 
-        # Find nearest ASR text for context using time-based matching
-        nearest_asr = _find_nearest_asr_text(item.t_rel, segment, session_dir)
+        # Find nearest context text using priority: same-frame OCR → time OCR → quotes → ASR
+        nearest_context = _find_nearest_context(
+            item.t_rel, item.source_frame, segment, session_dir
+        )
 
-        # Create markdown link: [emoji](url) with optional ASR context
-        if nearest_asr:
-            # Truncate long ASR text
-            asr_display = nearest_asr[:30] + "..." if len(nearest_asr) > 30 else nearest_asr
-            symbol_links.append(f"[{item.symbol}]({frame_url}) (near: '{asr_display}')")
+        # Create markdown link: [emoji](url) with optional context
+        if nearest_context:
+            # Truncate long context text
+            context_display = (
+                nearest_context[:30] + "..." if len(nearest_context) > 30 else nearest_context
+            )
+            symbol_links.append(f"[{item.symbol}]({frame_url}) (near: '{context_display}')")
         else:
             symbol_links.append(f"[{item.symbol}]({frame_url})")
 
@@ -1565,6 +1691,111 @@ class HighlightEntry:
     summary: str | None  # Summary text (facts[0] / what_changed)
     symbols: str | None = None  # Emoji symbols with frame links
 
+    def has_readable_content(self) -> bool:
+        """Check if this highlight has readable text content (not symbols-only).
+
+        A valid highlight must have at least one of:
+        - Non-empty quote with readable text (not just emoji/punctuation)
+        - Non-empty summary
+
+        Returns:
+            True if highlight has readable content, False if symbols-only
+        """
+        import re
+
+        # Check summary first (most reliable)
+        if self.summary and self.summary.strip():
+            return True
+
+        # Check quote for readable text
+        if self.quote:
+            # Strip whitespace and common punctuation
+            text = self.quote.strip()
+            # Remove emoji/symbols using regex (keep only word characters and spaces)
+            readable_text = re.sub(r"[^\w\s]", "", text, flags=re.UNICODE)
+            # If there's any remaining non-whitespace text, it's readable
+            if readable_text.strip():
+                return True
+
+        # No readable content found
+        return False
+
+
+def _create_fallback_highlight(
+    manifest: Manifest, session_dir: Path
+) -> HighlightEntry:
+    """Create a fallback highlight entry when no highlights pass threshold.
+
+    ALWAYS returns a fallback entry. Uses first segment with valid analysis if available,
+    otherwise uses first segment from manifest with generic text.
+
+    Args:
+        manifest: Session manifest
+        session_dir: Path to session directory
+
+    Returns:
+        HighlightEntry with score=0 (always non-None)
+    """
+    # Try to find first segment with analysis
+    for segment in manifest.segments:
+        analysis = get_segment_analysis(segment, session_dir)
+        if analysis is None:
+            continue
+
+        # Use first fact or caption as fallback summary
+        summary = None
+        if analysis.facts:
+            summary = analysis.facts[0]
+        elif analysis.caption:
+            summary = analysis.caption
+        elif analysis.what_changed:
+            summary = analysis.what_changed[:100]  # Truncate
+
+        # Use first aligned quote if available, otherwise "Fallback highlight"
+        quote = None
+        if segment.analysis_path:
+            analysis_path = session_dir / segment.analysis_path
+            aligned_quotes = load_aligned_quotes(analysis_path)
+            if aligned_quotes and len(aligned_quotes) > 0:
+                # Get text from first quote (prefer ocr, then asr)
+                first_quote = aligned_quotes[0]
+                quote = first_quote.ocr or first_quote.asr
+
+        if not quote:
+            quote = "Fallback highlight (no content above threshold)"
+
+        return HighlightEntry(
+            score=0,
+            segment_id=segment.id,
+            start_time=segment.start_time,
+            quote=quote,
+            summary=summary,
+            symbols=None,
+        )
+
+    # No segments have analysis - use first segment with generic fallback
+    if manifest.segments:
+        first_segment = manifest.segments[0]
+        return HighlightEntry(
+            score=0,
+            segment_id=first_segment.id,
+            start_time=first_segment.start_time,
+            quote="Fallback highlight (analysis unavailable)",
+            summary="Session processed but no analysis data available",
+            symbols=None,
+        )
+
+    # No segments at all - use timestamp 0 with generic fallback
+    # This should never happen in practice, but handle gracefully
+    return HighlightEntry(
+        score=0,
+        segment_id="unknown",
+        start_time=0.0,
+        quote="Fallback highlight (no segments)",
+        summary="Session manifest contains no segments",
+        symbols=None,
+    )
+
 
 def compose_highlights(
     manifest: Manifest,
@@ -1803,9 +2034,13 @@ def compose_highlights(
                 )
             )
 
+    # Filter out symbols-only entries (no readable content)
+    # Keep only highlights with readable text (quote or summary)
+    valid_highlights = [h for h in merged_highlights if h.has_readable_content()]
+
     # Sort by score (descending) and take top-k
-    merged_highlights.sort(key=lambda x: -x.score)
-    top_highlights = merged_highlights[:top_k]
+    valid_highlights.sort(key=lambda x: -x.score)
+    top_highlights = valid_highlights[:top_k]
 
     # Re-sort by time for display
     top_highlights.sort(key=lambda x: x.start_time)
@@ -1835,9 +2070,18 @@ def compose_highlights(
         if entry.symbols:
             lines.append(f"  - symbols: {entry.symbols}")
 
-    # If no highlights found
+    # If no highlights found, create a fallback entry
     if not top_highlights:
-        lines.append("_No highlights available. Run analysis first._")
+        fallback_entry = _create_fallback_highlight(manifest, session_dir)
+        lines[2] = "**Top 1 moments** (fallback entry - no highlights above threshold)"
+        timestamp = format_timestamp(fallback_entry.start_time)
+        quote_text = fallback_entry.quote or "No quote"
+        lines.append(
+            f"- [{timestamp}] {quote_text} "
+            f"(segment={fallback_entry.segment_id}, score={fallback_entry.score})"
+        )
+        if fallback_entry.summary:
+            lines.append(f"  - summary: {fallback_entry.summary}")
 
     lines.append("")
     return "\n".join(lines)

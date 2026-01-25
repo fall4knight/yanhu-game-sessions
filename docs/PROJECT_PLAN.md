@@ -290,6 +290,17 @@ yanhu-game-sessions/
   - [x] Watermark filtering (小红书, @username, etc.)
   - [x] Score-based deduplication by ui_key_text
   - [x] Summary line: `facts[0] / truncated what_changed`
+  - [x] Fallback highlight when no content passes threshold (Step 21)
+    - [x] `_create_fallback_highlight()` ALWAYS returns fallback (never None)
+    - [x] Uses first segment with analysis if available, else first segment with generic text
+    - [x] Fallback quote: aligned_quotes > "Fallback highlight (analysis unavailable)"
+    - [x] Relaxed validation: accepts canonical "- [HH:MM:SS]" OR fallback with score=0
+    - [x] 9 new tests for fallback creation, missing analysis, and validation
+  - [x] Prevent symbols-only highlights (Step 18c)
+    - [x] `has_readable_content()` method validates highlight has readable text (not just emoji/punctuation)
+    - [x] Filter symbols-only entries before taking top-k in `compose_highlights()`
+    - [x] Symbols can contribute to scoring and appear as metadata, but not as standalone highlights
+    - [x] 9 new tests for symbols-only prevention and validation
 - [x] Write unit tests for timestamp, timeline, highlights, quote selection, heart prefix
 - [x] AI-generated descriptions integration
   - [x] Vision analysis: facts, what_changed, ui_key_text, scene_label (M3)
@@ -731,6 +742,8 @@ No pipeline rewrite, no native GUI redesign—focus on **one-click launch** for 
 | 2026-01-24 | Desktop UX Verification Gate | Done | Added `yanhu verify --desktop-ux` command to enforce critical non-programmer contracts before release; verifies: (A) ffprobe discovery robustness (shutil.which + /opt/homebrew/bin, /usr/local/bin fallback paths for packaged apps), (B) Quit Server endpoint with os._exit(0) hard-stop, (C) launcher compatibility (create_app accepts jobs_dir + str paths, run_app accepts debug kwarg); implemented verify_desktop_ux() in verify.py with source code inspection; 18 new tests in test_verify_desktop_ux.py covering all checks + monkeypatched negative cases; CI integration: added step to .github/workflows/ci.yml; RUNBOOK: added "Release Smoke Test" section with gate + manual checklist; PROJECT_PLAN: added M9.0 checklist items; 852 tests total; Any regression (ffprobe PATH, quit not exiting, kwargs mismatch) now fails CI before release |
 | 2026-01-24 | Backlog: Multimodal Backend Options | TODO Added | Added TODO for Gemini 3 Pro + Qwen3 multimodal backends as cost-effective alternatives to Claude Vision; see detailed milestone below |
 | 2026-01-24 | Backlog: OCR Decoupling + Vibe Layer | TODO Added | Added TODO for two-layer architecture separating Evidence Layer (strict OCR+ASR verbatim) from Vibe Layer (inference-tagged summaries); addresses Claude Vision cost/reliability issues and enables Gemini/Qwen-friendly pipelines; see detailed milestone below |
+| 2026-01-24 | Step 21: Highlights Fallback + Validation | Done | Fixed job failure when no highlights pass threshold OR analysis missing; _create_fallback_highlight() ALWAYS returns fallback (never None): uses first segment with analysis if available, else first segment with generic text "Fallback highlight (analysis unavailable)"; fallback has score=0; relaxed validate_outputs() to accept either canonical "- [HH:MM:SS]" format OR fallback marker with score=0; removed "_No highlights available. Run analysis first._" placeholder (replaced with deterministic fallback); updated test_highlights_empty_when_no_analysis and test_process_job_validation_failure_marks_failed to expect success with fallback; 9 new tests in test_highlights_fallback.py verify: fallback creation, format matching, aligned quote usage, missing analysis handling, validation acceptance; 869 tests total; Does NOT: change scoring algorithm, pipeline stages beyond compose/verify |
+| 2026-01-24 | Step 18c: Prevent Symbols-Only Highlights | Done | Prevent symbols-only highlights (e.g., "[00:00:13] ❤️" with no readable text); added has_readable_content() method to HighlightEntry class to validate readable text (strips emoji/punctuation/whitespace); modified compose_highlights() to filter symbols-only entries before taking top-k; symbols can still contribute to scoring and appear as metadata, but cannot create standalone highlights without readable evidence; updated test_per_ocr_symbol_binding.py to match new behavior (no standalone symbol expectations); 9 new tests in test_symbols_only_highlights.py verify: symbols-only segment not highlighted, symbols with text shown as metadata, standalone entries filtered, has_readable_content() validation; 890 tests total; Does NOT: change evidence extraction or binding, only highlight selection/rendering |
 | TBD | M9.1: Desktop Polish | Not Started | Code signing (macOS/Windows); Installer packages (.dmg, .msi); Auto-updater; Keychain integration for API keys; Menu bar/system tray icon; Crash reporting |
 
 ---
