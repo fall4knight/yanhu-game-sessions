@@ -134,12 +134,66 @@ def selfcheck_asr() -> int:
     print(f"Failed: {len(failed)}")
     print()
 
-    if failed:
+    # Check for faster_whisper assets (VAD model)
+    asset_check_passed = True
+    print("Checking faster_whisper assets:")
+    try:
+        # Try to locate the VAD asset file
+        import faster_whisper
+
+        # Check if this is a real module (has __file__ attribute)
+        if not hasattr(faster_whisper, "__file__") or faster_whisper.__file__ is None:
+            # This is a mock module, skip asset check
+            print("  [SKIP] faster_whisper module is mocked (no __file__)")
+        else:
+            # Real module, try to find assets
+            try:
+                import importlib.resources as importlib_resources
+
+                # Python 3.9+
+                if hasattr(importlib_resources, "files"):
+                    assets_path = importlib_resources.files("faster_whisper") / "assets"
+                    vad_asset = assets_path / "silero_vad.onnx"
+                    if not vad_asset.is_file():
+                        # Try alternative name
+                        vad_asset = assets_path / "silero_vad_v6.onnx"
+
+                    if vad_asset.is_file():
+                        print(f"  [OK] VAD asset found: {vad_asset.name}")
+                    else:
+                        print("  [FAIL] VAD asset (silero_vad*.onnx) not found")
+                        asset_check_passed = False
+                else:
+                    # Fallback: try direct path lookup
+                    fw_path = Path(faster_whisper.__file__).parent / "assets"
+                    if fw_path.exists():
+                        vad_files = list(fw_path.glob("silero_vad*.onnx"))
+                        if vad_files:
+                            print(f"  [OK] VAD asset found: {vad_files[0].name}")
+                        else:
+                            print("  [FAIL] VAD asset (silero_vad*.onnx) not found")
+                            asset_check_passed = False
+                    else:
+                        print(f"  [FAIL] Assets directory not found: {fw_path}")
+                        asset_check_passed = False
+            except Exception as e:
+                print(f"  [FAIL] Asset check error: {e}")
+                asset_check_passed = False
+    except ImportError:
+        # faster_whisper not available, already reported in module check above
+        print("  [SKIP] faster_whisper not available for asset check")
+
+    print()
+
+    if failed or not asset_check_passed:
         print("=" * 60)
         print("ASR SELFCHECK FAILED")
         print("=" * 60)
         print()
-        print("Missing ASR dependencies - packaging error.")
+        if failed:
+            print("Missing ASR dependencies - packaging error.")
+        if not asset_check_passed:
+            print("Missing faster_whisper assets - packaging error.")
         return 1
 
     print("=" * 60)

@@ -57,13 +57,19 @@ for pkg in ['faster_whisper', 'tokenizers', 'huggingface_hub', 'tiktoken', 'safe
         # If collection fails, package may not be installed (skip gracefully)
         pass
 
-# Collect data files for huggingface packages
+# Collect data files for huggingface packages and faster_whisper assets
 datas_collected = []
 for pkg in ['tokenizers', 'huggingface_hub']:
     try:
         datas_collected += collect_data_files(pkg, include_py_files=True)
     except Exception:
         pass
+
+# Collect faster_whisper data files (includes assets/*.onnx for VAD)
+try:
+    datas_collected += collect_data_files('faster_whisper', include_py_files=False)
+except Exception:
+    pass  # If faster_whisper not installed, skip gracefully
 
 a = Analysis(
     ['src/yanhu/launcher.py'],

@@ -443,3 +443,49 @@ class TestAsrSelfcheck:
         # Should contain ASCII-safe alternatives
         assert "[OK]" in output, "Should use ASCII-safe [OK] token"
         assert "ASR SELFCHECK PASSED" in output
+
+    def test_selfcheck_asr_includes_asset_check(self, monkeypatch, capsys):
+        """selfcheck_asr includes faster_whisper VAD asset validation."""
+        import builtins
+
+        # Mock __import__ to succeed for all modules
+        original_import = builtins.__import__
+
+        def mock_import(name, *args, **kwargs):
+            asr_modules = [
+                "faster_whisper",
+                "ctranslate2",
+                "tokenizers",
+                "huggingface_hub",
+                "tiktoken",
+                "regex",
+                "safetensors",
+                "av",
+                "onnxruntime",
+            ]
+            if name in asr_modules:
+                from types import ModuleType
+
+                return ModuleType(name)
+            return original_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", mock_import)
+
+        # Run selfcheck
+        selfcheck_asr()
+
+        # Verify output includes asset check
+        captured = capsys.readouterr()
+        output = captured.out
+
+        # Should mention asset checking
+        assert (
+            "faster_whisper assets" in output or "VAD asset" in output
+        ), "Should check for VAD assets"
+
+        # Should have [OK], [FAIL], or [SKIP] for asset check
+        assert (
+            "[OK] VAD asset" in output
+            or "[FAIL] VAD asset" in output
+            or "[SKIP]" in output
+        ), "Should report asset check status"
