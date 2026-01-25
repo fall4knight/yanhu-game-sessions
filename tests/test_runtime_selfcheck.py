@@ -80,6 +80,27 @@ class TestRuntimeSelfcheck:
         assert result.returncode != 0, "Invalid profile should fail"
         assert "invalid choice" in result.stderr.lower() or "ERROR" in result.stdout
 
+    def test_selfcheck_output_uses_ascii_symbols_no_unicode(self):
+        """Verify output uses ASCII-safe symbols (no Unicode checkmarks for Windows cp1252)."""
+        result = subprocess.run(
+            [sys.executable, "scripts/runtime_selfcheck.py", "--profile", "core"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        output = result.stdout
+
+        # Should NOT contain Unicode checkmarks (causes UnicodeEncodeError on Windows cp1252)
+        assert "✓" not in output, "Should not use Unicode checkmark ✓ (Windows cp1252 incompatible)"
+        assert "✗" not in output, "Should not use Unicode X-mark ✗ (Windows cp1252 incompatible)"
+
+        # Should contain ASCII-safe alternatives
+        assert "[OK]" in output or "[FAIL]" in output, "Should use ASCII-safe [OK]/[FAIL] tokens"
+
+        # Verify deterministic format
+        assert "Successful imports:" in output
+        assert "Failed imports:" in output
+
 
 class TestDependencyMatrixDocumentation:
     """High-signal tests for dependency matrix documentation."""

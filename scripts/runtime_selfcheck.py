@@ -124,6 +124,14 @@ def main() -> int:
     Returns:
         Exit code (0 for success, 1 for failure)
     """
+    # Attempt to set UTF-8 encoding for Windows compatibility
+    # (but we still use ASCII symbols for maximum robustness)
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding="utf-8")
+        except Exception:
+            pass  # Silently continue with default encoding
+
     parser = argparse.ArgumentParser(
         description="Runtime dependency self-check",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -167,15 +175,15 @@ Examples:
 
     successful, failed = check_imports(modules)
 
-    print(f"✓ Successful imports: {len(successful)}/{len(modules)}")
-    print(f"✗ Failed imports: {len(failed)}")
+    print(f"[OK] Successful imports: {len(successful)}/{len(modules)}")
+    print(f"[FAIL] Failed imports: {len(failed)}")
     print()
 
     if failed:
         print("FAILED IMPORTS:")
         print("-" * 60)
         for failure in failed:
-            print(f"  ✗ {failure}")
+            print(f"  [FAIL] {failure}")
         print()
         print("=" * 60)
         print(f"SELF-CHECK FAILED: Missing dependencies for profile '{args.profile}'")
