@@ -1232,7 +1232,8 @@ def process_job(
         # Step 4: Analyze (params from run_config)
         # Load API keys from key store and populate environment
         import os
-        from yanhu.keystore import get_default_keystore, SUPPORTED_KEYS
+
+        from yanhu.keystore import SUPPORTED_KEYS, get_default_keystore
 
         keystore = get_default_keystore()
         for key_name in SUPPORTED_KEYS:
