@@ -192,8 +192,8 @@ class TestComposeTimeline:
         assert "frames/part_0001/frame_0001.jpg" in result
         assert "frame_0001.jpg" in result
 
-    def test_timeline_contains_todo_placeholder(self):
-        """Timeline should have TODO placeholder for descriptions."""
+    def test_timeline_contains_neutral_placeholder(self):
+        """Timeline should have neutral placeholder for descriptions."""
         manifest = Manifest(
             session_id="test_session",
             created_at="2026-01-20T12:00:00",
@@ -205,7 +205,7 @@ class TestComposeTimeline:
             ],
         )
         result = compose_timeline(manifest)
-        assert "TODO: describe what happened" in result
+        assert "Segment processed" in result
 
 
 class TestComposeOverview:
@@ -301,8 +301,8 @@ class TestComposeOverview:
 class TestGetSegmentDescription:
     """Test segment description retrieval with analysis."""
 
-    def test_returns_todo_when_no_analysis_path(self):
-        """Should return TODO when segment has no analysis_path."""
+    def test_returns_neutral_when_no_analysis_path(self):
+        """Should return neutral message when segment has no analysis_path."""
         from yanhu.composer import get_segment_description
 
         segment = SegmentInfo(
@@ -312,10 +312,10 @@ class TestGetSegmentDescription:
             video_path="segments/test.mp4",
         )
         result = get_segment_description(segment, None)
-        assert "TODO" in result
+        assert result == "Segment processed"
 
-    def test_returns_todo_when_no_session_dir(self):
-        """Should return TODO when session_dir is None."""
+    def test_returns_neutral_when_no_session_dir(self):
+        """Should return neutral message when session_dir is None."""
         from yanhu.composer import get_segment_description
 
         segment = SegmentInfo(
@@ -326,7 +326,7 @@ class TestGetSegmentDescription:
             analysis_path="analysis/part_0001.json",
         )
         result = get_segment_description(segment, None)
-        assert "TODO" in result
+        assert result == "Segment processed"
 
     def test_returns_caption_when_analysis_exists(self, tmp_path):
         """Should return caption when analysis file exists."""
@@ -353,8 +353,8 @@ class TestGetSegmentDescription:
         result = get_segment_description(segment, tmp_path)
         assert result == "测试描述：角色对话"
 
-    def test_returns_todo_when_analysis_file_missing(self, tmp_path):
-        """Should return TODO when analysis file doesn't exist."""
+    def test_returns_neutral_when_analysis_file_missing(self, tmp_path):
+        """Should return neutral message when analysis file doesn't exist."""
         from yanhu.composer import get_segment_description
 
         segment = SegmentInfo(
@@ -365,7 +365,7 @@ class TestGetSegmentDescription:
             analysis_path="analysis/part_0001.json",
         )
         result = get_segment_description(segment, tmp_path)
-        assert "TODO" in result
+        assert result == "Segment processed"
 
     def test_facts_priority_over_caption(self, tmp_path):
         """Should prefer facts over caption when both exist."""
@@ -459,8 +459,8 @@ class TestComposeTimelineWithAnalysis:
         assert "【占位】part_0001：已抽取3帧，等待视觉/字幕解析" in result
         assert "TODO: describe what happened" not in result
 
-    def test_timeline_falls_back_to_todo_when_no_analysis(self):
-        """Timeline should use TODO when no analysis available."""
+    def test_timeline_falls_back_to_neutral_when_no_analysis(self):
+        """Timeline should use neutral message when no analysis available."""
         manifest = Manifest(
             session_id="test_session",
             created_at="2026-01-20T12:00:00",
@@ -472,9 +472,9 @@ class TestComposeTimelineWithAnalysis:
             ],
         )
         result = compose_timeline(manifest, None)
-        assert "TODO: describe what happened" in result
+        assert "Segment processed" in result
 
-    def test_timeline_mixed_analysis_and_todo(self, tmp_path):
+    def test_timeline_mixed_analysis_and_neutral(self, tmp_path):
         """Timeline should handle mix of analyzed and non-analyzed segments."""
         from yanhu.analyzer import AnalysisResult
 
@@ -513,7 +513,7 @@ class TestComposeTimelineWithAnalysis:
         )
         result = compose_timeline(manifest, tmp_path)
         assert "已分析的segment" in result
-        assert "TODO: describe what happened" in result
+        assert "Segment processed" in result
 
 
 class TestComposeTimelineL1Fields:
@@ -852,8 +852,8 @@ class TestHasValidClaudeAnalysis:
 class TestErrorHandlingInTimeline:
     """Test error handling when analysis has JSON parse errors."""
 
-    def test_description_shows_error_message_when_error_field_exists(self, tmp_path):
-        """Should show TODO with analysis path when error field is present."""
+    def test_description_shows_neutral_message_when_error_field_exists(self, tmp_path):
+        """Should show neutral message when error field is present."""
         from yanhu.analyzer import AnalysisResult
         from yanhu.composer import get_segment_description
 
@@ -880,8 +880,7 @@ class TestErrorHandlingInTimeline:
             analysis_path="analysis/part_0001.json",
         )
         result = get_segment_description(segment, tmp_path)
-        assert "TODO: analysis failed" in result
-        assert "analysis/part_0001.json" in result
+        assert result == "Analysis unavailable"
 
     def test_description_does_not_output_raw_text(self, tmp_path):
         """Should not output raw_text in timeline description."""
@@ -915,8 +914,8 @@ class TestErrorHandlingInTimeline:
         # Should NOT contain raw_text
         assert raw_response not in result
 
-    def test_timeline_shows_error_for_failed_analysis(self, tmp_path):
-        """Timeline should show TODO for segments with analysis errors."""
+    def test_timeline_shows_neutral_for_failed_analysis(self, tmp_path):
+        """Timeline should show neutral message for segments with analysis errors."""
         from yanhu.analyzer import AnalysisResult
 
         analysis = AnalysisResult(
@@ -950,8 +949,7 @@ class TestErrorHandlingInTimeline:
             ],
         )
         result = compose_timeline(manifest, tmp_path)
-        assert "TODO: analysis failed" in result
-        assert "analysis/part_0001.json" in result
+        assert "Analysis unavailable" in result
         # Should NOT contain raw_text
         assert "invalid json response" not in result
 

@@ -314,8 +314,10 @@ BASE_TEMPLATE = """
                 <a href="/settings">⚙️ Settings</a>
             </span>
             <span style="float: right;">
-                <span id="mode-indicator" style="color: #7f8c8d; font-size: 0.9em; margin-right: 15px;">
-                    Mode: Loading...
+                <span id="mode-indicator"
+                      style="color: {% if 'no keys' in mode_label %}#95a5a6{% else %}#27ae60{% endif %}; font-size: 0.9em; margin-right: 15px;"
+                      title="{{ mode_detail|join(', ') if mode_detail else '' }}">
+                    Mode: {{ mode_label }}
                 </span>
                 <span style="color: #7f8c8d; font-size: 0.9em; margin-right: 15px;">
                     🔒 Local processing only
@@ -373,44 +375,49 @@ BASE_TEMPLATE = """
             });
         }
 
-        // Load and display mode indicator
+        // Load and display mode indicator (for dynamic updates after key changes)
         function updateModeIndicator() {
             fetch('/api/settings/keys')
                 .then(response => response.json())
                 .then(data => {
                     const keys = data.keys || {};
                     const setKeys = [];
+                    const details = [];
 
                     if (keys.ANTHROPIC_API_KEY && keys.ANTHROPIC_API_KEY.set) {
                         setKeys.push('Claude');
+                        details.push('Claude API key configured');
                     }
                     if (keys.GEMINI_API_KEY && keys.GEMINI_API_KEY.set) {
                         setKeys.push('Gemini');
+                        details.push('Gemini API key configured');
                     }
                     if (keys.OPENAI_API_KEY && keys.OPENAI_API_KEY.set) {
                         setKeys.push('OpenAI');
+                        details.push('OpenAI API key configured');
                     }
 
                     const indicator = document.getElementById('mode-indicator');
                     if (setKeys.length === 0) {
-                        indicator.textContent = 'Mode: ASR-only (Vision disabled)';
+                        indicator.textContent = 'Mode: ASR-only (no keys)';
                         indicator.style.color = '#95a5a6';
+                        indicator.title = 'No API keys configured, Vision/OCR disabled';
                     } else if (setKeys.length === 1) {
                         indicator.textContent = `Mode: ${setKeys[0]} enabled`;
                         indicator.style.color = '#27ae60';
+                        indicator.title = details[0];
                     } else {
                         indicator.textContent = `Mode: Keys set (${setKeys.join('/')})`;
                         indicator.style.color = '#27ae60';
-                        indicator.title = `API keys configured: ${setKeys.join(', ')}`;
+                        indicator.title = details.join(', ');
                     }
                 })
                 .catch(err => {
                     console.error('Failed to load mode indicator:', err);
-                    document.getElementById('mode-indicator').textContent = 'Mode: Unknown';
                 });
         }
 
-        // Update mode indicator on page load
+        // Update mode indicator on page load (refresh from server)
         updateModeIndicator();
 
         // Copy command to clipboard
@@ -656,9 +663,15 @@ SESSION_VIEW_TEMPLATE = BASE_TEMPLATE.replace(
     <div id="progress-container"></div>
     <h2>{{ session_id }}</h2>
 
-    {% if not has_api_key %}
+    {% if not session_has_vision %}
+        {% if not keys_present.get('ANTHROPIC_API_KEY') and not keys_present.get('GEMINI_API_KEY') %}
     <div class="info-banner" style="background: #d4edda; color: #155724; padding: 15px; margin: 15px 0; border-radius: 4px; border: 1px solid #c3e6cb;">
-        <strong>ℹ️ ASR-Only Mode:</strong> Vision/OCR analysis disabled (no ANTHROPIC_API_KEY). Timeline and highlights generated from audio transcription only.
+        <strong>ℹ️ ASR-Only Mode:</strong> Vision/OCR not run (no API keys configured). Timeline and highlights generated from audio transcription only.
+    </div>
+        {% endif %}
+    {% else %}
+    <div class="success-banner" style="background: #d4edda; color: #155724; padding: 10px 15px; margin: 15px 0; border-radius: 4px; border: 1px solid #c3e6cb; font-size: 0.9em;">
+        ✓ Vision/OCR analysis enabled for this session
     </div>
     {% endif %}
 
@@ -1587,9 +1600,91 @@ def create_app(
 
     app.config["shutdown_token"] = secrets.token_urlsafe(32)
 
-    # Check if ANTHROPIC_API_KEY is available
-    import os
-    app.config["has_api_key"] = bool(os.environ.get("ANTHROPIC_API_KEY"))
+    # Mode status helpers
+    def get_mode_status():
+        """Get current mode status based on configured API keys.
+
+        Returns:
+            dict with keys: mode_label (str), mode_detail (list), keys_present (dict)
+        """
+        from yanhu.keystore import SUPPORTED_KEYS, get_default_keystore
+
+        keystore = get_default_keystore()
+        keys_present = {}
+
+        for key_name in SUPPORTED_KEYS:
+            key_value = keystore.get_key(key_name)
+            keys_present[key_name] = bool(key_value)
+
+        # Build mode label
+        set_keys = []
+        if keys_present.get("ANTHROPIC_API_KEY"):
+            set_keys.append("Claude")
+        if keys_present.get("GEMINI_API_KEY"):
+            set_keys.append("Gemini")
+        if keys_present.get("OPENAI_API_KEY"):
+            set_keys.append("OpenAI")
+
+        if not set_keys:
+            mode_label = "ASR-only (no keys)"
+            mode_detail = ["No API keys configured", "Vision/OCR disabled"]
+        elif len(set_keys) == 1:
+            mode_label = f"{set_keys[0]} enabled"
+            mode_detail = [f"{set_keys[0]} API key configured"]
+        else:
+            mode_label = f"Keys set ({'/'.join(set_keys)})"
+            mode_detail = [f"{key} API key configured" for key in set_keys]
+
+        return {
+            "mode_label": mode_label,
+            "mode_detail": mode_detail,
+            "keys_present": keys_present,
+        }
+
+    def detect_session_has_vision(session_dir: Path) -> bool:
+        """Detect if session has vision/OCR analysis results.
+
+        Returns True if:
+        - Any analysis/part_*.json has non-empty ocr_items OR facts
+        - OR manifest indicates analyze_backend != mock/off
+
+        Args:
+            session_dir: Path to session directory
+
+        Returns:
+            True if vision analysis was run, False if ASR-only
+        """
+        # Check manifest for analyze backend
+        manifest_file = session_dir / "manifest.json"
+        if manifest_file.exists():
+            try:
+                manifest_data = json.loads(manifest_file.read_text(encoding="utf-8"))
+                backend = manifest_data.get("analyze_backend", "")
+                if backend and backend not in ("mock", "off", ""):
+                    return True
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        # Check analysis files for OCR/facts content
+        analysis_dir = session_dir / "outputs" / "analysis"
+        if analysis_dir.exists():
+            for analysis_file in analysis_dir.glob("part_*.json"):
+                try:
+                    analysis_data = json.loads(analysis_file.read_text(encoding="utf-8"))
+                    # Check for non-mock indicators
+                    if analysis_data.get("model") and analysis_data["model"] != "mock":
+                        return True
+                    # Check for actual OCR content
+                    if analysis_data.get("ocr_items") and len(analysis_data["ocr_items"]) > 0:
+                        return True
+                    # Check for non-placeholder facts
+                    facts = analysis_data.get("facts", [])
+                    if facts and not all("共" in str(f) and "帧画面" in str(f) for f in facts):
+                        return True
+                except (json.JSONDecodeError, OSError):
+                    continue
+
+        return False
 
     @app.route("/")
     def index():
@@ -1653,6 +1748,7 @@ def create_app(
         # Sort by created_at descending (newest first)
         jobs_list.sort(key=lambda j: j.get("created_at", ""), reverse=True)
 
+        mode_status = get_mode_status()
         return render_template_string(
             SESSION_LIST_TEMPLATE,
             jobs=jobs_list,
@@ -1663,6 +1759,8 @@ def create_app(
             ffprobe_available=app.config.get("ffprobe_path") is not None,
             shutdown_token=app.config.get("shutdown_token", ""),
             available_asr_models=list_asr_models(),
+            mode_label=mode_status["mode_label"],
+            mode_detail=mode_status["mode_detail"],
         )
 
     @app.route("/s/<session_id>")
@@ -1713,6 +1811,10 @@ def create_app(
         from yanhu.watcher import aggregate_asr_errors
         asr_error_summary = aggregate_asr_errors(session_dir, asr_models)
 
+        # Detect if session has vision/OCR results
+        session_has_vision = detect_session_has_vision(session_dir)
+
+        mode_status = get_mode_status()
         return render_template_string(
             SESSION_VIEW_TEMPLATE,
             session_id=session_id,
@@ -1724,7 +1826,10 @@ def create_app(
             ffmpeg_warning=app.config.get("ffmpeg_error"),
             asr_error_summary=asr_error_summary,
             shutdown_token=app.config.get("shutdown_token", ""),
-            has_api_key=app.config.get("has_api_key", False),
+            session_has_vision=session_has_vision,
+            mode_label=mode_status["mode_label"],
+            mode_detail=mode_status["mode_detail"],
+            keys_present=mode_status["keys_present"],
         )
 
     @app.route("/s/<session_id>/progress")
@@ -2113,6 +2218,7 @@ def create_app(
             else:
                 return f"{bytes_val / (1024 * 1024 * 1024):.2f} GB"
 
+        mode_status = get_mode_status()
         return render_template_string(
             JOB_DETAIL_TEMPLATE,
             job=job,
@@ -2121,6 +2227,8 @@ def create_app(
             format_size=format_size,
             ffmpeg_warning=app.config.get("ffmpeg_error"),
             shutdown_token=app.config.get("shutdown_token", ""),
+            mode_label=mode_status["mode_label"],
+            mode_detail=mode_status["mode_detail"],
         )
 
     @app.route("/api/jobs/<job_id>", methods=["GET"])
@@ -2368,10 +2476,13 @@ def create_app(
     @app.route("/settings")
     def settings_page():
         """Settings page for API key management."""
+        mode_status = get_mode_status()
         return render_template_string(
             SETTINGS_TEMPLATE,
             title="Settings",
             shutdown_token=app.config.get("shutdown_token", ""),
+            mode_label=mode_status["mode_label"],
+            mode_detail=mode_status["mode_detail"],
         )
 
     @app.route("/api/settings/keys", methods=["GET"])

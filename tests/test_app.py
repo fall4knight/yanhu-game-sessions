@@ -2491,5 +2491,6 @@ class TestSettingsRoutes:
         html = response.get_data(as_text=True)
         # Mode indicator should be present in global header
         assert "mode-indicator" in html
-        assert "Mode: Loading..." in html  # Initial text
+        # Should show server-rendered mode (no keys in test environment)
+        assert "Mode: ASR-only (no keys)" in html
         assert "updateModeIndicator" in html
