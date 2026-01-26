@@ -51,8 +51,8 @@ class TestNoPipInstallGuidance:
 class TestAsrUiProgressDisplay:
     """Test UI renders progress with message field."""
 
-    def test_session_view_renders_progress_container(self, tmp_path):
-        """Session view should include progress-container div."""
+    def test_session_view_renders_progress_bar(self, tmp_path):
+        """Session view should include global progress bar system."""
         from yanhu.app import create_app
         from yanhu.manifest import Manifest, SegmentInfo
 
@@ -89,16 +89,15 @@ class TestAsrUiProgressDisplay:
 
         html = response.get_data(as_text=True)
 
-        # Check for progress container
-        assert 'id="progress-container"' in html
-        # Check for updateProgress function
-        assert "updateProgress()" in html or "function updateProgress" in html
-        # Check for progress display logic
-        assert "data.message" in html
+        # Check for global progress bar system
+        assert 'id="global-progress-bar"' in html
+        # Check for progress polling function
+        assert "startGlobalProgressPolling" in html
+        # Check for progress display logic (download_model stage handling)
         assert "download_model" in html
 
-    def test_job_view_renders_progress_container(self, tmp_path):
-        """Job view should include progress-container div."""
+    def test_job_view_renders_progress_bar(self, tmp_path):
+        """Job view should include global progress bar system."""
         from yanhu.app import create_app
         from yanhu.watcher import QueueJob, save_job_to_file
 
@@ -125,10 +124,9 @@ class TestAsrUiProgressDisplay:
 
         html = response.get_data(as_text=True)
 
-        # Check for progress container
-        assert 'id="progress-container"' in html
-        # Check for updateProgress function
-        assert "function updateProgress" in html
-        # Check for progress display logic with message
-        assert "data.message" in html
-        assert "download_model" in html or "isDownloading" in html
+        # Check for global progress bar system
+        assert 'id="global-progress-bar"' in html
+        # Check for progress polling function
+        assert "updateJobStatus" in html or "startGlobalProgressPolling" in html
+        # Check for progress display logic (download_model stage handling)
+        assert "download_model" in html

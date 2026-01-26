@@ -175,6 +175,7 @@ class QueueJob:
     game: str | None = None  # Explicit game name (overrides suggested_game)
     tag: str | None = None  # Run tag (e.g., "run01")
     session_id: str | None = None  # Generated session ID after processing
+    started_at: str | None = None  # ISO format timestamp when processing started
     error: str | None = None  # Error message if failed
     outputs: dict | None = None  # Output paths after successful processing
     preset: str | None = None  # Processing preset (fast/quality)
@@ -209,6 +210,8 @@ class QueueJob:
             result["tag"] = self.tag
         if self.session_id is not None:
             result["session_id"] = self.session_id
+        if self.started_at is not None:
+            result["started_at"] = self.started_at
         if self.error is not None:
             result["error"] = self.error
         if self.outputs is not None:
@@ -554,6 +557,7 @@ def update_job_by_id(
     jobs_dir: Path,
     status: str | None = None,
     session_id: str | None = None,
+    started_at: str | None = None,
     error: str | None = None,
     outputs: dict | None = None,
 ) -> QueueJob | None:
@@ -564,6 +568,7 @@ def update_job_by_id(
         jobs_dir: Directory containing job JSON files
         status: New status (if provided)
         session_id: Session ID (if provided)
+        started_at: Processing start timestamp (if provided)
         error: Error message (if provided)
         outputs: Output paths (if provided)
 
@@ -579,6 +584,8 @@ def update_job_by_id(
         job.status = status
     if session_id is not None:
         job.session_id = session_id
+    if started_at is not None:
+        job.started_at = started_at
     if error is not None:
         job.error = error
     if outputs is not None:
@@ -1125,6 +1132,7 @@ def process_job(
     force: bool = False,
     source_mode: str = "link",
     run_config: dict | None = None,
+    jobs_dir: Path | None = None,
 ) -> JobResult:
     """Process a single job through the pipeline.
 
@@ -1144,6 +1152,7 @@ def process_job(
         source_mode: "link" (hardlink/symlink, default) or "copy"
         run_config: Configuration dict with processing parameters (from preset)
                    If None, uses default fast preset
+        jobs_dir: Optional jobs directory for updating job record with session_id early
 
     Returns:
         JobResult with success/failure and details
@@ -1207,6 +1216,26 @@ def process_job(
         session_id = generate_session_id(game, tag, timestamp=job_timestamp)
         # CRITICAL: create_session_directory args are (session_id, output_dir)
         session_dir = create_session_directory(session_id, output_dir)
+
+        # Write session_id to job record immediately so UI can start polling progress
+        if jobs_dir:
+            try:
+                update_job_by_id(job.job_id, jobs_dir, session_id=session_id)
+                print(f"  Session ID written to job record: {session_id}")
+            except Exception as e:
+                # Don't fail the job if job update fails
+                print(f"  Warning: Failed to update job with session_id: {e}")
+
+        # Step 32.11: Write initial stage heartbeat
+        from yanhu.progress import write_stage_heartbeat
+
+        write_stage_heartbeat(
+            session_id=session_id,
+            session_dir=session_dir,
+            stage="ingest",
+            message="Ingesting source video...",
+        )
+
         source_local, source_metadata = copy_source_video(raw_path, session_dir, mode=source_mode)
         print(f"  Source mode: {source_metadata.source_mode}")
         if source_metadata.source_fallback_error:
@@ -1221,11 +1250,23 @@ def process_job(
         manifest.save(session_dir)
 
         # Step 2: Segment
+        write_stage_heartbeat(
+            session_id=session_id,
+            session_dir=session_dir,
+            stage="segment",
+            message="Segmenting video...",
+        )
         segment_infos = segment_video(manifest, session_dir)
         manifest.segments = segment_infos
         manifest.save(session_dir)
 
         # Step 3: Extract frames
+        write_stage_heartbeat(
+            session_id=session_id,
+            session_dir=session_dir,
+            stage="extract",
+            message="Extracting frames...",
+        )
         extract_frames(manifest, session_dir, frames_per_segment=6)
         manifest.save(session_dir)
 
@@ -1243,6 +1284,12 @@ def process_job(
 
         # Auto-detect analyze backend based on API key availability
         analyze_backend = "claude" if os.environ.get("ANTHROPIC_API_KEY") else "mock"
+        write_stage_heartbeat(
+            session_id=session_id,
+            session_dir=session_dir,
+            stage="analyze",
+            message=f"Analyzing frames ({analyze_backend})...",
+        )
         analyze_session(
             manifest=manifest,
             session_dir=session_dir,
@@ -1338,6 +1385,24 @@ def process_job(
             asr_models=asr_models,
         )
 
+        # Step 32.17: Update job with transcribe stats immediately (before compose)
+        # This allows /progress endpoint to reconcile stale progress.json
+        # Without this, job.outputs doesn't exist until after compose, causing 8/9 stuck UI
+        if jobs_dir and job and job.job_id:
+            # Reload job to ensure we have fresh state (avoid stale reference)
+            job_file = jobs_dir / f"{job.job_id}.json"
+            if job_file.exists():
+                fresh_job = load_job_from_file(job_file)
+                if fresh_job:
+                    fresh_job.outputs = {
+                        "transcribe_processed": transcribe_stats.processed,
+                        "transcribe_total": transcribe_stats.total,
+                        "session_dir": str(session_dir),
+                    }
+                    save_job_to_file(fresh_job, jobs_dir)
+                    # Update local reference for later use
+                    job.outputs = fresh_job.outputs
+
         # Finalize progress tracker (transition to compose stage)
         progress_tracker.finalize(stage="compose")
 
@@ -1358,12 +1423,30 @@ def process_job(
             manifest.save(session_dir)
 
         # Step 6: Compose
+        write_stage_heartbeat(
+            session_id=session_id,
+            session_dir=session_dir,
+            stage="compose",
+            message="Composing outputs...",
+        )
         write_timeline(manifest, session_dir)
         write_overview(manifest, session_dir)
         write_highlights(manifest, session_dir)
 
         # Update progress to done
         progress_tracker.finalize(stage="done")
+
+        # Step 32.15: Terminal state reconciliation - force write final progress.json
+        # This ensures progress.json reflects stage="done" even if ProgressTracker
+        # was stuck at an earlier state (e.g., transcribe 8/9).
+        write_stage_heartbeat(
+            session_id=session_id,
+            session_dir=session_dir,
+            stage="done",
+            message="Processing complete",
+            done=1,
+            total=1,
+        )
 
         # Step 7: Aggregate ASR errors
         asr_error_summary = aggregate_asr_errors(session_dir, asr_models)
@@ -1421,6 +1504,23 @@ def process_job(
         )
 
     except Exception as e:
+        # Step 32.15: Write failed progress.json if session was created
+        try:
+            # session_id and session_dir are defined in the try block
+            # If we got far enough to create the session, write terminal failed state
+            if 'session_dir' in locals() and 'session_id' in locals():
+                write_stage_heartbeat(
+                    session_id=session_id,
+                    session_dir=session_dir,
+                    stage="failed",
+                    message=f"Processing failed: {str(e)}",
+                    done=0,
+                    total=0,
+                )
+        except Exception:
+            # Don't let progress write failure mask the original error
+            pass
+
         return JobResult(
             success=False,
             error=str(e),

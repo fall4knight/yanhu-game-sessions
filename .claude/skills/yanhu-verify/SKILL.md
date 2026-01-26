@@ -188,14 +188,27 @@ ruff check src/ tests/ scripts/
 - Do NOT claim work is done
 
 ### 2. Test Suite Check (pytest)
+
+**CRITICAL**: You MUST run the EXACT command below. Do NOT use --ignore flags or other filters.
+
 ```bash
 pytest -q
 ```
 
 **Expected Output**:
-- All tests pass
+- All tests pass (including E2E tests, unless excluded by marker)
 - Exit code 0
 - No failures, no errors
+
+**To exclude E2E tests (ONLY if Playwright not installed)**:
+```bash
+pytest -m "not e2e" -q
+```
+
+**FORBIDDEN**:
+- ❌ `pytest -q --ignore=tests/e2e` (NEVER use --ignore)
+- ❌ `pytest -q tests/` (excludes root tests)
+- ❌ Any path-based exclusion that silently skips test files
 
 **If FAILED**:
 - Print pytest output showing failures
@@ -228,7 +241,45 @@ SELF-CHECK PASSED: All dependencies present for profile '<name>'
 
 ---
 
-### 4. Release Gate (ASR + CI Rehearsal)
+### 4. E2E UI/Progress Tests (Conditional)
+
+**ONLY run when UI or progress polling logic is changed**:
+
+**When to run**: If ANY of these conditions are true:
+- `src/yanhu/app.py` was modified (Flask routes, templates, or JS inline code)
+- `src/yanhu/watcher.py` progress logic was modified (write_stage_heartbeat, progress_tracker)
+- `scripts/runtime_selfcheck.py` was modified
+- `tests/e2e/` directory was modified or added
+- Any Jinja2 templates in `src/yanhu/templates/` were modified
+- User explicitly requests "e2e tests" or mentions progress/polling/UI changes
+
+**Prerequisites**:
+- Playwright browsers must be installed (one-time setup):
+  ```bash
+  python -m playwright install --with-deps chromium
+  ```
+- If not installed, skip this check with note: "Playwright not installed, skipping E2E tests"
+
+**Command**:
+```bash
+pytest -m e2e -v
+```
+
+**Expected Output**:
+- All 5 E2E tests pass (test_pending_job, test_processing_no_session, test_session_appears, test_terminal_lock, test_stop_polling)
+- Exit code 0
+- No browser errors in output
+
+**If FAILED**:
+- Print pytest output showing which E2E test failed
+- **FAIL** with message: "E2E tests failed. Fix UI/progress logic before proceeding."
+- Do NOT claim work is done
+
+**Note**: E2E tests verify progress polling behavior, job state machine, and terminal lock enforcement. They run fast (no real video processing, uses fixtures).
+
+---
+
+### 5. Release Gate (ASR + CI Rehearsal)
 
 **ONLY run when preparing desktop releases or ASR-related changes**:
 
@@ -291,18 +342,34 @@ Ready for release tagging!
 
 ### Self-Recommendation Output Format
 
+**CRITICAL REQUIREMENT**: You MUST paste the EXACT command lines you ran and their exit codes. Claims without evidence are FORBIDDEN.
+
 After running all applicable checks, report:
 
 **Default Gate (standard work)**:
 ```
 ## Self-Recommendation: [PASS|FAIL]
 
-Default Gate checks:
-  [✓|✗] ruff check src/ tests/ scripts/
-  [✓|✗] pytest -q
-  [✓|✗] runtime selfcheck --profile core
-  [✓|✗] runtime selfcheck --profile app
-  [✓|✗] runtime selfcheck --profile desktop
+Default Gate checks (with exact commands and exit codes):
+
+1. Ruff check:
+   Command: ruff check src/ tests/ scripts/
+   Exit code: [0 or non-zero]
+
+2. Test suite:
+   Command: pytest -q
+   Exit code: [0 or non-zero]
+   Output: [X passed, Y skipped, etc.]
+
+3. Runtime selfcheck:
+   Command: python scripts/runtime_selfcheck.py --profile core
+   Exit code: [0 or non-zero]
+
+   Command: python scripts/runtime_selfcheck.py --profile app
+   Exit code: [0 or non-zero]
+
+   Command: python scripts/runtime_selfcheck.py --profile desktop
+   Exit code: [0 or non-zero]
 
 [If any check failed, list details here]
 
@@ -313,19 +380,79 @@ All default gate checks passed. Work is ready.
 Work is NOT complete. Fix failures above and rerun verification.
 ```
 
+**Default Gate + E2E (UI/progress work)**:
+```
+## Self-Recommendation: [PASS|FAIL]
+
+Default Gate checks (with exact commands and exit codes):
+
+1. Ruff check:
+   Command: ruff check src/ tests/ scripts/
+   Exit code: [0 or non-zero]
+
+2. Test suite:
+   Command: pytest -q
+   Exit code: [0 or non-zero]
+   Output: [X passed, Y skipped, etc.]
+
+3. Runtime selfcheck:
+   Command: python scripts/runtime_selfcheck.py --profile core
+   Exit code: [0 or non-zero]
+
+   Command: python scripts/runtime_selfcheck.py --profile app
+   Exit code: [0 or non-zero]
+
+   Command: python scripts/runtime_selfcheck.py --profile desktop
+   Exit code: [0 or non-zero]
+
+E2E Gate (UI/progress touched):
+   Command: pytest -m e2e -v
+   Exit code: [0 or non-zero]
+   Output: [X passed, Y skipped, etc.]
+
+[If any check failed, list details here]
+
+[If all passed:]
+All checks passed (including E2E). Work is ready.
+
+[If any failed:]
+Work is NOT complete. Fix failures above and rerun verification.
+```
+
 **Release Gate (packaging/ASR work)**:
 ```
 ## Self-Recommendation: [PASS|FAIL]
 
-Release Gate checks:
-  [✓|✗] ruff check src/ tests/ scripts/
-  [✓|✗] pytest -q
-  [✓|✗] runtime selfcheck --profile core
-  [✓|✗] runtime selfcheck --profile app
-  [✓|✗] runtime selfcheck --profile desktop
-  [✓|✗] runtime selfcheck --profile asr
-  [✓|✗] runtime selfcheck --profile all
-  [✓|✗] bash scripts/ci_rehearsal_desktop.sh
+Release Gate checks (with exact commands and exit codes):
+
+1. Ruff check:
+   Command: ruff check src/ tests/ scripts/
+   Exit code: [0 or non-zero]
+
+2. Test suite:
+   Command: pytest -q
+   Exit code: [0 or non-zero]
+   Output: [X passed, Y skipped, etc.]
+
+3. Runtime selfcheck:
+   Command: python scripts/runtime_selfcheck.py --profile core
+   Exit code: [0 or non-zero]
+
+   Command: python scripts/runtime_selfcheck.py --profile app
+   Exit code: [0 or non-zero]
+
+   Command: python scripts/runtime_selfcheck.py --profile desktop
+   Exit code: [0 or non-zero]
+
+   Command: python scripts/runtime_selfcheck.py --profile asr
+   Exit code: [0 or non-zero]
+
+   Command: python scripts/runtime_selfcheck.py --profile all
+   Exit code: [0 or non-zero]
+
+4. CI Rehearsal:
+   Command: bash scripts/ci_rehearsal_desktop.sh
+   Exit code: [0 or non-zero]
 
 [If any check failed, list details here]
 
@@ -338,9 +465,54 @@ Release NOT ready. Fix failures above and rerun verification.
 
 ---
 
+### Self-Lint Check (Anti-Cheat Enforcement)
+
+**Before claiming any work is complete**, run this self-audit on your completion summary:
+
+**FORBIDDEN PATTERNS** (immediate FAIL if found):
+
+1. ❌ `--ignore=tests/e2e` in any command
+   - If found: **FAIL** with message: "CHEATING DETECTED: Do not use --ignore to skip tests. Use markers: pytest -m 'not e2e' -q"
+
+2. ❌ Claims like "All tests passed" without exact command and exit code
+   - If found: **FAIL** with message: "EVIDENCE MISSING: Must paste exact pytest command and exit code. Example: 'Command: pytest -q, Exit code: 0'"
+
+3. ❌ Claims like "ruff check passed" without showing the command
+   - If found: **FAIL** with message: "EVIDENCE MISSING: Must paste exact ruff command and exit code. Example: 'Command: ruff check src/ tests/ scripts/, Exit code: 0'"
+
+4. ❌ `pytest -q tests/` or any path-based filter that excludes root tests
+   - If found: **FAIL** with message: "INVALID FILTER: Use 'pytest -q' (all tests) or 'pytest -m \"not e2e\" -q' (exclude E2E via marker)"
+
+**REQUIRED EVIDENCE** in every completion summary:
+- Exact command line for each check (copy-pasteable)
+- Exit code for each command (0 = pass, non-zero = fail)
+- Test count output (e.g., "1055 passed, 1 skipped")
+
+**Example of VALID evidence**:
+```
+Command: pytest -q
+Exit code: 0
+Output: 1055 passed, 1 skipped in 45.2s
+```
+
+**Example of INVALID (FORBIDDEN)**:
+```
+✓ All tests passed
+```
+(Missing command, exit code, and test count)
+
+**If self-lint detects any forbidden pattern or missing evidence**:
+- Immediately **FAIL** the verification
+- Print: "Self-lint FAILED: [specific violation]"
+- Rerun checks and regenerate completion summary with proper evidence
+
+---
+
 ## Output
 
 - PASS/FAIL with reasons
-- Commands executed
+- Commands executed (EXACT command lines, not paraphrases)
+- Exit codes for every command
 - Key artifact snippets (analysis JSON and timeline block)
-- Self-Recommendation results (REQUIRED)
+- Self-Recommendation results (REQUIRED with evidence)
+- Self-Lint Check results (REQUIRED before claiming completion)

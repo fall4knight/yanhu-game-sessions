@@ -84,6 +84,7 @@ class ProgressTracker:
         self.done = 0
         self.start_time = time.time()
         self.progress_file = session_dir / "outputs" / "progress.json"
+        self._terminal_locked = False  # Step 32.14: Prevent stage overwrite after terminal
 
         # Ensure outputs directory exists
         self.progress_file.parent.mkdir(parents=True, exist_ok=True)
@@ -98,6 +99,10 @@ class ProgressTracker:
             done: Number of items completed so far
             message: Optional status message to update
         """
+        # Step 32.14: Terminal lock - don't update after terminal state
+        if self._terminal_locked:
+            return
+
         self.done = done
         if message is not None:
             self.message = message
@@ -109,9 +114,17 @@ class ProgressTracker:
         Args:
             stage: Stage name to transition to (default: "done")
         """
+        # Step 32.14: Terminal lock - don't finalize after already in terminal state
+        if self._terminal_locked:
+            return
+
         self.stage = stage
         self.done = self.total
         self._write_progress()
+
+        # Step 32.14: Lock terminal states to prevent overwrites
+        if stage in ("done", "failed", "cancelled"):
+            self._terminal_locked = True
 
     def _write_progress(self) -> None:
         """Write progress snapshot to progress.json atomically."""
@@ -196,3 +209,60 @@ def _format_duration(seconds: float) -> str:
         hours = int(seconds / 3600)
         mins = int((seconds % 3600) / 60)
         return f"{hours}h {mins}m"
+
+
+def write_stage_heartbeat(
+    session_id: str,
+    session_dir: Path,
+    stage: str,
+    message: str,
+    done: int = 0,
+    total: int = 0,
+) -> None:
+    """Write a quick stage heartbeat to progress.json for non-segment pipeline steps.
+
+    This is a simplified alternative to ProgressTracker for stages that don't
+    have iterative progress (e.g., ingest, segment, extract, analyze, compose).
+
+    Args:
+        session_id: Session identifier
+        session_dir: Path to session directory
+        stage: Stage name (e.g., "ingest", "segment", "extract", "analyze", "compose")
+        message: Human-readable status message
+        done: Items completed (default 0)
+        total: Total items (default 0, can be 1 for single-step stages)
+    """
+    progress_file = session_dir / "outputs" / "progress.json"
+
+    # Ensure outputs directory exists
+    progress_file.parent.mkdir(parents=True, exist_ok=True)
+
+    snapshot = ProgressSnapshot(
+        session_id=session_id,
+        stage=stage,
+        done=done,
+        total=total,
+        elapsed_sec=0.0,  # Heartbeats don't track elapsed time
+        eta_sec=None,
+        updated_at=datetime.now(timezone.utc).isoformat(),
+        message=message,
+    )
+
+    # Write atomically (temp file + rename)
+    fd, temp_path = tempfile.mkstemp(
+        dir=progress_file.parent,
+        prefix=".progress_",
+        suffix=".tmp",
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(snapshot.to_dict(), f, ensure_ascii=False, indent=2)
+        # Atomic rename
+        os.replace(temp_path, progress_file)
+    except Exception:
+        # Clean up temp file on error
+        try:
+            os.unlink(temp_path)
+        except OSError:
+            pass
+        raise

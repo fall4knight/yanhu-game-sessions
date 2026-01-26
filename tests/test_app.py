@@ -210,8 +210,10 @@ class TestSessionView:
         assert response.status_code == 404
         assert "not found" in response.data.decode("utf-8").lower()
 
-    def test_session_view_returns_404_when_missing_markdown_files(self, tmp_path):
-        """Session view returns 404 when required markdown files are missing."""
+    def test_session_view_returns_200_with_warning_when_missing_markdown_files(
+        self, tmp_path
+    ):
+        """Session view returns 200 with warning when markdown files are missing (Step 32.14)."""
         from yanhu.app import create_app
 
         sessions_dir = tmp_path / "sessions"
@@ -222,14 +224,23 @@ class TestSessionView:
         session_dir.mkdir()
 
         # Only create manifest, no markdown files
-        (session_dir / "manifest.json").write_text(json.dumps({"session_id": session_id}))
+        (session_dir / "manifest.json").write_text(
+            json.dumps({"session_id": session_id})
+        )
 
         app = create_app(sessions_dir)
         client = app.test_client()
         response = client.get(f"/s/{session_id}")
 
-        assert response.status_code == 404
-        assert "incomplete" in response.data.decode("utf-8").lower()
+        # Step 32.14: Changed to return 200 with warning instead of 404
+        assert response.status_code == 200
+        html = response.data.decode("utf-8")
+        # Should have warning banner about session being finalized
+        assert "Session is still being finalized" in html
+        # Should list missing files
+        assert "overview.md" in html
+        assert "timeline.md" in html
+        assert "highlights.md" in html
 
 
 class TestProgressRoute:
@@ -270,8 +281,8 @@ class TestProgressRoute:
         assert data["done"] == 5
         assert data["total"] == 10
 
-    def test_progress_returns_404_when_absent(self, tmp_path):
-        """Progress route returns 404 when progress.json does not exist."""
+    def test_progress_returns_starting_payload_when_absent(self, tmp_path):
+        """Progress route returns 200 with starting payload when progress.json missing."""
         from yanhu.app import create_app
 
         sessions_dir = tmp_path / "sessions"
@@ -285,9 +296,13 @@ class TestProgressRoute:
         client = app.test_client()
         response = client.get(f"/s/{session_id}/progress")
 
-        assert response.status_code == 404
+        # Step 32.9: Returns 200 with starting payload (not 404) to avoid errors
+        assert response.status_code == 200
         data = response.get_json()
-        assert "error" in data
+        assert data["session_id"] == session_id
+        assert data["stage"] == "starting"
+        assert data["done"] == 0
+        assert data["total"] == 0
 
 
 class TestManifestRoute:
@@ -491,7 +506,7 @@ class TestBackgroundWorker:
         # Track process_job calls
         process_calls = []
 
-        def mock_process_job(job, output_dir, force, source_mode, run_config):
+        def mock_process_job(job, output_dir, force, source_mode, run_config, jobs_dir=None):
             from yanhu.watcher import JobResult
 
             process_calls.append(
@@ -499,6 +514,7 @@ class TestBackgroundWorker:
                     "job": job,
                     "output_dir": output_dir,
                     "run_config": run_config,
+                    "jobs_dir": jobs_dir,
                 }
             )
             return JobResult(success=True, session_id="2026-01-23_10-00-00_testgame_test")
@@ -552,7 +568,7 @@ class TestBackgroundWorker:
         save_job_to_file(job, jobs_dir)
 
         # Mock process_job to return success
-        def mock_process_job(job, output_dir, force, source_mode, run_config):
+        def mock_process_job(job, output_dir, force, source_mode, run_config, jobs_dir=None):
             from yanhu.watcher import JobResult
 
             return JobResult(success=True, session_id="test_session", outputs={})
@@ -1784,8 +1800,8 @@ class TestMediaPreflight:
 class TestCalibratedEta:
     """Test calibrated ETA in UI."""
 
-    def test_job_detail_includes_calibrated_eta_javascript(self, tmp_path):
-        """Job detail page includes JavaScript for calibrated ETA computation."""
+    def test_job_detail_includes_progress_polling_javascript(self, tmp_path):
+        """Job detail page includes JavaScript for global progress polling."""
         from yanhu.app import create_app
         from yanhu.watcher import QueueJob, save_job_to_file
 
@@ -1812,12 +1828,11 @@ class TestCalibratedEta:
         assert response.status_code == 200
         html = response.data.decode("utf-8")
 
-        # Verify JavaScript includes calibrated ETA computation
-        assert "rateEma" in html  # EMA variable
-        assert "Observed rate" in html  # Label
-        assert "Calibrated ETA" in html  # Label
-        assert "Est. finish" in html  # Label
-        assert "0.2 * currentRate + 0.8 * rateEma" in html  # EMA formula
+        # Verify JavaScript includes global progress polling system
+        assert "startGlobalProgressPolling" in html  # Global progress function
+        assert "updateGlobalProgress" in html  # Update function
+        assert "global-progress-bar" in html  # Progress bar container
+        assert "formatDuration" in html  # Duration formatting function
 
     def test_upload_uses_metrics_for_estimate(self, tmp_path, monkeypatch):
         """Upload uses metrics to improve estimate when available."""

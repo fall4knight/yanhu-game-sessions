@@ -303,6 +303,81 @@ BASE_TEMPLATE = """
         #model-selector button.active {
             background: #2980b9;
         }
+        /* Real progress bar styles */
+        .progress-bar-sticky {
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            background: white;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            max-width: 1200px;
+            margin: 0 auto 20px auto;
+            padding: 0;
+            display: none; /* Hidden by default, shown when active */
+            overflow: hidden;
+        }
+        .progress-bar-sticky.active {
+            display: block;
+        }
+        .progress-bar-container {
+            padding: 15px 20px;
+            background: #fff;
+        }
+        .progress-bar-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+        .progress-stage {
+            font-weight: 600;
+            color: #2c3e50;
+        }
+        .progress-stage.done { color: #27ae60; }
+        .progress-stage.failed { color: #e74c3c; }
+        .progress-details {
+            color: #7f8c8d;
+            font-size: 13px;
+        }
+        .progress-bar-track {
+            height: 8px;
+            background: #e0e0e0;
+            border-radius: 8px;
+            overflow: hidden;
+            position: relative;
+        }
+        .progress-bar-fill {
+            height: 100%;
+            background: #3498db;
+            border-radius: 8px;
+            transition: width 0.3s ease;
+        }
+        .progress-bar-fill.done {
+            background: #27ae60;
+        }
+        .progress-bar-fill.failed {
+            background: #e74c3c;
+        }
+        .progress-bar-fill.indeterminate {
+            width: 30% !important;
+            background: linear-gradient(90deg, #3498db, #5dade2, #3498db);
+            background-size: 200% 100%;
+            animation: progress-indeterminate 1.5s linear infinite;
+        }
+        @keyframes progress-indeterminate {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(333%); }
+        }
+        .progress-error-msg {
+            margin-top: 8px;
+            padding: 8px;
+            background: #fee;
+            color: #c33;
+            border-radius: 4px;
+            font-size: 13px;
+        }
     </style>
 </head>
 <body>
@@ -342,6 +417,20 @@ BASE_TEMPLATE = """
         </small>
     </div>
     {% endif %}
+    <!-- Sticky Progress Bar (hidden by default, shown via JS when active) -->
+    <div id="global-progress-bar" class="progress-bar-sticky">
+        <div class="progress-bar-container">
+            <div class="progress-bar-header">
+                <span class="progress-stage" id="progress-stage">Processing</span>
+                <span class="progress-details" id="progress-details"></span>
+            </div>
+            <div class="progress-bar-track">
+                <div class="progress-bar-fill" id="progress-fill" style="width: 0%;"></div>
+            </div>
+            <div id="progress-error" class="progress-error-msg" style="display: none;"></div>
+            <div id="progress-debug" style="font-size: 10px; color: #999; margin-top: 5px; display: none;"></div>
+        </div>
+    </div>
     <div class="content">
         {% block content %}{% endblock %}
     </div>
@@ -437,6 +526,450 @@ BASE_TEMPLATE = """
                     button.textContent = "Copy";
                 }, 2000);
             });
+        }
+
+        // ========== Global Progress Bar System ==========
+        let globalProgressPollInterval = null;
+        let globalProgressStartTime = Date.now();
+        let globalProgressState = {
+            jobId: null,
+            sessionId: null,
+            jobStatus: null,  // Track job status (pending/processing/done/failed/cancelled)
+            lastJobPoll: null,
+            lastProgressPoll: null,
+            terminalLocked: false  // Step 32.11: Prevent status regression after terminal state
+        };
+
+        function formatDuration(seconds) {
+            if (seconds < 60) return `${Math.round(seconds)}s`;
+            if (seconds < 3600) {
+                const mins = Math.floor(seconds / 60);
+                const secs = Math.round(seconds % 60);
+                return `${mins}m ${secs}s`;
+            }
+            const hours = Math.floor(seconds / 3600);
+            const mins = Math.floor((seconds % 3600) / 60);
+            return `${hours}h ${mins}m`;
+        }
+
+        // Calculate stage-aware weighted progress percentage
+        function calculateWeightedProgress(stage, done, total) {
+            // Stage weight ranges (avoid abrupt jumps):
+            // download_model: 0-10%
+            // transcribe: 10-85%
+            // compose: 85-98%
+            // done: 100%
+
+            if (stage === 'done') {
+                return 100;
+            }
+
+            if (stage === 'download_model') {
+                // Indeterminate but show as "preparing" (5% fixed)
+                return 5;
+            }
+
+            if (total === 0) {
+                return 0;
+            }
+
+            const stageProgress = done / total; // 0.0 to 1.0
+
+            if (stage === 'transcribe') {
+                // Map 0-100% of transcribe to 10-85% overall
+                return 10 + (stageProgress * 75);
+            }
+
+            if (stage === 'compose') {
+                // Map 0-100% of compose to 85-98% overall
+                return 85 + (stageProgress * 13);
+            }
+
+            // Fallback for unknown stages
+            return stageProgress * 100;
+        }
+
+        function updateDebugInfo() {
+            // Update debug panel if it exists
+            const debugElem = document.getElementById('progress-debug');
+            if (debugElem) {
+                const lines = [
+                    `Job: ${globalProgressState.jobId || 'none'}`,
+                    `Status: ${globalProgressState.jobStatus || 'unknown'}`,
+                    `Session: ${globalProgressState.sessionId || 'waiting...'}`,
+                    `Last job poll: ${globalProgressState.lastJobPoll || 'none'}`,
+                    `Last progress: ${globalProgressState.lastProgressPoll || 'none'}`
+                ];
+                debugElem.textContent = lines.join(' | ');
+            }
+        }
+
+        function shouldPollProgress(jobStatus, sessionId) {
+            // Only poll /progress when job is processing AND we have session_id
+            return jobStatus === 'processing' && sessionId !== null && sessionId !== undefined;
+        }
+
+        function updateGlobalProgress() {
+            const progressBar = document.getElementById('global-progress-bar');
+            const stageElem = document.getElementById('progress-stage');
+            const detailsElem = document.getElementById('progress-details');
+            const fillElem = document.getElementById('progress-fill');
+            const errorElem = document.getElementById('progress-error');
+
+            // Step 32.17: Poll unified endpoint (single source of truth)
+            // This eliminates race condition between /api/jobs/<job_id> and /s/<sid>/progress
+            if (globalProgressState.jobId) {
+                fetch('/api/jobs/' + globalProgressState.jobId + '/status')
+                    .then(response => response.ok ? response.json() : null)
+                    .then(data => {
+                        if (!data) {
+                            globalProgressState.lastJobPoll = 'error';
+                            updateDebugInfo();
+                            return;
+                        }
+
+                        // CRITICAL: Check for terminal state BEFORE applying lock guard
+                        // This ensures terminal UI always renders even if lock was set prematurely
+                        const isTerminalStatus = ['done', 'failed', 'cancelled'].includes(data.status);
+
+                        // Terminal lock guard: Skip non-terminal updates if already locked
+                        // BUT always process terminal status updates to ensure final UI renders
+                        if (globalProgressState.terminalLocked && !isTerminalStatus) {
+                            return; // Skip non-terminal update if already locked
+                        }
+
+                        // Update job status and session_id from unified response
+                        globalProgressState.jobStatus = data.status;
+                        globalProgressState.lastJobPoll = `status=${data.status}`;
+
+                        if (data.session_id && !globalProgressState.sessionId) {
+                            globalProgressState.sessionId = data.session_id;
+                            console.log('Got session_id:', data.session_id);
+                        }
+
+                        // Update debug vars for troubleshooting
+                        window.__YANHU_LAST_JOB = data;
+                        window.__YANHU_LAST_SESSION_ID = data.session_id || null;
+
+                        updateDebugInfo();
+
+                        // Get progress from unified response
+                        const progress = data.progress || {};
+                        const stage = progress.stage || 'starting';
+                        const done = progress.done || 0;
+                        const total = progress.total || 0;
+                        const elapsed = progress.elapsed_sec || 0;
+                        const eta = progress.eta_sec;
+                        const message = progress.message || '';
+
+                        globalProgressState.lastProgressPoll = `${stage} ${done}/${total}`;
+                        updateDebugInfo();
+
+                        // Step 32.20: Render status payload immediately from fetch response (not cached data)
+                        // Debug log to verify status updates
+                        console.log('[status]', data.status, progress.stage, done + '/' + total);
+
+                        // Step 32.20: Render job status text if renderStatusPayload is defined (job detail page)
+                        if (typeof renderStatusPayload === 'function') {
+                            renderStatusPayload(data);
+                        }
+
+                        // Anti-regression guard (Step 32.12): Once session exists, never show "pending"
+                        const hasSession = data.session_id !== null && data.session_id !== undefined;
+                        const effectiveStatus = (data.status === 'pending' && hasSession) ? 'processing' : data.status;
+
+                        // State machine based on job status
+                        if (effectiveStatus === 'pending') {
+                            // Job is queued, waiting for worker (only if no session yet)
+                            progressBar.classList.add('active');
+                            stageElem.textContent = 'Queued';
+                            stageElem.className = 'progress-stage';
+                            detailsElem.textContent = 'Waiting for worker…';
+                            fillElem.className = 'progress-bar-fill indeterminate';
+                            fillElem.style.width = '30%';
+                            errorElem.style.display = 'none';
+                            return;
+                        }
+
+                        if (effectiveStatus === 'processing') {
+                            if (!globalProgressState.sessionId) {
+                                // Processing but no session_id yet (very brief period)
+                                progressBar.classList.add('active');
+                                stageElem.textContent = 'Starting';
+                                stageElem.className = 'progress-stage';
+                                detailsElem.textContent = 'Waiting for session…';
+                                fillElem.className = 'progress-bar-fill indeterminate';
+                                fillElem.style.width = '30%';
+                                errorElem.style.display = 'none';
+                                return;
+                            }
+
+                            // Render progress from unified response (no separate fetch needed)
+                            renderProgress(progress);
+                            return;
+                        }
+
+                        // Terminal states (done/failed/cancelled)
+                        // Step 32.16: Job status wins - render terminal UI BEFORE stopping polling
+                        // This ensures final UI update completes before in-flight progress fetches are blocked
+                        if (['done', 'failed', 'cancelled'].includes(data.status)) {
+                            // FIRST: Render terminal state (job status takes priority over progress.stage)
+                            if (data.status === 'done') {
+                                progressBar.classList.add('active');
+                                stageElem.textContent = 'Complete';
+                                stageElem.className = 'progress-stage done';
+                                detailsElem.textContent = 'Processing complete';
+                                fillElem.className = 'progress-bar-fill done';
+                                fillElem.style.width = '100%';
+                                errorElem.style.display = 'none';
+                                setTimeout(() => {
+                                    progressBar.classList.remove('active');
+                                }, 5000);
+                            } else if (data.status === 'failed') {
+                                progressBar.classList.add('active');
+                                stageElem.textContent = 'Failed';
+                                stageElem.className = 'progress-stage failed';
+                                detailsElem.textContent = 'Processing failed';
+                                fillElem.className = 'progress-bar-fill failed';
+                                fillElem.style.width = '100%';
+                                if (data.error) {
+                                    errorElem.textContent = data.error;
+                                    errorElem.style.display = 'block';
+                                }
+                            } else if (data.status === 'cancelled') {
+                                progressBar.classList.add('active');
+                                stageElem.textContent = 'Cancelled';
+                                stageElem.className = 'progress-stage failed';
+                                detailsElem.textContent = 'Processing cancelled';
+                                fillElem.className = 'progress-bar-fill failed';
+                                fillElem.style.width = '100%';
+                            }
+
+                            // SECOND: Lock terminal state to prevent any further updates
+                            // Step 32.11: Lock prevents regression (e.g., done -> pending due to polling mismatch)
+                            globalProgressState.terminalLocked = true;
+
+                            // THIRD: Stop polling (no more job or progress fetches)
+                            if (window.__YANHU_POLL_LOOP) {
+                                clearInterval(window.__YANHU_POLL_LOOP);
+                                window.__YANHU_POLL_LOOP = null;
+                            }
+                        }
+                    })
+                    .catch(err => {
+                        globalProgressState.lastJobPoll = 'fetch_error';
+                        updateDebugInfo();
+                        console.error('Job poll error:', err);
+                    });
+            } else if (globalProgressState.sessionId) {
+                // Direct session monitoring (no jobId, e.g., from session page)
+                // Fall back to old progress endpoint for backward compatibility
+                // Terminal lock guard: Don't poll if already in terminal state
+                if (!globalProgressState.terminalLocked && shouldPollProgress('processing', globalProgressState.sessionId)) {
+                    fetchProgressData();
+                }
+            }
+        }
+
+        function renderProgress(progressData) {
+            // Step 32.17: Render progress data (used by unified endpoint)
+            // This prevents in-flight progress fetches from overwriting terminal "Complete" UI
+            if (globalProgressState.terminalLocked) {
+                return;
+            }
+
+            const progressBar = document.getElementById('global-progress-bar');
+            const stageElem = document.getElementById('progress-stage');
+            const detailsElem = document.getElementById('progress-details');
+            const fillElem = document.getElementById('progress-fill');
+            const errorElem = document.getElementById('progress-error');
+
+            const stage = progressData.stage || 'processing';
+            const done = progressData.done || 0;
+            const total = progressData.total || 1;
+            const elapsed = progressData.elapsed_sec || 0;
+            const eta = progressData.eta_sec;
+            const message = progressData.message;
+
+            // Calculate elapsed from poll start
+            const displayElapsed = Math.floor((Date.now() - globalProgressStartTime) / 1000);
+
+            // Determine if this is a terminal state
+            // Step 32.17: Hard acceptance - done == total (e.g., 9/9) is also terminal
+            const isComplete = done >= total && total > 0;  // 9/9 means complete
+            const isDone = stage === 'done' || isComplete;
+            const isFailed = stage === 'failed';
+            const isDownloading = stage === 'download_model';
+            const isActive = !isDone && !isFailed;
+
+            if (isActive) {
+                progressBar.classList.add('active');
+            }
+
+            // Update stage label
+            // Step 32.17: Show "Complete" if done == total OR stage == 'done'
+            if (isDone) {
+                stageElem.textContent = 'Complete';  // 9/9 OR stage=done shows "Complete"
+            } else {
+                stageElem.textContent = 'Stage: ' + stage;
+            }
+            stageElem.className = 'progress-stage';
+            if (isDone) stageElem.className += ' done';
+            if (isFailed) stageElem.className += ' failed';
+
+            // Build details text with overall progress percentage
+            let details = '';
+            if (isDone) {
+                // Show completion message for terminal state
+                details = message || 'Processing complete';
+            } else if (isDownloading) {
+                details = `Preparing • Elapsed: ${formatDuration(displayElapsed)}`;
+                if (message) details += ` • ${message}`;
+            } else {
+                const weightedPercent = calculateWeightedProgress(stage, done, total);
+                details = `${Math.round(weightedPercent)}% • ${done}/${total} • Elapsed: ${formatDuration(displayElapsed)}`;
+                if (eta && !isDone) {
+                    details += ` • ETA: ${formatDuration(eta)}`;
+                } else if (!isDone && !eta) {
+                    details += ' • ETA: calculating…';
+                }
+            }
+            detailsElem.textContent = details;
+
+            // Update progress bar with stage-aware weighted progress
+            fillElem.className = 'progress-bar-fill';
+            if (isDone) {
+                fillElem.className += ' done';
+                fillElem.style.width = '100%';
+            } else if (isFailed) {
+                fillElem.className += ' failed';
+                fillElem.style.width = '100%';
+            } else if (isDownloading) {
+                fillElem.className += ' indeterminate';
+                fillElem.style.width = '30%';
+            } else {
+                const weightedPercent = calculateWeightedProgress(stage, done, total);
+                fillElem.style.width = Math.round(weightedPercent) + '%';
+            }
+
+            // Handle errors
+            if (progressData.error) {
+                errorElem.textContent = progressData.error;
+                errorElem.style.display = 'block';
+            } else {
+                errorElem.style.display = 'none';
+            }
+
+            // NOTE: Do NOT lock terminal state here!
+            // Terminal locking should only happen when job.status is terminal (done/failed/cancelled)
+            // to ensure we keep polling until backend confirms terminal state.
+            // Locking here would prevent the proper terminal UI from rendering when status changes to "done".
+        }
+
+        function fetchProgressData() {
+            // Step 32.16: Critical guard - if terminal state already locked, don't render stale progress
+            // This prevents in-flight progress fetches from overwriting terminal "Complete" UI
+            // with stale intermediate progress (e.g., transcribe 8/9)
+            if (globalProgressState.terminalLocked) {
+                return;
+            }
+
+            const progressBar = document.getElementById('global-progress-bar');
+            const stageElem = document.getElementById('progress-stage');
+            const detailsElem = document.getElementById('progress-details');
+            const fillElem = document.getElementById('progress-fill');
+            const errorElem = document.getElementById('progress-error');
+
+            fetch('/s/' + globalProgressState.sessionId + '/progress')
+                .then(response => {
+                    if (!response.ok) {
+                        // Progress not found yet - gracefully handle without throwing
+                        globalProgressState.lastProgressPoll = '404';
+                        updateDebugInfo();
+
+                        // Show "Waiting for progress..." state
+                        progressBar.classList.add('active');
+                        stageElem.textContent = 'Starting';
+                        stageElem.className = 'progress-stage';
+                        detailsElem.textContent = 'Waiting for progress…';
+                        fillElem.className = 'progress-bar-fill indeterminate';
+                        fillElem.style.width = '30%';
+                        errorElem.style.display = 'none';
+                        return null;  // Return null to skip .then()
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    if (!data) return;  // Skip if 404
+
+                    // Step 32.16: Double-check terminal lock after fetch completes
+                    // Terminal state may have been set while this fetch was in-flight
+                    if (globalProgressState.terminalLocked) {
+                        return;  // Don't render stale progress over terminal UI
+                    }
+
+                    globalProgressState.lastProgressPoll = `${data.stage || 'processing'} ${data.done || 0}/${data.total || 1}`;
+                    updateDebugInfo();
+
+                    // Use shared renderProgress helper
+                    renderProgress(data);
+
+                    // Keep bar visible for a few seconds on completion
+                    const stage = data.stage || 'processing';
+                    const done = data.done || 0;
+                    const total = data.total || 1;
+                    const isComplete = done >= total && total > 0;
+                    const isDone = stage === 'done' || isComplete;
+                    if (isDone) {
+                        setTimeout(() => {
+                            progressBar.classList.remove('active');
+                        }, 5000);
+                    }
+                })
+                .catch(err => {
+                    // Silently handle errors (already handled in response.ok check)
+                    // No console.error to avoid noise
+                });
+        }
+
+        function startGlobalProgressPolling(jobId, sessionId) {
+            // CRITICAL: Prevent duplicate polling loops
+            if (window.__YANHU_POLL_LOOP) {
+                console.log('Progress polling already running (interval id:', window.__YANHU_POLL_LOOP, ')');
+                return;
+            }
+
+            // Reset start time
+            globalProgressStartTime = Date.now();
+
+            // Update state - session_id should ONLY come from job JSON, not template
+            globalProgressState.jobId = jobId;
+            globalProgressState.sessionId = sessionId;  // May be null initially
+            globalProgressState.lastJobPoll = null;
+            globalProgressState.lastProgressPoll = null;
+
+            // Initialize debug vars
+            window.__YANHU_LAST_JOB = null;
+            window.__YANHU_LAST_SESSION_ID = null;
+
+            console.log('Starting progress polling:', { jobId, sessionId });
+
+            // Initial update
+            updateGlobalProgress();
+
+            // CRITICAL: Store single interval ID to prevent duplicates
+            window.__YANHU_POLL_LOOP = setInterval(() => {
+                updateGlobalProgress();
+            }, 1000);
+        }
+
+        function stopGlobalProgressPolling() {
+            if (window.__YANHU_POLL_LOOP) {
+                clearInterval(window.__YANHU_POLL_LOOP);
+                window.__YANHU_POLL_LOOP = null;
+            }
+            const progressBar = document.getElementById('global-progress-bar');
+            progressBar.classList.remove('active');
         }
     </script>
     {% block scripts %}{% endblock %}
@@ -570,7 +1103,7 @@ SESSION_LIST_TEMPLATE = BASE_TEMPLATE.replace(
     {% if jobs %}
         <ul class="session-list">
         {% for job in jobs %}
-            <li class="session-item">
+            <li class="session-item" data-job-id="{{ job.job_id }}" data-session-id="{{ job.session_id or '' }}" data-status="{{ job.status }}">
                 {% if job.session_id %}
                     <a href="/s/{{ job.session_id }}">{{ job.session_id }}</a>
                 {% elif job.job_id %}
@@ -590,6 +1123,13 @@ SESSION_LIST_TEMPLATE = BASE_TEMPLATE.replace(
                     | <a href="/jobs/{{ job.job_id }}">Details</a>
                     {% endif %}
                 </div>
+                <!-- Inline progress bar for running jobs -->
+                {% if job.status in ['pending', 'processing', 'cancel_requested'] %}
+                <div class="inline-progress-bar" style="margin-top: 8px; height: 4px; background: #e0e0e0; border-radius: 2px; overflow: hidden; display: none;">
+                    <div class="inline-progress-fill" style="height: 100%; background: #3498db; width: 0%; transition: width 0.3s;"></div>
+                </div>
+                <div class="inline-progress-text" style="margin-top: 4px; font-size: 12px; color: #7f8c8d; display: none;"></div>
+                {% endif %}
             </li>
         {% endfor %}
         </ul>
@@ -616,7 +1156,75 @@ SESSION_LIST_TEMPLATE = BASE_TEMPLATE.replace(
     // Initialize on page load
     document.addEventListener('DOMContentLoaded', function() {
         toggleWhisperOptions();
+        updateJobProgressIndicators();
     });
+
+    // Poll for inline progress updates on running jobs
+    function updateJobProgressIndicators() {
+        const runningJobs = document.querySelectorAll('.session-item[data-status="processing"], .session-item[data-status="pending"]');
+
+        runningJobs.forEach(item => {
+            const sessionId = item.getAttribute('data-session-id');
+            if (!sessionId) return; // No session yet, skip
+
+            const progressBar = item.querySelector('.inline-progress-bar');
+            const progressFill = item.querySelector('.inline-progress-fill');
+            const progressText = item.querySelector('.inline-progress-text');
+            if (!progressBar || !progressFill || !progressText) return;
+
+            fetch('/s/' + sessionId + '/progress')
+                .then(response => response.ok ? response.json() : null)
+                .then(data => {
+                    if (!data) return;
+
+                    const stage = data.stage || 'processing';
+                    const done = data.done || 0;
+                    const total = data.total || 1;
+                    const isDownloading = stage === 'download_model';
+                    const isDone = stage === 'done';
+
+                    // Show progress elements
+                    progressBar.style.display = 'block';
+                    progressText.style.display = 'block';
+
+                    // Update progress bar
+                    if (isDownloading) {
+                        progressFill.style.width = '100%';
+                        progressFill.style.background = 'linear-gradient(90deg, #3498db, #5dade2, #3498db)';
+                        progressFill.style.backgroundSize = '200% 100%';
+                        progressFill.style.animation = 'progress-indeterminate 1.5s linear infinite';
+                    } else {
+                        const percent = Math.max(0, Math.min(100, (done / total) * 100));
+                        progressFill.style.width = percent + '%';
+                        progressFill.style.background = isDone ? '#27ae60' : '#3498db';
+                        progressFill.style.animation = 'none';
+                    }
+
+                    // Update text
+                    if (isDownloading) {
+                        progressText.textContent = stage + (data.message ? ': ' + data.message : '');
+                    } else {
+                        progressText.textContent = stage + ': ' + done + '/' + total;
+                    }
+
+                    // Hide on completion
+                    if (isDone) {
+                        setTimeout(() => {
+                            progressBar.style.display = 'none';
+                            progressText.style.display = 'none';
+                        }, 3000);
+                    }
+                })
+                .catch(err => {
+                    // Progress not available yet
+                });
+        });
+    }
+
+    // CRITICAL: Do NOT auto-poll on home page (Step 32.9)
+    // Progress polling should ONLY happen on job detail and session pages
+    // to avoid unnecessary network requests and 404 spam.
+    // setInterval(updateJobProgressIndicators, 2000);
 
     // Drag & drop functionality
     const uploadArea = document.getElementById('upload-area');
@@ -660,8 +1268,18 @@ SESSION_LIST_TEMPLATE = BASE_TEMPLATE.replace(
 SESSION_VIEW_TEMPLATE = BASE_TEMPLATE.replace(
     "{% block content %}{% endblock %}",
     """
-    <div id="progress-container"></div>
     <h2>{{ session_id }}</h2>
+
+    {% if session_incomplete_warning %}
+    <div class="warning-banner" style="background: #f39c12; color: white; padding: 15px; margin: 15px 0; border-radius: 4px;">
+        <strong>⚠️ Session Processing:</strong> {{ session_incomplete_warning }}
+        <div style="margin-top: 10px;">
+            <button onclick="location.reload()" class="btn" style="background: white; color: #f39c12; border: none; padding: 8px 16px; cursor: pointer; border-radius: 4px; font-weight: bold;">
+                Refresh Page
+            </button>
+        </div>
+    </div>
+    {% endif %}
 
     {% if not session_has_vision %}
         {% if not keys_present.get('ANTHROPIC_API_KEY') and not keys_present.get('GEMINI_API_KEY') %}
@@ -988,79 +1606,12 @@ SESSION_VIEW_TEMPLATE = BASE_TEMPLATE.replace(
         }
     }
 
-    let pollInterval = null;
+    // CRITICAL: Don't auto-start polling on session page
+    // Session progress polling should ONLY start from job detail page
+    // which gets session_id from job JSON, not from URL/template inference
 
-    function updateProgress() {
-        fetch('/s/{{ session_id }}/progress')
-            .then(response => response.ok ? response.json() : null)
-            .then(data => {
-                if (!data) {
-                    document.getElementById('progress-container').innerHTML = '';
-                    if (pollInterval) {
-                        clearInterval(pollInterval);
-                        pollInterval = null;
-                    }
-                    return;
-                }
-
-                const isDone = data.stage === 'done';
-                const isDownloading = data.stage === 'download_model';
-                const barClass = isDone ? 'progress-bar done' : 'progress-bar';
-                const eta = data.eta_sec ? `, ETA ${formatDuration(data.eta_sec)}` : '';
-                const coverage = data.coverage
-                    ? `<br><strong>Partial:</strong> ` +
-                      `${data.coverage.processed}/${data.coverage.total} segments transcribed`
-                    : '';
-
-                // Display message prominently if present (especially for download_model)
-                const messageHtml = data.message
-                    ? `<div style="margin-top: 8px; font-size: 14px; color: #555;">${data.message}</div>`
-                    : '';
-
-                // For download_model, don't show segment progress (not applicable)
-                const progressDetails = isDownloading
-                    ? `<strong>Elapsed:</strong> ${formatDuration(data.elapsed_sec)}`
-                    : `<strong>Progress:</strong> ${data.done}/${data.total} segments
-                       &nbsp;|&nbsp;
-                       <strong>Elapsed:</strong> ${formatDuration(data.elapsed_sec)}${eta}`;
-
-                document.getElementById('progress-container').innerHTML = `
-                    <div class="${barClass}">
-                        <div class="progress-info">
-                            <strong>Stage:</strong> ${data.stage}
-                            &nbsp;|&nbsp;
-                            ${progressDetails}
-                            ${coverage}
-                            ${messageHtml}
-                        </div>
-                    </div>
-                `;
-
-                if (isDone && pollInterval) {
-                    clearInterval(pollInterval);
-                    pollInterval = null;
-                }
-            })
-            .catch(err => console.error('Progress fetch error:', err));
-    }
-
-    function formatDuration(seconds) {
-        if (seconds < 60) return `${Math.round(seconds)}s`;
-        if (seconds < 3600) {
-            const mins = Math.floor(seconds / 60);
-            const secs = Math.round(seconds % 60);
-            return `${mins}m ${secs}s`;
-        }
-        const hours = Math.floor(seconds / 3600);
-        const mins = Math.floor((seconds % 3600) / 60);
-        return `${hours}h ${mins}m`;
-    }
-
-    // Initial fetch
-    updateProgress();
-
-    // Poll every second if not done
-    pollInterval = setInterval(updateProgress, 1000);
+    // Enable debug panel (comment out to hide)
+    // document.getElementById('progress-debug').style.display = 'block';
     </script>
     """,
 )
@@ -1068,11 +1619,14 @@ SESSION_VIEW_TEMPLATE = BASE_TEMPLATE.replace(
 JOB_DETAIL_TEMPLATE = BASE_TEMPLATE.replace(
     "{% block content %}{% endblock %}",
     """
-    <div id="progress-container"></div>
     <h2>Job: {{ job.job_id }}</h2>
 
     <div class="session-meta">
-        <strong>Status:</strong> <span class="status-{{ job.status }}">{{ job.status }}</span>
+        <strong>Status:</strong> <span id="job-status-text" class="status-pill status-{{ job.status }}">{{ job.status }}</span>
+    </div>
+
+    <div id="job-session-link-container" class="session-meta" {% if not job.session_id %}style="display: none;"{% endif %}>
+        <strong>Session:</strong> <a id="job-session-link" href="{{ '/s/' + job.session_id if job.session_id else '#' }}">{{ job.session_id or '' }}</a>
     </div>
 
     {% if job.status == 'failed' and job.error %}
@@ -1249,137 +1803,104 @@ JOB_DETAIL_TEMPLATE = BASE_TEMPLATE.replace(
     "{% block scripts %}{% endblock %}",
     """
     <script>
-    let pollInterval = null;
-    let rateEma = null;  // For EMA smoothing
+    // Step 32.19: Unified status payload renderer
+    let jobPageTerminalLocked = false;
 
-    function updateJobStatus() {
-        fetch('/api/jobs/{{ job.job_id }}')
-            .then(response => response.ok ? response.json() : null)
-            .then(data => {
-                if (!data) {
-                    return;
-                }
+    /**
+     * Step 32.19: Render status payload to DOM
+     * Updates job status, session link, and progress bar together
+     * @param {Object} payload - Unified status payload from /api/jobs/<id>/status
+     */
+    function renderStatusPayload(payload) {
+        if (!payload) return;
 
-                // Update status display
-                const statusElem = document.querySelector('.status-{{ job.status }}');
-                if (statusElem && data.status !== '{{ job.status }}') {
-                    // Reload page if status changed
-                    window.location.reload();
-                }
-
-                // If processing and has session_id, try to fetch progress
-                if (data.status === 'processing' && data.session_id) {
-                    updateProgress(data.session_id);
-                }
-
-                // Stop polling if job is done
-                if (data.status in ['done', 'failed', 'cancelled']) {
-                    if (pollInterval) {
-                        clearInterval(pollInterval);
-                        pollInterval = null;
-                    }
-                }
-            })
-            .catch(err => console.error('Job status fetch error:', err));
-    }
-
-    function updateProgress(sessionId) {
-        fetch('/s/' + sessionId + '/progress')
-            .then(response => response.ok ? response.json() : null)
-            .then(data => {
-                if (!data) {
-                    document.getElementById('progress-container').innerHTML = '';
-                    return;
-                }
-
-                const isDone = data.stage === 'done';
-                const isDownloading = data.stage === 'download_model';
-                const barClass = isDone ? 'progress-bar done' : 'progress-bar';
-
-                // Compute calibrated ETA if we have progress (not for download_model)
-                let calibratedInfo = '';
-                if (!isDownloading && data.done >= 1 && data.elapsed_sec > 0 && !isDone) {
-                    const currentRate = data.done / data.elapsed_sec;
-
-                    // Apply EMA smoothing (alpha = 0.2)
-                    if (rateEma === null) {
-                        rateEma = currentRate;
-                    } else {
-                        rateEma = 0.2 * currentRate + 0.8 * rateEma;
-                    }
-
-                    // Compute calibrated ETA
-                    const remaining = data.total - data.done;
-                    const etaCalibrated = remaining / rateEma;
-
-                    // Estimate finish time
-                    const finishTime = new Date(Date.now() + etaCalibrated * 1000);
-                    const finishTimeStr = finishTime.toLocaleTimeString(
-                        [], {hour: '2-digit', minute: '2-digit'}
-                    );
-
-                    calibratedInfo = `
-                        <br><strong>Observed rate:</strong> ${rateEma.toFixed(3)} seg/s
-                        &nbsp;|&nbsp;
-                        <strong>Calibrated ETA:</strong> ~${formatDuration(etaCalibrated)}
-                        &nbsp;|&nbsp;
-                        <strong>Est. finish:</strong> ${finishTimeStr}
-                    `;
-                }
-
-                const eta = data.eta_sec ? `, ETA ${formatDuration(data.eta_sec)}` : '';
-                const coverage = data.coverage
-                    ? `<br><strong>Partial:</strong> ` +
-                      `${data.coverage.processed}/${data.coverage.total} segments transcribed`
-                    : '';
-
-                // Display message prominently if present (especially for download_model)
-                const messageHtml = data.message
-                    ? `<div style="margin-top: 8px; font-size: 14px; color: #555;">${data.message}</div>`
-                    : '';
-
-                // For download_model, don't show segment progress (not applicable)
-                const progressDetails = isDownloading
-                    ? `<strong>Elapsed:</strong> ${formatDuration(data.elapsed_sec)}`
-                    : `<strong>Progress:</strong> ${data.done}/${data.total} segments
-                       &nbsp;|&nbsp;
-                       <strong>Elapsed:</strong> ${formatDuration(data.elapsed_sec)}${eta}`;
-
-                document.getElementById('progress-container').innerHTML = `
-                    <div class="${barClass}">
-                        <div class="progress-info">
-                            <strong>Stage:</strong> ${data.stage}
-                            &nbsp;|&nbsp;
-                            ${progressDetails}
-                            ${coverage}
-                            ${calibratedInfo}
-                            ${messageHtml}
-                        </div>
-                    </div>
-                `;
-            })
-            .catch(err => console.error('Progress fetch error:', err));
-    }
-
-    function formatDuration(seconds) {
-        if (seconds < 60) return `${Math.round(seconds)}s`;
-        if (seconds < 3600) {
-            const mins = Math.floor(seconds / 60);
-            const secs = Math.round(seconds % 60);
-            return `${mins}m ${secs}s`;
+        // 1) Update #job-status-text
+        const statusText = document.getElementById('job-status-text');
+        if (statusText) {
+            statusText.textContent = payload.status;
+            statusText.className = 'status-pill status-' + payload.status;
         }
-        const hours = Math.floor(seconds / 3600);
-        const mins = Math.floor((seconds % 3600) / 60);
-        return `${hours}h ${mins}m`;
+
+        // 2) Update #job-session-link
+        const sessionLinkContainer = document.getElementById('job-session-link-container');
+        const sessionLink = document.getElementById('job-session-link');
+        if (payload.session_id) {
+            // Show session link
+            if (sessionLinkContainer) {
+                sessionLinkContainer.style.display = 'block';
+            }
+            if (sessionLink) {
+                sessionLink.href = '/s/' + payload.session_id;
+                sessionLink.textContent = payload.session_id;
+            }
+        } else {
+            // Clear/hide session link
+            if (sessionLinkContainer) {
+                sessionLinkContainer.style.display = 'none';
+            }
+        }
+
+        // 3) Update progress bar UI from payload.progress
+        if (payload.progress) {
+            const progress = payload.progress;
+            // Progress bar updates are handled by renderProgress() in global scope
+            // which is called from updateGlobalProgress
+        }
     }
 
-    // Initial status check
-    updateJobStatus();
+    // Step 32.20: No need to wrap updateGlobalProgress
+    // renderStatusPayload(data) is now called directly from the fetch promise chain
+    // with fresh data, not from stale window.__YANHU_LAST_JOB cache
 
-    // Poll every 2 seconds if not done
-    {% if job.status in ['pending', 'processing', 'cancel_requested'] %}
-    pollInterval = setInterval(updateJobStatus, 2000);
+    // Initialize progress stage for terminal jobs (done/failed/cancelled)
+    {% if job.status in ['done', 'failed', 'cancelled'] %}
+    (function() {
+        const stageElem = document.getElementById('progress-stage');
+        const detailsElem = document.getElementById('progress-details');
+        const fillElem = document.getElementById('progress-fill');
+        const progressBar = document.getElementById('global-progress-bar');
+
+        {% if job.status == 'done' %}
+        if (stageElem) stageElem.textContent = 'Complete';
+        if (detailsElem) detailsElem.textContent = 'Processing complete';
+        if (fillElem) {
+            fillElem.style.width = '100%';
+            fillElem.className = 'progress-bar-fill done';
+        }
+        {% elif job.status == 'failed' %}
+        if (stageElem) stageElem.textContent = 'Failed';
+        if (detailsElem) detailsElem.textContent = 'Processing failed';
+        if (fillElem) {
+            fillElem.style.width = '100%';
+            fillElem.className = 'progress-bar-fill failed';
+        }
+        {% elif job.status == 'cancelled' %}
+        if (stageElem) stageElem.textContent = 'Cancelled';
+        if (detailsElem) detailsElem.textContent = 'Processing cancelled';
+        if (fillElem) {
+            fillElem.style.width = '100%';
+            fillElem.className = 'progress-bar-fill failed';
+        }
+        {% endif %}
+
+        // Show progress bar briefly for terminal states
+        if (progressBar) {
+            progressBar.classList.add('active');
+            setTimeout(() => progressBar.classList.remove('active'), 5000);
+        }
+    })();
     {% endif %}
+
+    // Start progress polling for this job
+    {% if job.status in ['pending', 'processing', 'cancel_requested'] %}
+    startGlobalProgressPolling(
+        '{{ job.job_id }}',
+        {% if job.session_id %}'{{ job.session_id }}'{% else %}null{% endif %}
+    );
+    {% endif %}
+
+    // Enable debug panel (comment out to hide)
+    // document.getElementById('progress-debug').style.display = 'block';
     </script>
     """,
 )
@@ -1641,6 +2162,35 @@ def create_app(
             "keys_present": keys_present,
         }
 
+    def _find_job_by_session_id(session_id: str):
+        """Find job by session_id (Step 32.17: for progress reconciliation).
+
+        Scans jobs directory for a job with matching session_id.
+        Returns None if not found or if jobs_dir not configured.
+
+        Args:
+            session_id: Session ID to search for
+
+        Returns:
+            QueueJob if found, None otherwise
+        """
+        if "jobs_dir" not in app.config:
+            return None
+
+        from yanhu.watcher import load_job_from_file
+
+        jobs_dir = Path(app.config["jobs_dir"])
+        if not jobs_dir.exists():
+            return None
+
+        # Scan all job files (should be small - only active/recent jobs)
+        for job_file in jobs_dir.glob("*.json"):
+            job = load_job_from_file(job_file)
+            if job and job.session_id == session_id:
+                return job
+
+        return None
+
     def detect_session_has_vision(session_dir: Path) -> bool:
         """Detect if session has vision/OCR analysis results.
 
@@ -1777,24 +2327,46 @@ def create_app(
         timeline_md = session_dir / "timeline.md"
         manifest_file = session_dir / "manifest.json"
 
-        if not all(f.exists() for f in [overview_md, highlights_md, timeline_md]):
-            return (
-                "<div class='error'>Session incomplete: missing required output files</div>",
-                404,
+        # Step 32.14: Gracefully handle missing files for early-open UX
+        missing_files = []
+        if not overview_md.exists():
+            missing_files.append("overview.md")
+        if not highlights_md.exists():
+            missing_files.append("highlights.md")
+        if not timeline_md.exists():
+            missing_files.append("timeline.md")
+
+        # Show warning banner if files are missing
+        session_incomplete_warning = None
+        if missing_files:
+            session_incomplete_warning = (
+                "Session is still being finalized (writing outputs). "
+                f"Missing: {', '.join(missing_files)}. Refresh in a moment."
             )
 
-        # Render markdown to HTML
+        # Render markdown to HTML (use placeholders for missing files)
         import markdown
 
-        overview_html = markdown.markdown(
-            overview_md.read_text(encoding="utf-8"), extensions=["tables", "fenced_code"]
-        )
-        highlights_html = markdown.markdown(
-            highlights_md.read_text(encoding="utf-8"), extensions=["tables", "fenced_code"]
-        )
-        timeline_html = markdown.markdown(
-            timeline_md.read_text(encoding="utf-8"), extensions=["tables", "fenced_code"]
-        )
+        if overview_md.exists():
+            overview_html = markdown.markdown(
+                overview_md.read_text(encoding="utf-8"), extensions=["tables", "fenced_code"]
+            )
+        else:
+            overview_html = "<p><em>Overview is being generated...</em></p>"
+
+        if highlights_md.exists():
+            highlights_html = markdown.markdown(
+                highlights_md.read_text(encoding="utf-8"), extensions=["tables", "fenced_code"]
+            )
+        else:
+            highlights_html = "<p><em>Highlights are being generated...</em></p>"
+
+        if timeline_md.exists():
+            timeline_html = markdown.markdown(
+                timeline_md.read_text(encoding="utf-8"), extensions=["tables", "fenced_code"]
+            )
+        else:
+            timeline_html = "<p><em>Timeline is being generated...</em></p>"
 
         # Load manifest
         manifest_json = ""
@@ -1830,22 +2402,99 @@ def create_app(
             mode_label=mode_status["mode_label"],
             mode_detail=mode_status["mode_detail"],
             keys_present=mode_status["keys_present"],
+            session_incomplete_warning=session_incomplete_warning,
         )
 
     @app.route("/s/<session_id>/progress")
     def session_progress(session_id: str):
-        """Get progress.json for a session."""
-        progress_file = Path(app.config["sessions_dir"]) / session_id / "outputs" / "progress.json"
+        """Get progress.json for a session with server-side reconciliation.
 
-        if not progress_file.exists():
-            return jsonify({"error": "Progress not found"}), 404
+        Step 32.17: Makes this endpoint authoritative by reconciling progress.json
+        with job status and outputs. Prevents UI from getting stuck at 8/9 when
+        job outputs show 9/9 (transcribe complete).
 
-        try:
-            with open(progress_file, encoding="utf-8") as f:
-                data = json.load(f)
-            return jsonify(data)
-        except (json.JSONDecodeError, OSError) as e:
-            return jsonify({"error": f"Failed to load progress: {e}"}), 500
+        Returns 200 with starting payload when progress.json doesn't exist yet
+        (instead of 404) to avoid noisy errors during job startup.
+        """
+        sessions_dir = Path(app.config["sessions_dir"])
+        session_dir = sessions_dir / session_id
+        progress_file = session_dir / "outputs" / "progress.json"
+
+        # Verify session exists (404 only for invalid session_id)
+        if not session_dir.exists():
+            return jsonify({"error": "Session not found"}), 404
+
+        # Step 32.17: Find associated job for reconciliation
+        job = _find_job_by_session_id(session_id)
+
+        # If job.status is terminal, return terminal payload (override progress.json)
+        if job and job.status == "done":
+            return jsonify({
+                "session_id": session_id,
+                "stage": "done",
+                "done": 1,
+                "total": 1,
+                "percent": 100,
+                "elapsed_sec": 0,
+                "eta_sec": 0,
+                "message": "Processing complete",
+            })
+
+        # Load progress.json if exists
+        progress_data = None
+        if progress_file.exists():
+            try:
+                with open(progress_file, encoding="utf-8") as f:
+                    progress_data = json.load(f)
+            except (json.JSONDecodeError, OSError) as e:
+                return jsonify({"error": f"Failed to load progress: {e}"}), 500
+
+        # Step 32.17: Reconcile with job outputs
+        # If job shows transcribe complete but progress.json is stale, reconcile
+        if job and job.outputs:
+            transcribe_processed = job.outputs.get("transcribe_processed")
+            transcribe_total = job.outputs.get("transcribe_total")
+
+            # If transcribe is complete (processed == total) and total > 0
+            if (
+                transcribe_processed is not None
+                and transcribe_total is not None
+                and transcribe_total > 0
+                and transcribe_processed >= transcribe_total
+            ):
+                # If progress.json is stale (done < total), reconcile
+                if progress_data:
+                    stage = progress_data.get("stage", "")
+                    done = progress_data.get("done", 0)
+                    total = progress_data.get("total", 1)
+
+                    # If stage is transcribe and done < total, override with reconciled payload
+                    if stage == "transcribe" and done < total:
+                        return jsonify({
+                            "session_id": session_id,
+                            "stage": "transcribe",
+                            "done": total,  # Force done == total (9/9)
+                            "total": total,
+                            "percent": 100,
+                            "elapsed_sec": progress_data.get("elapsed_sec", 0),
+                            "eta_sec": 0,  # Complete
+                            "message": "Transcription complete",
+                        })
+
+        # Return progress.json as-is if loaded
+        if progress_data:
+            return jsonify(progress_data)
+
+        # If progress.json doesn't exist yet, return starting payload (200, not 404)
+        return jsonify({
+            "session_id": session_id,
+            "stage": "starting",
+            "done": 0,
+            "total": 0,
+            "elapsed_sec": 0,
+            "eta_sec": None,
+            "message": "Waiting for progress...",
+        })
 
     @app.route("/s/<session_id>/manifest")
     def session_manifest(session_id: str):
@@ -2244,6 +2893,213 @@ def create_app(
             return jsonify({"error": f"Job not found: {job_id}"}), 404
 
         return jsonify(job.to_dict())
+
+    @app.route("/api/jobs/<job_id>/status", methods=["GET"])
+    def get_job_status_unified(job_id: str):
+        """Get unified job status with reconciled progress (Step 32.17: single source of truth).
+
+        This endpoint merges job metadata and progress data into a single response
+        to eliminate race conditions caused by polling /api/jobs/<job_id> and
+        /s/<sid>/progress separately.
+
+        Returns:
+            {
+                "job_id": "...",
+                "status": "pending|processing|done|failed|cancelled",
+                "session_id": "...",
+                "created_at": "...",
+                "raw_path": "...",
+                "error": null,
+                "progress": {
+                    "stage": "transcribe",
+                    "done": 9,
+                    "total": 9,
+                    "elapsed_sec": 120,
+                    "eta_sec": 0,
+                    "message": "Transcription complete",
+                    "percent": 100
+                }
+            }
+        """
+        if not app.config["jobs_dir"]:
+            return jsonify({"error": "Jobs not configured"}), 404
+
+        from yanhu.watcher import get_job_by_id
+
+        job = get_job_by_id(job_id, Path(app.config["jobs_dir"]))
+        if not job:
+            return jsonify({"error": f"Job not found: {job_id}"}), 404
+
+        # Build base response with job metadata
+        response = {
+            "job_id": job.job_id,
+            "status": job.status,
+            "session_id": job.session_id,
+            "created_at": job.created_at,
+            "raw_path": job.raw_path,
+            "error": job.error,
+        }
+
+        # Add progress data if available
+        progress_data = None
+
+        # Terminal job status: return terminal progress payload
+        if job.status == "done":
+            # Preserve actual transcription progress (9/9) instead of hardcoded 1/1
+            # Load from job.outputs or progress.json to get the real done/total
+            done = 1
+            total = 1
+
+            # Try to get actual progress from job.outputs
+            if job.outputs:
+                transcribe_processed = job.outputs.get("transcribe_processed")
+                transcribe_total = job.outputs.get("transcribe_total")
+                if transcribe_processed is not None and transcribe_total is not None and transcribe_total > 0:
+                    done = transcribe_total  # Show completed total (9/9, not 8/9)
+                    total = transcribe_total
+
+            # Fallback: try to load from progress.json
+            if done == 1 and total == 1 and job.session_id:
+                sessions_dir = Path(app.config["sessions_dir"])
+                session_dir = sessions_dir / job.session_id
+                progress_file = session_dir / "outputs" / "progress.json"
+                if progress_file.exists():
+                    try:
+                        with open(progress_file, encoding="utf-8") as f:
+                            file_progress = json.load(f)
+                        if "total" in file_progress and file_progress["total"] > 0:
+                            total = file_progress["total"]
+                            done = total  # Force done == total for terminal state
+                    except (json.JSONDecodeError, OSError):
+                        pass
+
+            progress_data = {
+                "stage": "done",
+                "done": done,
+                "total": total,
+                "percent": 100,
+                "elapsed_sec": 0,
+                "eta_sec": 0,
+                "message": "Processing complete",
+            }
+        elif job.status == "failed":
+            progress_data = {
+                "stage": "failed",
+                "done": 0,
+                "total": 1,
+                "percent": 0,
+                "elapsed_sec": 0,
+                "eta_sec": 0,
+                "message": job.error or "Processing failed",
+            }
+        elif job.status == "cancelled":
+            progress_data = {
+                "stage": "cancelled",
+                "done": 0,
+                "total": 1,
+                "percent": 0,
+                "elapsed_sec": 0,
+                "eta_sec": 0,
+                "message": "Processing cancelled",
+            }
+        elif job.status == "pending":
+            # Job is queued, waiting for worker
+            progress_data = {
+                "stage": "pending",
+                "done": 0,
+                "total": 0,
+                "percent": 0,
+                "elapsed_sec": 0,
+                "eta_sec": None,
+                "message": "Waiting for worker",
+            }
+        elif job.status == "processing":
+            # Load and reconcile progress.json
+            if job.session_id:
+                sessions_dir = Path(app.config["sessions_dir"])
+                session_dir = sessions_dir / job.session_id
+                progress_file = session_dir / "outputs" / "progress.json"
+
+                # Try to load progress.json
+                if progress_file.exists():
+                    try:
+                        with open(progress_file, encoding="utf-8") as f:
+                            file_progress = json.load(f)
+
+                        # Apply reconciliation logic
+                        # If job.outputs shows transcribe complete, reconcile stale progress
+                        if job.outputs:
+                            transcribe_processed = job.outputs.get("transcribe_processed")
+                            transcribe_total = job.outputs.get("transcribe_total")
+
+                            if (
+                                transcribe_processed is not None
+                                and transcribe_total is not None
+                                and transcribe_total > 0
+                                and transcribe_processed >= transcribe_total
+                            ):
+                                # Transcribe is complete
+                                stage = file_progress.get("stage", "")
+                                done = file_progress.get("done", 0)
+                                total = file_progress.get("total", 1)
+
+                                # If progress.json is stale (done < total), reconcile
+                                if stage == "transcribe" and done < total:
+                                    progress_data = {
+                                        "stage": "transcribe",
+                                        "done": total,  # Force done == total (9/9)
+                                        "total": total,
+                                        "percent": 100,
+                                        "elapsed_sec": file_progress.get("elapsed_sec", 0),
+                                        "eta_sec": 0,
+                                        "message": "Transcription complete",
+                                    }
+                                else:
+                                    # Progress is not stale, return as-is
+                                    progress_data = file_progress
+                            else:
+                                # No reconciliation needed, return as-is
+                                progress_data = file_progress
+                        else:
+                            # No job.outputs yet, return progress.json as-is
+                            progress_data = file_progress
+
+                    except (json.JSONDecodeError, OSError):
+                        # Failed to load progress.json, return starting state
+                        progress_data = {
+                            "stage": "starting",
+                            "done": 0,
+                            "total": 0,
+                            "percent": 0,
+                            "elapsed_sec": 0,
+                            "eta_sec": None,
+                            "message": "Waiting for progress...",
+                        }
+                else:
+                    # progress.json doesn't exist yet
+                    progress_data = {
+                        "stage": "starting",
+                        "done": 0,
+                        "total": 0,
+                        "percent": 0,
+                        "elapsed_sec": 0,
+                        "eta_sec": None,
+                        "message": "Waiting for progress...",
+                    }
+            else:
+                # No session_id yet (job just started)
+                progress_data = {
+                    "stage": "starting",
+                    "done": 0,
+                    "total": 0,
+                    "percent": 0,
+                    "elapsed_sec": 0,
+                    "eta_sec": None,
+                    "message": "Waiting for session...",
+                }
+
+        response["progress"] = progress_data
+        return jsonify(response)
 
     @app.route("/api/jobs/<job_id>/cancel", methods=["POST"])
     def cancel_job_route(job_id: str):
@@ -2698,9 +3554,17 @@ class BackgroundWorker:
                 if job.status == "cancelled":
                     continue
 
-                # Update status to processing
+                # Update status to processing with started_at timestamp
+                from datetime import datetime, timezone
+
                 self.current_job_id = job.job_id
-                update_job_by_id(job.job_id, self.jobs_dir, status="processing")
+                started_at = datetime.now(timezone.utc).isoformat()
+                update_job_by_id(
+                    job.job_id,
+                    self.jobs_dir,
+                    status="processing",
+                    started_at=started_at,
+                )
 
                 # Extract transcribe options from job if present
                 transcribe_limit = None
@@ -2739,13 +3603,14 @@ class BackgroundWorker:
                     self.current_job_id = None
                     continue
 
-                # Process job
+                # Process job (pass jobs_dir so session_id can be written early)
                 result = process_job(
                     job,
                     self.output_dir,
                     force=False,
                     source_mode="link",
                     run_config=run_config,
+                    jobs_dir=self.jobs_dir,
                 )
 
                 # Check for cancellation after processing

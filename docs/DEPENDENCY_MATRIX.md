@@ -97,6 +97,44 @@ import yanhu.asr_registry
 
 ---
 
+### Dev/Test Profile (E2E Tests)
+
+**Description**: End-to-end browser tests for UI/progress verification using Playwright.
+
+**Python Packages**:
+- `playwright >= 1.40` - Browser automation framework
+- `pytest >= 7.0` - Test framework (already in dev dependencies)
+
+**System Dependencies**:
+- Playwright browsers (Chromium) - **one-time setup required**:
+  ```bash
+  python -m playwright install --with-deps chromium
+  ```
+
+**Runtime Selfcheck**: Not applicable (E2E tests have their own verification via `pytest -m e2e`)
+
+**When to run**:
+- Changes to `src/yanhu/app.py` (Flask routes, templates, JS)
+- Changes to progress polling logic in `src/yanhu/watcher.py`
+- Changes to any Jinja2 templates
+- User requests E2E tests or mentions UI/progress changes
+
+**Test Command**:
+```bash
+pytest -m e2e -v
+```
+
+**What E2E tests cover**:
+- Progress polling behavior (when to poll, when to stop)
+- Job state machine (pending → processing → done)
+- Terminal lock enforcement (UI never regresses after done)
+- Session link visibility
+- Console error prevention (no 404 spam)
+
+See `tests/e2e/README.md` and `E2E_SETUP.md` for detailed documentation.
+
+---
+
 ### Desktop Profile (Packaged App)
 
 **Description**: PyInstaller packaging for standalone macOS/Windows apps.
