@@ -2792,7 +2792,7 @@ def create_app(
         # Calculate estimates (with metrics if available)
         metrics_file = Path(app.config["sessions_dir"]).parent / "_metrics.json"
         estimated_segments, estimated_runtime_sec = calculate_job_estimates(
-            media_info, segment_strategy="auto", preset=job_preset, metrics_file=metrics_file
+            media_info, segment_strategy="short", preset=job_preset, metrics_file=metrics_file
         )
         job.estimated_segments = estimated_segments
         job.estimated_runtime_sec = estimated_runtime_sec
@@ -3255,7 +3255,7 @@ def create_app(
         # Calculate estimates (with metrics if available)
         metrics_file = Path(app.config["sessions_dir"]).parent / "_metrics.json"
         estimated_segments, estimated_runtime_sec = calculate_job_estimates(
-            media_info, segment_strategy="auto", preset=job_preset, metrics_file=metrics_file
+            media_info, segment_strategy="short", preset=job_preset, metrics_file=metrics_file
         )
         job.estimated_segments = estimated_segments
         job.estimated_runtime_sec = estimated_runtime_sec

@@ -200,7 +200,12 @@ def extract(session: str, output_dir: str, frames_per_segment: int):
 @main.command()
 @click.option("--session", "-s", required=True, help="Session ID")
 @click.option("--output-dir", "-o", default="sessions", help="Output directory")
-@click.option("--backend", "-b", default="mock", type=click.Choice(["mock", "claude"]))
+@click.option(
+    "--backend",
+    "-b",
+    default="mock",
+    type=click.Choice(["mock", "open_ocr", "claude"]),
+)
 @click.option("--max-frames", "-n", default=3, help="Max frames per segment (default: 3)")
 @click.option("--max-facts", default=3, help="Max facts per segment (default: 3)")
 @click.option(
@@ -969,8 +974,8 @@ def watch(
 @click.option(
     "--segment-strategy",
     type=click.Choice(["auto", "short", "medium", "long"], case_sensitive=False),
-    default="auto",
-    help="Segment duration strategy: auto (adaptive), short (5s), medium (15s), long (30s)",
+    default="short",
+    help="Segment duration strategy: short (5s, default), auto (adaptive), medium (15s), long (30s)",
 )
 def run_queue_cmd(
     queue_dir: str,
