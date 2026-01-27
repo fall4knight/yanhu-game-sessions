@@ -809,4 +809,40 @@ No pipeline rewrite, no native GUI redesign—focus on **one-click launch** for 
 
 ---
 
+## Improvement Roadmap (ASR + OCR Hardening)
+
+> 执行顺序：P1 先修，P2 视情况。每个 item 单独 commit，先 test 再合。
+
+### Phase A: P1 Critical Fixes (ASR)
+
+| 序号 | 改动 | 涉及文件 | 验收标准 |
+|------|------|----------|----------|
+| A1 | `_load_model` ImportError 静默问题：catch 后 log/记录原始异常 | `transcriber.py:412-413, 421-422` | 单测：mock 一个非 ImportError，确认 asr_error 有诊断信息 |
+| A2 | `on_progress` callback 签名修正：删除永远为 None 的 result 参数或传入真值 | `transcriber.py:765, 898, 905` | 类型检查通过；所有调用点更新 |
+| A3 | `max_seconds` 检查逻辑修正：`seg.start` → `seg.end` 或累计 duration | `transcriber.py:534, 557` | 单测：给 max_seconds=5，确认 end_time>5 的段被跳过 |
+| A4 | `requires_deps` 字段清理：删除或实现 `check_deps()` | `asr_registry.py:15, 30` | 若删除：字段移除；若实现：单测验证缺依赖时返回 False |
+
+### Phase B: P1 Critical Fixes (OCR，已列入 PROJECT_UPDATE)
+
+| 序号 | 改动 | 涉及文件 | 验收标准 |
+|------|------|----------|----------|
+| B1 | `except Exception` → `except ImportError` 或 log 原始类型 | `open_ocr.py:36` | 单测：mock 一个非 ImportError，确认 log 输出 |
+| B2 | t_rel 使用 extractor 真实帧时间戳（如有） | `analyzer.py:467-474` | 若 extractor 改出帧时间戳，analyzer 直接使用 |
+| B3 | ClaudeAnalyzer 异常分类 | `analyzer.py:678-685` | error 字段区分 network/timeout/parse |
+
+### Phase C: P2 Code Hygiene (ASR + OCR)
+
+| 序号 | 改动 | 涉及文件 | 验收标准 |
+|------|------|----------|----------|
+| C1 | 删除 MockAsrBackend 未用 session_id 参数 | `transcriber.py:127` | 函数签名简化 |
+| C2 | `model_sizes` dict 提取为模块常量 | `transcriber.py:348-354` | `WHISPER_MODEL_SIZES` 顶层定义 |
+| C3 | `_ensure_monotonic` 0.1s 硬编码 → 常量 | `transcriber.py:591` | `MIN_ASR_GAP = 0.1` 顶层 |
+| C4 | ffmpeg stderr 截断 200 → 500 | `transcriber.py:321` | 改为 500 或不截断 |
+| C5 | `DEFAULT_ASR_MODELS` 可通过 config/env 覆盖 | `asr_registry.py:35` | 读 env `YANHU_ASR_MODELS` 或 config.yaml |
+| C6 | 删除 OCR dead code (normalization patterns) | `analyzer.py:18-21` | 删除或迁移到 config |
+| C7 | `ocr_text` 12 条硬编码 → 参数 | `analyzer.py:496-497` | `max_ocr_lines` 参数 |
+| C8 | `open_ocr.py` 添加图片格式校验 | `open_ocr.py` | 非 jpg/png 时 raise 明确错误 |
+
+---
+
 > **Note**: Milestones 0-6 are required for MVP v0.1. Milestone 7 (watcher) can be deferred to v0.2. Each milestone is independently testable and delivers incremental value.
