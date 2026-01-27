@@ -1272,24 +1272,17 @@ class TestWhisperModelLoadFailures:
             assert "RuntimeError" in error
             assert "CUDA out of memory" in error
 
-    def test_import_error_recorded_as_not_installed(self, tmp_path):
-        """Should record ImportError as 'not installed'."""
-        # Both packages missing - import will fail
-        with patch.dict("sys.modules", {"faster_whisper": None, "whisper": None}):
-            # Force ImportError by removing from sys.modules
-            import sys
-            if "faster_whisper" in sys.modules:
-                del sys.modules["faster_whisper"]
-            if "whisper" in sys.modules:
-                del sys.modules["whisper"]
+    def test_import_error_returns_packaging_message(self, tmp_path):
+        """If both backends are missing, return user-friendly packaging guidance."""
+        backend = WhisperLocalBackend(model_size="base")
+        # Force ImportError for both backends
+        with patch("builtins.__import__", side_effect=ImportError("No module")):
+            error = backend._load_model()
 
-            backend = WhisperLocalBackend(model_size="base")
-            # Need to ensure import actually fails
-            with patch("builtins.__import__", side_effect=ImportError("No module")):
-                error = backend._load_model()
-
-            assert error is not None
-            assert "not installed" in error
+        assert error is not None
+        assert "ASR dependency missing" in error
+        assert "desktop builds" in error
+        assert "official website" in error
 
     def test_both_backends_fail_with_different_errors(self, tmp_path):
         """Should collect errors from both backends."""
