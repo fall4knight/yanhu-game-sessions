@@ -364,6 +364,9 @@ class WhisperLocalBackend:
             )
 
         # Try faster-whisper first, fall back to openai-whisper
+        # Collect errors from each backend attempt for diagnostics
+        load_errors: list[str] = []
+
         try:
             from faster_whisper import WhisperModel
 
@@ -410,7 +413,10 @@ class WhisperLocalBackend:
             self._backend_type = "faster_whisper"
             return None
         except ImportError:
-            pass
+            load_errors.append("faster-whisper: not installed")
+        except Exception as e:
+            # Capture initialization errors (CUDA, DLL, model download, etc.)
+            load_errors.append(f"faster-whisper: {type(e).__name__}: {e}")
 
         try:
             import whisper
@@ -419,15 +425,14 @@ class WhisperLocalBackend:
             self._backend_type = "openai_whisper"
             return None
         except ImportError:
-            pass
+            load_errors.append("openai-whisper: not installed")
+        except Exception as e:
+            # Capture initialization errors
+            load_errors.append(f"openai-whisper: {type(e).__name__}: {e}")
 
-        # If we get here, ASR dependencies are missing
-        # In packaged desktop apps, this should NEVER happen (packaging bug)
-        return (
-            "ASR dependency missing: neither faster-whisper nor openai-whisper found. "
-            "This is a packaging error in desktop builds. "
-            "Download the latest release from the official website."
-        )
+        # If we get here, both backends failed
+        # Return detailed error message with all collected errors
+        return f"ASR model load failed: {'; '.join(load_errors)}"
 
     def _get_asr_config(self) -> AsrConfig:
         """Create AsrConfig from current settings."""
