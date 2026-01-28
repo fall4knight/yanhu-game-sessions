@@ -1075,20 +1075,30 @@ def aggregate_asr_errors(session_dir: Path, asr_models: list[str] | None) -> Asr
         total = len(results)
         failed = 0
         ffmpeg_missing_count = 0
+        asr_dep_missing_count = 0
+        first_asr_dep_missing_msg: str | None = None
         error_samples = []
 
         for entry in results:
             error_msg = entry.get("asr_error")
             if error_msg:
                 failed += 1
-                # Check for ffmpeg dependency error
                 error_lower = error_msg.lower()
+
+                # Check for ffmpeg dependency error
                 is_ffmpeg_error = (
                     "ffmpeg" in error_lower
                     and ("not found" in error_lower or "no such file" in error_lower)
                 )
                 if is_ffmpeg_error:
                     ffmpeg_missing_count += 1
+
+                # Check for whisper backend missing (packaging guidance)
+                if "asr dependency missing" in error_lower:
+                    asr_dep_missing_count += 1
+                    if first_asr_dep_missing_msg is None:
+                        first_asr_dep_missing_msg = error_msg
+
                 # Collect first few error samples
                 if len(error_samples) < 3:
                     error_samples.append(error_msg[:200])  # Truncate long errors
@@ -1101,12 +1111,15 @@ def aggregate_asr_errors(session_dir: Path, asr_models: list[str] | None) -> Asr
             )
 
             # Determine if this is a dependency failure
-            # If all segments failed with ffmpeg missing, it's a dependency error
+            # If all segments failed with a dependency missing, it's a dependency error
             if ffmpeg_missing_count == total:
                 summary.dependency_error = (
                     "ffmpeg not found - whisper_local requires ffmpeg to extract audio. "
                     "Install ffmpeg and retry."
                 )
+            elif asr_dep_missing_count == total and first_asr_dep_missing_msg:
+                # Preserve existing UX-safe packaging guidance from _load_model
+                summary.dependency_error = first_asr_dep_missing_msg
 
             return summary
 
