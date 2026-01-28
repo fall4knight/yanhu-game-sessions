@@ -99,6 +99,58 @@ ASR model load failed | backend=faster-whisper | exception=RuntimeError | messag
 - `src/yanhu/transcriber.py:419-449`（`_load_model` 错误拼接逻辑）
 - `tests/test_transcriber.py`（更新 `TestWhisperModelLoadFailures` 断言）
 
+---
+
+## 2026-01-28 — A4 Gemini 接入
+
+### 已完成
+
+| 模块 | 文件 | 说明 |
+|------|------|------|
+| GeminiClient | `src/yanhu/gemini_client.py` | 新增 Gemini Generative Language API 客户端 |
+| GeminiAnalyzer | `src/yanhu/analyzer.py` | 新增 GeminiAnalyzer 类 |
+| get_analyzer | `src/yanhu/analyzer.py` | 支持 `gemini_3pro` backend |
+| is_cache_valid_for | `src/yanhu/analyzer.py` | 支持 `gemini-*` 和 `models/gemini*` model 前缀 |
+| CLI | `src/yanhu/cli.py` | `--backend gemini_3pro` 选项 |
+| 单测 | `tests/test_gemini_client.py` | GeminiClient 单元测试 |
+| 单测 | `tests/test_analyzer.py` | GeminiAnalyzer + cache valid 测试 |
+
+### 实现细节
+
+1. **GeminiClient**:
+   - 使用 httpx 调用 `https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent`
+   - 默认 model: `gemini-1.5-pro`（可通过 `GEMINI_MODEL` 环境变量覆盖）
+   - 复用 ClaudeClient 的 prompt（`_get_prompt_text`）
+   - JSON 解析失败时用 `JSON_REPAIR_PROMPT` 做一次无图 repair 重试
+
+2. **环境变量**:
+   - `GEMINI_API_KEY`：必须设置
+   - `GEMINI_MODEL`：可选，覆盖默认 model
+
+3. **Cache 校验**:
+   - `gemini_3pro` backend 接受 `model.startswith("gemini-")` 或 `model.startswith("models/gemini")`
+
+### 验收方式
+
+```bash
+# 语法检查
+ruff check src/ tests/
+
+# 单元测试
+pytest -q -m "not e2e"
+
+# 手动验证（需要 GEMINI_API_KEY）
+export GEMINI_API_KEY=AIza...
+yanhu analyze -s demo --backend gemini_3pro --limit 1
+```
+
+### 未做/后续
+
+- UI dropdown 选择 backend（defer）
+- cost estimator（defer）
+- registry 大改（defer）
+- watcher 默认 backend 仍为 `open_ocr`（未改）
+
 ### Notes
-- Source branch at time of review: `feat/ocr`
-- Next planned branch: `feat/gemini_vibe` (do not start implementation until BB confirms)
+- Source branch: `feat/gemini_vibe`
+- 依赖：httpx（已在 anthropic 依赖中隐式引入）

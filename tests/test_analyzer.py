@@ -7,6 +7,7 @@ from yanhu.analyzer import (
     AnalysisResult,
     AnalyzeStats,
     ClaudeAnalyzer,
+    GeminiAnalyzer,
     MockAnalyzer,
     analyze_session,
     check_cache,
@@ -1756,3 +1757,84 @@ class TestVerbatimPreservation:
         assert len(result.ocr_items) == 1
         # Should be verbatim (not normalized to "一支")
         assert result.ocr_items[0].text == "只留一只素雅的步摇"
+
+
+# ===== Gemini Analyzer Tests =====
+
+
+class TestGetAnalyzerGemini:
+    """Test get_analyzer with gemini_3pro backend."""
+
+    def test_get_gemini_analyzer(self):
+        """Should return GeminiAnalyzer for 'gemini_3pro' backend."""
+        # Use a mock client to avoid API key requirement
+        from unittest.mock import MagicMock
+
+        mock_client = MagicMock()
+        analyzer = get_analyzer("gemini_3pro", client=mock_client)
+        assert isinstance(analyzer, GeminiAnalyzer)
+
+
+class TestIsCacheValidForGemini:
+    """Test is_cache_valid_for method for gemini_3pro backend."""
+
+    def test_gemini_backend_with_gemini_model(self):
+        """gemini_3pro backend should accept model starting with 'gemini-'."""
+        result = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            caption="Valid caption",
+            model="gemini-1.5-pro",
+        )
+        assert result.is_cache_valid_for("gemini_3pro") is True
+
+    def test_gemini_backend_with_models_prefix(self):
+        """gemini_3pro backend should accept model starting with 'models/gemini'."""
+        result = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            caption="Valid caption",
+            model="models/gemini-1.5-pro",
+        )
+        assert result.is_cache_valid_for("gemini_3pro") is True
+
+    def test_gemini_backend_with_mock_model(self):
+        """gemini_3pro backend should reject model='mock'."""
+        result = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="unknown",
+            caption="Valid caption",
+            model="mock",
+        )
+        assert result.is_cache_valid_for("gemini_3pro") is False
+
+    def test_gemini_backend_with_claude_model(self):
+        """gemini_3pro backend should reject model='claude-*'."""
+        result = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            caption="Valid caption",
+            model="claude-sonnet-4-20250514",
+        )
+        assert result.is_cache_valid_for("gemini_3pro") is False
+
+    def test_gemini_backend_with_empty_caption(self):
+        """gemini_3pro backend should reject empty caption."""
+        result = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="dialogue",
+            caption="",
+            model="gemini-1.5-pro",
+        )
+        assert result.is_cache_valid_for("gemini_3pro") is False
+
+    def test_gemini_backend_with_error(self):
+        """gemini_3pro backend should reject result with error."""
+        result = AnalysisResult(
+            segment_id="part_0001",
+            scene_type="unknown",
+            caption="Valid caption",
+            model="gemini-1.5-pro",
+            error="Some error",
+        )
+        assert result.is_cache_valid_for("gemini_3pro") is False
