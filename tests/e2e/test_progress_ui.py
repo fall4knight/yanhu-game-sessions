@@ -276,8 +276,9 @@ def test_session_id_appears_starts_polling_progress(test_server, browser_context
     assert len(status_requests) > 0, \
         f"Expected /status requests once session_id is present. Errors: {console_errors}"
 
-    # Verify UI shows "Waiting for progress..." or "Starting" (since progress.json doesn't exist yet)
-    # The backend returns 200 with starting payload, not 404
+    # Verify UI shows "Waiting for progress..." or "Starting"
+    # (since progress.json doesn't exist yet).
+    # The backend returns 200 with starting payload (not 404).
     page.wait_for_selector("#progress-stage", state="attached", timeout=2000)
     stage_text = page.locator("#progress-stage").text_content()
     assert "Starting" in stage_text or "Waiting" in stage_text or "Stage:" in stage_text
@@ -590,8 +591,10 @@ def test_no_premature_stop_at_8_9_when_job_still_processing(test_server, browser
 
     # Should continue polling (8/9 is not terminal when job is processing)
     new_requests = final_count - initial_count
-    assert new_requests > 0, \
-        f"Expected continued /status polling at 8/9 (processing), but got {new_requests} new requests"
+    assert new_requests > 0, (
+        "Expected continued /status polling at 8/9 (processing), "
+        f"but got {new_requests} new requests"
+    )
 
     # Verify UI shows in-progress state (not Complete)
     page.wait_for_selector("#progress-stage", state="attached", timeout=2000)
