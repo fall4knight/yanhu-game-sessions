@@ -975,7 +975,10 @@ def watch(
     "--segment-strategy",
     type=click.Choice(["auto", "short", "medium", "long"], case_sensitive=False),
     default="short",
-    help="Segment duration strategy: short (5s, default), auto (adaptive), medium (15s), long (30s)",
+    help=(
+        "Segment duration strategy: short (5s, default), "
+        "auto (adaptive), medium (15s), long (30s)"
+    ),
 )
 def run_queue_cmd(
     queue_dir: str,
