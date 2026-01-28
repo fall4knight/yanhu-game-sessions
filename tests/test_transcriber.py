@@ -1255,10 +1255,10 @@ class TestMultiModelTranscription:
 
 
 class TestWhisperModelLoadFailures:
-    """Test _load_model surfaces initialization errors (A1)."""
+    """Test _load_model surfaces initialization errors (A1/A3)."""
 
     def test_runtime_error_during_model_init_is_surfaced(self, tmp_path):
-        """Should surface RuntimeError during WhisperModel() initialization."""
+        """Should surface RuntimeError with structured format (A3)."""
         # Mock faster_whisper module where import succeeds but WhisperModel raises
         mock_faster_whisper = MagicMock()
         mock_faster_whisper.WhisperModel.side_effect = RuntimeError("CUDA out of memory")
@@ -1267,10 +1267,12 @@ class TestWhisperModelLoadFailures:
             backend = WhisperLocalBackend(model_size="base")
             error = backend._load_model()
 
-            # Error should contain the RuntimeError info
+            # Error should use structured format: backend=X | exception=Y | message=Z
             assert error is not None
-            assert "RuntimeError" in error
-            assert "CUDA out of memory" in error
+            assert "ASR model load failed" in error
+            assert "backend=faster-whisper" in error
+            assert "exception=RuntimeError" in error
+            assert "message=CUDA out of memory" in error
 
     def test_import_error_returns_packaging_message(self, tmp_path):
         """If both backends are missing, return user-friendly packaging guidance."""
@@ -1285,7 +1287,7 @@ class TestWhisperModelLoadFailures:
         assert "official website" in error
 
     def test_both_backends_fail_with_different_errors(self, tmp_path):
-        """Should collect errors from both backends."""
+        """Should collect errors from both backends with structured format (A3)."""
         # faster-whisper raises RuntimeError, whisper raises ValueError
         mock_faster = MagicMock()
         mock_faster.WhisperModel.side_effect = RuntimeError("CUDA init failed")
@@ -1300,12 +1302,40 @@ class TestWhisperModelLoadFailures:
             backend = WhisperLocalBackend(model_size="invalid")
             error = backend._load_model()
 
-            # Should contain both error types
+            # Should contain both errors in structured format
             assert error is not None
-            assert "RuntimeError" in error
-            assert "CUDA init failed" in error
-            assert "ValueError" in error
-            assert "Invalid model size" in error
+            assert "ASR model load failed" in error
+            # First backend error
+            assert "backend=faster-whisper" in error
+            assert "exception=RuntimeError" in error
+            assert "message=CUDA init failed" in error
+            # Second backend error
+            assert "backend=openai-whisper" in error
+            assert "exception=ValueError" in error
+            assert "message=Invalid model size" in error
+
+    def test_mixed_import_and_init_error(self, tmp_path):
+        """Should handle one ImportError and one init error (A3)."""
+        # faster-whisper raises RuntimeError, whisper is missing
+        mock_faster = MagicMock()
+        mock_faster.WhisperModel.side_effect = RuntimeError("DLL load failed")
+
+        with patch.dict("sys.modules", {"faster_whisper": mock_faster}):
+            # Remove whisper from modules to trigger ImportError
+            import sys
+            if "whisper" in sys.modules:
+                del sys.modules["whisper"]
+
+            backend = WhisperLocalBackend(model_size="base")
+            error = backend._load_model()
+
+            # Should contain init error + not installed
+            assert error is not None
+            assert "ASR model load failed" in error
+            assert "backend=faster-whisper" in error
+            assert "exception=RuntimeError" in error
+            assert "backend=openai-whisper" in error
+            assert "status=not installed" in error
 
 
 class TestWhisperLocalFfmpegDiscovery:

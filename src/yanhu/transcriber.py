@@ -419,7 +419,10 @@ class WhisperLocalBackend:
         except Exception as e:
             has_non_import_error = True
             # Capture initialization errors (CUDA, DLL, model download, etc.)
-            load_errors.append(f"faster-whisper: {type(e).__name__}: {e}")
+            # Use structured format: backend=X | exception=Y | message=Z
+            load_errors.append(
+                f"backend=faster-whisper | exception={type(e).__name__} | message={e}"
+            )
 
         try:
             import whisper
@@ -432,7 +435,9 @@ class WhisperLocalBackend:
         except Exception as e:
             has_non_import_error = True
             # Capture initialization errors
-            load_errors.append(f"openai-whisper: {type(e).__name__}: {e}")
+            load_errors.append(
+                f"backend=openai-whisper | exception={type(e).__name__} | message={e}"
+            )
 
         # If both backends are simply missing, keep the user-friendly packaging guidance
         if not has_non_import_error and len(missing_backends) == 2:
@@ -444,9 +449,9 @@ class WhisperLocalBackend:
 
         # Otherwise, surface detailed errors (including which backend is missing)
         for b in missing_backends:
-            load_errors.append(f"{b}: not installed")
+            load_errors.append(f"backend={b} | status=not installed")
 
-        return f"ASR model load failed: {'; '.join(load_errors)}"
+        return f"ASR model load failed | {'; '.join(load_errors)}"
 
     def _get_asr_config(self) -> AsrConfig:
         """Create AsrConfig from current settings."""
