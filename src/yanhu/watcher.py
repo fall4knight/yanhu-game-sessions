@@ -1282,8 +1282,9 @@ def process_job(
             if key_value:
                 os.environ[key_name] = key_value
 
-        # Auto-detect analyze backend based on API key availability
-        analyze_backend = "claude" if os.environ.get("ANTHROPIC_API_KEY") else "mock"
+        # Default to local OCR for deterministic + low-cost evidence.
+        # Claude/Gemini backends remain optional and should be explicitly enabled.
+        analyze_backend = "open_ocr"
         write_stage_heartbeat(
             session_id=session_id,
             session_dir=session_dir,
@@ -1938,7 +1939,7 @@ class RunQueueConfig:
     transcribe_max_seconds: float | None = None  # Max total duration to transcribe
     # Segment strategy (adaptive duration)
     segment_duration: int | None = None  # Explicit duration in seconds
-    segment_strategy: str = "auto"  # "auto", "short", "medium", "long"
+    segment_strategy: str = "short"  # "auto", "short", "medium", "long" (default: short=5s)
 
     @property
     def queue_file(self) -> Path:

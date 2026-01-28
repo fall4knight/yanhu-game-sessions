@@ -186,7 +186,10 @@ class TestJobStatusUIConsolidation:
         assert "terminalLocked = true" in html
 
     def test_polling_sets_last_job_for_debugging(self, tmp_path):
-        """Step 32.20: Polling sets window.__YANHU_LAST_JOB for debugging (but doesn't render from it)."""
+        """Step 32.20: Polling sets window.__YANHU_LAST_JOB for debugging.
+
+        It should not render UI from that variable.
+        """
         from yanhu.app import create_app
         from yanhu.watcher import QueueJob, save_job_to_file
 

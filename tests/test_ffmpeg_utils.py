@@ -13,15 +13,22 @@ class TestFindFfmpegPackagedApp:
         # Mock shutil.which to return None (no PATH)
         monkeypatch.setattr("shutil.which", lambda _: None)
 
-        # Mock Path.exists() to return True for specific path
+        # Mock Path.exists()/is_file() to return True for specific path
         original_exists = Path.exists
+        original_is_file = Path.is_file
 
         def mock_exists(self):
             if str(self) == "/opt/homebrew/bin/ffmpeg":
                 return True
             return original_exists(self)
 
+        def mock_is_file(self):
+            if str(self) == "/opt/homebrew/bin/ffmpeg":
+                return True
+            return original_is_file(self)
+
         monkeypatch.setattr(Path, "exists", mock_exists)
+        monkeypatch.setattr(Path, "is_file", mock_is_file)
 
         result = find_ffmpeg()
         assert result == "/opt/homebrew/bin/ffmpeg"

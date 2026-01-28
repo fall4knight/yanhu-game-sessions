@@ -730,11 +730,11 @@ def get_segment_symbols(
 
 
 def has_valid_claude_analysis(manifest: Manifest, session_dir: Path) -> bool:
-    """Check if any segment has valid Claude analysis.
+    """Check if any segment has valid vision/OCR analysis.
 
     Valid analysis means:
-    - model starts with "claude-"
-    - AND (facts is non-empty OR caption is non-empty)
+    - model starts with "claude-" OR model == "open_ocr"
+    - AND (facts is non-empty OR caption is non-empty OR ocr_text is non-empty)
 
     Args:
         manifest: Session manifest with segments
@@ -751,11 +751,16 @@ def has_valid_claude_analysis(manifest: Manifest, session_dir: Path) -> bool:
             continue
         try:
             analysis = AnalysisResult.load(analysis_file)
-            # Check if model starts with "claude-"
-            if not (analysis.model and analysis.model.startswith("claude-")):
+            # Check model
+            if analysis.model == "open_ocr":
+                pass
+            elif analysis.model and analysis.model.startswith("claude-"):
+                pass
+            else:
                 continue
-            # Check if facts or caption is non-empty
-            if analysis.facts or analysis.caption:
+
+            # Check if facts/caption/ocr_text is non-empty
+            if analysis.facts or analysis.caption or analysis.ocr_text:
                 return True
         except (OSError, KeyError):
             pass

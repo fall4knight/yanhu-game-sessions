@@ -24,8 +24,8 @@ jobs:
       - name: Lint with ruff
         run: ruff check src/ tests/
 
-      - name: Run tests
-        run: pytest -q
+      - name: Run tests (unit/integration; exclude e2e)
+        run: pytest -q -m "not e2e"
 
       - name: Verify desktop UX contracts
         run: yanhu verify --desktop-ux

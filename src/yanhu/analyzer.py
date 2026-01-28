@@ -256,8 +256,9 @@ class AnalysisResult:
 
         Rules:
             - mock backend: valid if model == "mock"
+            - open_ocr backend: valid if model == "open_ocr"
             - claude backend: valid if model starts with "claude-"
-            - Both require: non-empty caption AND no error
+            - All require: non-empty caption AND no error
         """
         # Must have valid caption and no error
         if not self.has_valid_caption():
@@ -266,6 +267,8 @@ class AnalysisResult:
         # Check model matches backend
         if backend == "mock":
             return self.model == "mock"
+        elif backend == "open_ocr":
+            return self.model == "open_ocr"
         elif backend == "claude":
             return bool(self.model) and self.model.startswith("claude-")
 
@@ -408,6 +411,119 @@ class MockAnalyzer:
             result.ui_key_text = []
             result.player_action_guess = ""
             result.hook_detail = ""
+
+        return result
+
+
+class OpenOcrAnalyzer:
+    """Analyzer using local OCR (cheap + deterministic)."""
+
+    def __init__(self, engine=None):
+        self._engine = engine
+
+    def _get_engine(self):
+        if self._engine is None:
+            from yanhu.open_ocr import OpenOcrEngine
+
+            self._engine = OpenOcrEngine()
+        return self._engine
+
+    def analyze_segment(
+        self,
+        segment: SegmentInfo,
+        session_dir: Path,
+        max_frames: int = 3,
+        max_facts: int = 3,
+        detail_level: str = "L1",
+    ) -> AnalysisResult:
+        # Get frame paths, limited to max_frames
+        frame_paths = [session_dir / f for f in segment.frames[:max_frames]]
+
+        if not frame_paths:
+            return AnalysisResult(
+                segment_id=segment.id,
+                scene_type="unknown",
+                ocr_text=[],
+                caption="",
+                error="No frames available for OCR",
+            )
+
+        missing = [p for p in frame_paths if not p.exists()]
+        if missing:
+            return AnalysisResult(
+                segment_id=segment.id,
+                scene_type="unknown",
+                ocr_text=[],
+                caption="",
+                error=f"Missing frames: {[str(p) for p in missing]}",
+            )
+
+        engine = self._get_engine()
+        ocr_items: list[OcrItem] = []
+
+        segment_duration = segment.end_time - segment.start_time
+        num_frames = len(frame_paths)
+
+        for idx, frame_path in enumerate(frame_paths, start=1):
+            # Estimate t_rel based on frame index (we don't store exact timestamps)
+            if num_frames > 1:
+                frame_ratio = (idx - 1) / (num_frames - 1)
+                t_rel = segment.start_time + frame_ratio * segment_duration
+            else:
+                t_rel = segment.start_time
+
+            lines = engine.ocr_image(frame_path)
+            for line in lines:
+                text = (line.text or "").strip()
+                if not text:
+                    continue
+                ocr_items.append(
+                    OcrItem(
+                        text=text,  # Verbatim
+                        t_rel=round(t_rel, 2),
+                        source_frame=frame_path.name,
+                    )
+                )
+
+        # Dedup + keep compact ocr_text list
+        seen: set[str] = set()
+        ocr_text: list[str] = []
+        for item in ocr_items:
+            if item.text in seen:
+                continue
+            seen.add(item.text)
+            ocr_text.append(item.text)
+            if len(ocr_text) >= 12:
+                break
+
+        # Simple caption: first 1-2 OCR lines
+        caption = "".join(ocr_text[:2]) if ocr_text else ""
+        facts = []
+        if ocr_text:
+            facts.append(f"OCR: {len(ocr_text)}条")
+        facts = facts[:max_facts]
+
+        result = AnalysisResult(
+            segment_id=segment.id,
+            scene_type="unknown",
+            ocr_text=ocr_text,
+            facts=facts,
+            caption=caption,
+            model="open_ocr",
+            ocr_items=ocr_items,
+        )
+
+        if detail_level == "L1":
+            # Keep L1 fields empty/neutral; vibe layer can populate later.
+            result.scene_label = "Unknown"
+            result.what_changed = ""
+            result.ui_key_text = []
+            result.player_action_guess = ""
+            result.hook_detail = ""
+
+        # Extract emojis deterministically from OCR evidence
+        if ocr_items:
+            result.ui_symbol_items = extract_emojis_from_ocr(ocr_items, part_id=segment.id)
 
         return result
 
@@ -573,7 +689,7 @@ def get_analyzer(backend: str = "mock", client=None) -> Analyzer:
     """Get analyzer instance by backend name.
 
     Args:
-        backend: Backend name ("mock" or "claude")
+        backend: Backend name ("mock", "open_ocr", or "claude")
         client: Optional client instance (for testing)
 
     Returns:
@@ -584,6 +700,8 @@ def get_analyzer(backend: str = "mock", client=None) -> Analyzer:
     """
     if backend == "mock":
         return MockAnalyzer()
+    elif backend == "open_ocr":
+        return OpenOcrAnalyzer()
     elif backend == "claude":
         return ClaudeAnalyzer(client=client)
     raise ValueError(f"Unknown analyzer backend: {backend}")
