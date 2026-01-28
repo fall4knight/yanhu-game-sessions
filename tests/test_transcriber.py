@@ -1254,6 +1254,60 @@ class TestMultiModelTranscription:
         assert mock_transcript.exists()
 
 
+class TestWhisperModelLoadFailures:
+    """Test _load_model surfaces initialization errors (A1)."""
+
+    def test_runtime_error_during_model_init_is_surfaced(self, tmp_path):
+        """Should surface RuntimeError during WhisperModel() initialization."""
+        # Mock faster_whisper module where import succeeds but WhisperModel raises
+        mock_faster_whisper = MagicMock()
+        mock_faster_whisper.WhisperModel.side_effect = RuntimeError("CUDA out of memory")
+
+        with patch.dict("sys.modules", {"faster_whisper": mock_faster_whisper}):
+            backend = WhisperLocalBackend(model_size="base")
+            error = backend._load_model()
+
+            # Error should contain the RuntimeError info
+            assert error is not None
+            assert "RuntimeError" in error
+            assert "CUDA out of memory" in error
+
+    def test_import_error_returns_packaging_message(self, tmp_path):
+        """If both backends are missing, return user-friendly packaging guidance."""
+        backend = WhisperLocalBackend(model_size="base")
+        # Force ImportError for both backends
+        with patch("builtins.__import__", side_effect=ImportError("No module")):
+            error = backend._load_model()
+
+        assert error is not None
+        assert "ASR dependency missing" in error
+        assert "desktop builds" in error
+        assert "official website" in error
+
+    def test_both_backends_fail_with_different_errors(self, tmp_path):
+        """Should collect errors from both backends."""
+        # faster-whisper raises RuntimeError, whisper raises ValueError
+        mock_faster = MagicMock()
+        mock_faster.WhisperModel.side_effect = RuntimeError("CUDA init failed")
+
+        mock_whisper = MagicMock()
+        mock_whisper.load_model.side_effect = ValueError("Invalid model size")
+
+        with patch.dict("sys.modules", {
+            "faster_whisper": mock_faster,
+            "whisper": mock_whisper,
+        }):
+            backend = WhisperLocalBackend(model_size="invalid")
+            error = backend._load_model()
+
+            # Should contain both error types
+            assert error is not None
+            assert "RuntimeError" in error
+            assert "CUDA init failed" in error
+            assert "ValueError" in error
+            assert "Invalid model size" in error
+
+
 class TestWhisperLocalFfmpegDiscovery:
     """Test whisper_local uses find_ffmpeg() for packaged app support (Step 23)."""
 
