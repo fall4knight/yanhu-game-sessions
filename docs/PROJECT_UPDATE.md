@@ -35,6 +35,70 @@
 | P2 | ffmpeg 错误信息截断到 200 字符，可能丢失关键诊断 | `src/yanhu/transcriber.py:321` | 增加到 500 或分行输出完整 stderr |
 | P2 | `DEFAULT_ASR_MODELS = ["mock"]` 硬编码，生产环境需要覆盖 | `src/yanhu/asr_registry.py:35` | 通过 config/env 覆盖或提供 CLI flag |
 
+---
+
+## 2026-01-28 — A3 计划：ASR 错误格式结构化
+
+### asr_error 使用链路（证据）
+
+| 位置 | 文件:行号 | 说明 |
+|------|----------|------|
+| 定义 | `transcriber.py:81` | `asr_error: str \| None` |
+| 生成 | `transcriber.py:449` | `_load_model` 返回错误字符串 |
+| 生成 | `transcriber.py:488, 498, 517, 904` | 其他错误来源 |
+| 序列化 | `transcriber.py:90-91` | `to_dict()` 写入 JSON |
+| CLI 展示 | `cli.py:449` | 直接打印 `result.asr_error` |
+| 聚合 | `watcher.py:1083` | `entry.get("asr_error")` 做字符串匹配 |
+| UI 展示 | `app.py:1487` | JS 中读取 `seg.asr_error` |
+| UI banner | `app.py:1297-1300` | 展示 `asr_error_summary.dependency_error` |
+
+### 当前问题
+
+A1/A2 后的错误格式是一坨拼接：
+```
+ASR model load failed: faster-whisper: RuntimeError: CUDA out of memory; openai-whisper: not installed
+```
+不方便 UI/日志解析 backend、exception、message。
+
+### 方案对比
+
+| 方案 | 改动范围 | 优点 | 缺点 |
+|------|----------|------|------|
+| **方案1（推荐）** | 只改 `transcriber.py` | 不改类型，下游无需改动 | 仍是字符串，需正则解析 |
+| 方案2 | 改 `transcriber.py` + `watcher.py` | 真正结构化 dict | 违反边界限制 |
+
+### 方案1 详细设计
+
+改 `_load_model` 返回的错误字符串格式：
+
+**旧格式**：
+```
+ASR model load failed: faster-whisper: RuntimeError: CUDA out of memory; openai-whisper: not installed
+```
+
+**新格式**：
+```
+ASR model load failed | backend=faster-whisper | exception=RuntimeError | message=CUDA out of memory
+```
+
+多个后端失败时用分号分隔：
+```
+ASR model load failed | backend=faster-whisper | exception=RuntimeError | message=CUDA out of memory; backend=openai-whisper | status=not installed
+```
+
+### 验收标准
+
+1. `asr_error` 包含 `"ASR model load failed"` 前缀
+2. 初始化失败时包含 `"backend=<name>"` + `"exception=<type>"` + `"message=<msg>"`
+3. 缺依赖时包含 `"backend=<name>"` + `"status=not installed"`
+4. 纯缺依赖（两个都 ImportError）仍返回原 packaging guidance 消息
+5. 单测验证：mock RuntimeError 后，错误字符串匹配新格式
+
+### 改动文件
+
+- `src/yanhu/transcriber.py:419-449`（`_load_model` 错误拼接逻辑）
+- `tests/test_transcriber.py`（更新 `TestWhisperModelLoadFailures` 断言）
+
 ### Notes
 - Source branch at time of review: `feat/ocr`
 - Next planned branch: `feat/gemini_vibe` (do not start implementation until BB confirms)
