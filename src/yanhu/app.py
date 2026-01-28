@@ -1297,6 +1297,7 @@ SESSION_VIEW_TEMPLATE = BASE_TEMPLATE.replace(
     {% if asr_error_summary.dependency_error %}
     <div class="error-banner" style="background: #e74c3c; color: white; padding: 15px; margin: 15px 0; border-radius: 4px;">
         <strong>⚠️ ASR Processing Failed:</strong> {{ asr_error_summary.dependency_error }}<br>
+        {% if 'ffmpeg' in asr_error_summary.dependency_error|lower %}
         <div style="margin-top: 10px;">
             <strong>How to fix:</strong>
             <div class="cmd-block">
@@ -1317,6 +1318,7 @@ SESSION_VIEW_TEMPLATE = BASE_TEMPLATE.replace(
                 After installing, re-run the pipeline for this session.
             </div>
         </div>
+        {% endif %}
     </div>
     {% elif asr_error_summary.failed_segments > 0 %}
     <div class="warning-banner" style="background: #f39c12; color: white; padding: 15px; margin: 15px 0; border-radius: 4px;">
