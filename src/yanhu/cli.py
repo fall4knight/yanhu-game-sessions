@@ -204,7 +204,8 @@ def extract(session: str, output_dir: str, frames_per_segment: int):
     "--backend",
     "-b",
     default="mock",
-    type=click.Choice(["mock", "open_ocr", "claude"]),
+    type=click.Choice(["mock", "open_ocr", "claude", "gemini_3pro"]),
+    help="Analysis backend (gemini_3pro requires GEMINI_API_KEY)",
 )
 @click.option("--max-frames", "-n", default=3, help="Max frames per segment (default: 3)")
 @click.option("--max-facts", default=3, help="Max facts per segment (default: 3)")
@@ -240,9 +241,11 @@ def analyze(
 
       yanhu analyze -s demo --backend claude --dry-run
 
-      yanhu analyze -s demo --backend claude --limit 1
+      yanhu analyze -s demo --backend gemini_3pro --limit 1
 
       yanhu analyze -s demo --backend claude --segments part_0001,part_0002
+
+    Note: gemini_3pro requires GEMINI_API_KEY environment variable.
     """
     session_dir = Path(output_dir) / session
 

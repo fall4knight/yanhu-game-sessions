@@ -249,7 +249,7 @@ class AnalysisResult:
         """Check if this cached result is valid for a specific backend.
 
         Args:
-            backend: The backend requesting cache validation ("mock" or "claude")
+            backend: The backend requesting cache validation
 
         Returns:
             True if cache is valid for this backend, False otherwise
@@ -258,6 +258,7 @@ class AnalysisResult:
             - mock backend: valid if model == "mock"
             - open_ocr backend: valid if model == "open_ocr"
             - claude backend: valid if model starts with "claude-"
+            - gemini_3pro backend: valid if model starts with "gemini-" or "models/gemini"
             - All require: non-empty caption AND no error
         """
         # Must have valid caption and no error
@@ -271,6 +272,10 @@ class AnalysisResult:
             return self.model == "open_ocr"
         elif backend == "claude":
             return bool(self.model) and self.model.startswith("claude-")
+        elif backend == "gemini_3pro":
+            return bool(self.model) and (
+                self.model.startswith("gemini-") or self.model.startswith("models/gemini")
+            )
 
         # Unknown backend - no cache valid
         return False
@@ -685,11 +690,165 @@ class ClaudeAnalyzer:
             )
 
 
+class GeminiAnalyzer:
+    """Analyzer using Gemini Generative Language API."""
+
+    def __init__(self, client=None):
+        """Initialize Gemini analyzer.
+
+        Args:
+            client: Optional GeminiClient instance. If None, creates one.
+        """
+        self._client = client
+
+    def _get_client(self):
+        """Lazy-load the Gemini client."""
+        if self._client is None:
+            from yanhu.gemini_client import GeminiClient
+
+            self._client = GeminiClient()
+        return self._client
+
+    def analyze_segment(
+        self,
+        segment: SegmentInfo,
+        session_dir: Path,
+        max_frames: int = 3,
+        max_facts: int = 3,
+        detail_level: str = "L1",
+    ) -> AnalysisResult:
+        """Analyze a segment using Gemini Vision.
+
+        Args:
+            segment: Segment info from manifest
+            session_dir: Path to session directory
+            max_frames: Maximum frames to analyze
+            max_facts: Maximum facts to return
+            detail_level: "L0" for basic, "L1" for enhanced fields
+
+        Returns:
+            AnalysisResult with Gemini's analysis
+        """
+        # Get frame paths, limited to max_frames
+        frame_paths = [session_dir / f for f in segment.frames[:max_frames]]
+
+        if not frame_paths:
+            return AnalysisResult(
+                segment_id=segment.id,
+                scene_type="unknown",
+                ocr_text=[],
+                caption="",
+                error="No frames available for analysis",
+            )
+
+        # Check frames exist
+        missing = [p for p in frame_paths if not p.exists()]
+        if missing:
+            return AnalysisResult(
+                segment_id=segment.id,
+                scene_type="unknown",
+                ocr_text=[],
+                caption="",
+                error=f"Missing frames: {[str(p) for p in missing]}",
+            )
+
+        try:
+            client = self._get_client()
+            response = client.analyze_frames(
+                frame_paths, max_facts=max_facts, detail_level=detail_level
+            )
+
+            # Convert ocr_items from Gemini format to AnalysisResult format
+            ocr_items = []
+            if response.ocr_items:
+                segment_duration = segment.end_time - segment.start_time
+                num_frames = len(frame_paths)
+                for item in response.ocr_items:
+                    # item is a dict with "text" and "frame_idx"
+                    frame_idx = item.get("frame_idx", 1)
+                    if num_frames > 1:
+                        frame_ratio = (frame_idx - 1) / (num_frames - 1)
+                        t_rel = segment.start_time + frame_ratio * segment_duration
+                    else:
+                        t_rel = segment.start_time
+                    # Construct source_frame from frame_idx
+                    source_frame = f"frame_{frame_idx:04d}.jpg"
+                    ocr_items.append(
+                        OcrItem(
+                            text=item.get("text", ""),
+                            t_rel=round(t_rel, 2),
+                            source_frame=source_frame,
+                        )
+                    )
+
+            # Convert ui_symbol_items from Gemini format
+            ui_symbol_items = []
+            if response.ui_symbol_items:
+                segment_duration = segment.end_time - segment.start_time
+                num_frames = len(frame_paths)
+                for item in response.ui_symbol_items:
+                    # item is a dict with "symbol" and "source_frames"
+                    symbol = item.get("symbol", "")
+                    source_frames = item.get("source_frames", [])
+                    if source_frames:
+                        # Use first frame for t_rel calculation
+                        try:
+                            frame_idx = int(source_frames[0][6:10])
+                        except (ValueError, IndexError):
+                            frame_idx = 1
+                        if num_frames > 1:
+                            frame_ratio = (frame_idx - 1) / (num_frames - 1)
+                            t_rel = segment.start_time + frame_ratio * segment_duration
+                        else:
+                            t_rel = segment.start_time
+                        ui_symbol_items.append(
+                            UiSymbolItem(
+                                symbol=symbol,
+                                t_rel=round(t_rel, 2),
+                                source_frame=source_frames[0],
+                                origin="inferred_llm",
+                            )
+                        )
+
+            # Extract emojis from OCR items (evidence layer)
+            emoji_items = extract_emojis_from_ocr(ocr_items, part_id=segment.id)
+            ui_symbol_items.extend(emoji_items)
+
+            return AnalysisResult(
+                segment_id=segment.id,
+                scene_type=response.scene_type,
+                ocr_text=response.ocr_text,
+                facts=response.facts,
+                caption=response.caption,
+                confidence=response.confidence,
+                model=response.model,
+                error=response.error,
+                raw_text=response.raw_text,
+                # L1 fields
+                scene_label=response.scene_label,
+                what_changed=response.what_changed,
+                ui_key_text=response.ui_key_text or [],
+                ui_symbols=response.ui_symbols or [],
+                player_action_guess=response.player_action_guess,
+                hook_detail=response.hook_detail,
+                ocr_items=ocr_items,
+                ui_symbol_items=ui_symbol_items,
+            )
+        except Exception as e:
+            return AnalysisResult(
+                segment_id=segment.id,
+                scene_type="unknown",
+                ocr_text=[],
+                caption="",
+                error=str(e),
+            )
+
+
 def get_analyzer(backend: str = "mock", client=None) -> Analyzer:
     """Get analyzer instance by backend name.
 
     Args:
-        backend: Backend name ("mock", "open_ocr", or "claude")
+        backend: Backend name ("mock", "open_ocr", "claude", or "gemini_3pro")
         client: Optional client instance (for testing)
 
     Returns:
@@ -704,6 +863,8 @@ def get_analyzer(backend: str = "mock", client=None) -> Analyzer:
         return OpenOcrAnalyzer()
     elif backend == "claude":
         return ClaudeAnalyzer(client=client)
+    elif backend == "gemini_3pro":
+        return GeminiAnalyzer(client=client)
     raise ValueError(f"Unknown analyzer backend: {backend}")
 
 
