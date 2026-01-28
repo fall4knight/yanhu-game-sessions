@@ -1,7 +1,6 @@
 """Tests for Gemini API client."""
 
 import json
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -147,7 +146,16 @@ class TestGeminiClientAnalyzeFrames:
                 {
                     "content": {
                         "parts": [
-                            {"text": '{"scene_type": "dialogue", "ocr_text": ["test"], "facts": [], "caption": "A dialogue scene"}'}
+                            {
+                                "text": json.dumps(
+                                    {
+                                        "scene_type": "dialogue",
+                                        "ocr_text": ["test"],
+                                        "facts": [],
+                                        "caption": "A dialogue scene",
+                                    }
+                                )
+                            }
                         ]
                     }
                 }
@@ -217,9 +225,24 @@ class TestGeminiClientAnalyzeFrames:
             else:
                 # Repair call: valid JSON
                 mock_resp.json.return_value = {
-                    "candidates": [{"content": {"parts": [
-                        {"text": '{"scene_type": "unknown", "ocr_text": [], "facts": [], "caption": "repaired"}'}
-                    ]}}]
+                    "candidates": [
+                        {
+                            "content": {
+                                "parts": [
+                                    {
+                                        "text": json.dumps(
+                                            {
+                                                "scene_type": "unknown",
+                                                "ocr_text": [],
+                                                "facts": [],
+                                                "caption": "repaired",
+                                            }
+                                        )
+                                    }
+                                ]
+                            }
+                        }
+                    ]
                 }
             return mock_resp
 
