@@ -150,6 +150,47 @@ class TestQueueJob:
         job = QueueJob.from_json_line(line)
         assert job.raw_path == "/video.mp4"
 
+    def test_analyze_backend_to_dict(self):
+        """Should include analyze_backend when present."""
+        job = QueueJob(
+            created_at="2026-01-20T12:00:00",
+            raw_path="/path/to/video.mp4",
+            status="pending",
+            analyze_backend="gemini_3pro",
+        )
+        d = job.to_dict()
+        assert d["analyze_backend"] == "gemini_3pro"
+
+    def test_analyze_backend_from_dict(self):
+        """Should deserialize analyze_backend from dict."""
+        d = {
+            "created_at": "2026-01-20T12:00:00",
+            "raw_path": "/path/to/video.mp4",
+            "status": "pending",
+            "analyze_backend": "claude",
+        }
+        job = QueueJob.from_dict(d)
+        assert job.analyze_backend == "claude"
+
+    def test_analyze_backend_default_none(self):
+        """Should default analyze_backend to None when not in dict."""
+        d = {
+            "created_at": "2026-01-20T12:00:00",
+            "raw_path": "/path/to/video.mp4",
+        }
+        job = QueueJob.from_dict(d)
+        assert job.analyze_backend is None
+
+    def test_analyze_backend_not_in_dict_when_none(self):
+        """Should not include analyze_backend in dict when None."""
+        job = QueueJob(
+            created_at="2026-01-20T12:00:00",
+            raw_path="/path/to/video.mp4",
+            status="pending",
+        )
+        d = job.to_dict()
+        assert "analyze_backend" not in d
+
 
 class TestCreateJobFromPath:
     """Test create_job_from_path function."""
