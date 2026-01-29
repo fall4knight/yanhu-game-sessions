@@ -184,6 +184,7 @@ class QueueJob:
     estimated_runtime_sec: int | None = None  # Estimated processing time in seconds
     asr_models: list[str] | None = None  # ASR models to run (e.g., ["whisper_local", "mock"])
     whisper_device: str | None = None  # Whisper device mode ("cpu" or "cuda")
+    analyze_backend: str | None = None  # Analyze backend (open_ocr/claude/gemini_3pro)
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
@@ -228,6 +229,8 @@ class QueueJob:
             result["asr_models"] = self.asr_models
         if self.whisper_device is not None:
             result["whisper_device"] = self.whisper_device
+        if self.analyze_backend is not None:
+            result["analyze_backend"] = self.analyze_backend
         return result
 
     @classmethod
@@ -254,6 +257,7 @@ class QueueJob:
             estimated_runtime_sec=data.get("estimated_runtime_sec"),
             asr_models=data.get("asr_models"),
             whisper_device=data.get("whisper_device"),
+            analyze_backend=data.get("analyze_backend"),
         )
 
     def to_json_line(self) -> str:
@@ -1295,9 +1299,9 @@ def process_job(
             if key_value:
                 os.environ[key_name] = key_value
 
-        # Default to local OCR for deterministic + low-cost evidence.
+        # Use backend from run_config, job field, or fallback to open_ocr.
         # Claude/Gemini backends remain optional and should be explicitly enabled.
-        analyze_backend = "open_ocr"
+        analyze_backend = run_config.get("analyze_backend") or job.analyze_backend or "open_ocr"
         write_stage_heartbeat(
             session_id=session_id,
             session_dir=session_dir,

@@ -1036,6 +1036,15 @@ SESSION_LIST_TEMPLATE = BASE_TEMPLATE.replace(
                 </select>
                 <small>CPU mode uses int8 quantization, GPU uses float16</small>
             </div>
+            <div class="form-group">
+                <label for="upload_analyze_backend">Analyze Backend</label>
+                <select id="upload_analyze_backend" name="analyze_backend">
+                    <option value="open_ocr" selected>Open OCR (local, free)</option>
+                    <option value="claude">Claude (requires ANTHROPIC_API_KEY)</option>
+                    <option value="gemini_3pro">Gemini (requires GEMINI_API_KEY)</option>
+                </select>
+                <small>Frame analysis backend. Claude/Gemini require API keys configured.</small>
+            </div>
             <button type="submit" class="btn" {{ "disabled" if not ffprobe_available else "" }}>Upload & Start Job</button>
         </form>
     </div>
@@ -1093,6 +1102,15 @@ SESSION_LIST_TEMPLATE = BASE_TEMPLATE.replace(
                     <option value="cuda">GPU/CUDA (float16)</option>
                 </select>
                 <small>CPU mode uses int8 quantization, GPU uses float16</small>
+            </div>
+            <div class="form-group">
+                <label for="analyze_backend">Analyze Backend</label>
+                <select id="analyze_backend" name="analyze_backend">
+                    <option value="open_ocr" selected>Open OCR (local, free)</option>
+                    <option value="claude">Claude (requires ANTHROPIC_API_KEY)</option>
+                    <option value="gemini_3pro">Gemini (requires GEMINI_API_KEY)</option>
+                </select>
+                <small>Frame analysis backend. Claude/Gemini require API keys configured.</small>
             </div>
             <button type="submit" class="btn" {{ "disabled" if not ffprobe_available else "" }}>Submit Job</button>
         </form>
@@ -1777,6 +1795,12 @@ JOB_DETAIL_TEMPLATE = BASE_TEMPLATE.replace(
         <tr>
             <td>Preset</td>
             <td>{{ job.preset }}</td>
+        </tr>
+        {% endif %}
+        {% if job.analyze_backend %}
+        <tr>
+            <td>Analyze Backend</td>
+            <td>{{ job.analyze_backend }}</td>
         </tr>
         {% endif %}
         {% if job.session_id %}
@@ -2752,6 +2776,7 @@ def create_app(
         # Parse ASR model (single selection from dropdown)
         asr_model = request.form.get("asr_model", "whisper_local").strip()
         whisper_device = request.form.get("whisper_device", "cpu").strip()
+        analyze_backend = request.form.get("analyze_backend", "open_ocr").strip()
 
         if asr_model:
             from yanhu.asr_registry import validate_asr_models
@@ -2808,11 +2833,13 @@ def create_app(
                 "transcribe_max_seconds": transcribe_max_seconds,
             }
 
-        # Store ASR models and Whisper device
+        # Store ASR models, Whisper device, and analyze backend
         if asr_models is not None:
             job.asr_models = asr_models
         if whisper_device:
             job.whisper_device = whisper_device
+        if analyze_backend:
+            job.analyze_backend = analyze_backend
 
         # Save to per-job file
         jobs_dir = Path(app.config["jobs_dir"])
@@ -3213,6 +3240,7 @@ def create_app(
         # Parse ASR model (single selection from dropdown)
         asr_model = request.form.get("asr_model", "whisper_local").strip()
         whisper_device = request.form.get("whisper_device", "cpu").strip()
+        analyze_backend = request.form.get("analyze_backend", "open_ocr").strip()
 
         if asr_model:
             from yanhu.asr_registry import validate_asr_models
@@ -3269,11 +3297,13 @@ def create_app(
                 "transcribe_max_seconds": transcribe_max_seconds,
             }
 
-        # Store ASR models and Whisper device
+        # Store ASR models, Whisper device, and analyze backend
         if asr_models is not None:
             job.asr_models = asr_models
         if whisper_device:
             job.whisper_device = whisper_device
+        if analyze_backend:
+            job.analyze_backend = analyze_backend
 
         # Save job
         jobs_dir = Path(app.config["jobs_dir"])
@@ -3596,6 +3626,10 @@ class BackgroundWorker:
                         run_config["transcribe_compute"] = "float16"
                     else:  # cpu
                         run_config["transcribe_compute"] = "int8"
+
+                # Apply analyze backend from job
+                if job.analyze_backend:
+                    run_config["analyze_backend"] = job.analyze_backend
 
                 # Check for cancellation before starting
                 current_job = get_job_by_id(job.job_id, self.jobs_dir)

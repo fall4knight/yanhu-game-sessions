@@ -146,11 +146,62 @@ yanhu analyze -s demo --backend gemini_3pro --limit 1
 
 ### 未做/后续
 
-- UI dropdown 选择 backend（defer）
+- ~~UI dropdown 选择 backend~~ → **完成于 A5**
 - cost estimator（defer）
 - registry 大改（defer）
-- watcher 默认 backend 仍为 `open_ocr`（未改）
+- watcher 默认 backend 仍为 `open_ocr`（可由 job 配置覆盖）
 
 ### Notes
 - Source branch: `feat/gemini_vibe`
 - 依赖：httpx（已在 anthropic 依赖中隐式引入）
+
+---
+
+## 2026-01-29 — A5 Frontend Backend Selection
+
+### 已完成
+
+| 模块 | 文件 | 说明 |
+|------|------|------|
+| QueueJob | `src/yanhu/watcher.py` | 新增 `analyze_backend: str \| None` 字段 |
+| QueueJob.to_dict | `src/yanhu/watcher.py` | 序列化 analyze_backend |
+| QueueJob.from_dict | `src/yanhu/watcher.py` | 反序列化 analyze_backend |
+| process_job | `src/yanhu/watcher.py` | 使用 `run_config.get("analyze_backend") or job.analyze_backend or "open_ocr"` |
+| Upload form | `src/yanhu/app.py` | 新增 analyze_backend select dropdown |
+| Job form | `src/yanhu/app.py` | 新增 analyze_backend select dropdown |
+| submit_job | `src/yanhu/app.py` | 读取 analyze_backend 并存入 job |
+| upload endpoint | `src/yanhu/app.py` | 读取 analyze_backend 并存入 job |
+| worker | `src/yanhu/app.py` | 将 job.analyze_backend 传入 run_config |
+| Job detail page | `src/yanhu/app.py` | 显示 analyze_backend |
+| 单测 | `tests/test_watcher.py` | analyze_backend 序列化/反序列化测试 |
+
+### 实现细节
+
+1. **Frontend dropdown options**:
+   - `open_ocr` (default): Open OCR (local, free)
+   - `claude`: Claude (requires ANTHROPIC_API_KEY)
+   - `gemini_3pro`: Gemini (requires GEMINI_API_KEY)
+
+2. **Job persistence**: analyze_backend 存入 job JSON，watcher 处理时读取
+
+3. **Fallback chain**: `run_config["analyze_backend"]` → `job.analyze_backend` → `"open_ocr"`
+
+### 验收方式
+
+```bash
+# 语法检查
+ruff check src/ tests/
+
+# 单元测试
+pytest -q -m "not e2e"
+
+# 手动验证
+# 1. 启动 webapp: yanhu serve
+# 2. 访问首页，检查 Upload/Job 表单有 "Analyze Backend" dropdown
+# 3. 提交 job，检查 job detail 页面显示所选 backend
+# 4. 查看 job JSON 文件确认 analyze_backend 字段
+```
+
+### Notes
+- Source branch: `feat/ocr`
+- 无新增依赖
