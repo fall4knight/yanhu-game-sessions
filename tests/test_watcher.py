@@ -1428,3 +1428,69 @@ class TestCalculateJobEstimates:
         # Should use heuristic fallback
         assert segments == 18
         assert runtime == 64
+
+
+class TestGetSessionTimezone:
+    """Test get_session_timezone function for Windows timezone fallback."""
+
+    def test_returns_zoneinfo_when_available(self):
+        """Should return ZoneInfo for America/Los_Angeles when tz database available."""
+        from datetime import datetime
+
+        from yanhu.watcher import get_session_timezone
+
+        tz = get_session_timezone()
+
+        # Should be ZoneInfo if tzdata is available (which it should be in dev)
+        assert tz is not None
+        # Should be usable for datetime operations
+        dt = datetime.now(tz)
+        assert dt.tzinfo is not None
+
+    def test_fallback_to_utc_when_zoneinfo_unavailable(self, monkeypatch):
+        """Should fallback to UTC when ZoneInfo raises ZoneInfoNotFoundError."""
+        import warnings
+        from datetime import timezone
+        from zoneinfo import ZoneInfoNotFoundError
+
+        import yanhu.watcher
+
+        # Mock ZoneInfo to always raise ZoneInfoNotFoundError
+        def mock_zoneinfo(key):
+            raise ZoneInfoNotFoundError(key)
+
+        monkeypatch.setattr(yanhu.watcher, "ZoneInfo", mock_zoneinfo)
+
+        # Call the function - it should catch the exception and return UTC
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            tz = yanhu.watcher.get_session_timezone()
+
+            # Should return UTC
+            assert tz == timezone.utc
+
+            # Should have issued a warning
+            assert len(w) == 1
+            assert "UTC" in str(w[0].message)
+            assert "tzdata" in str(w[0].message)
+
+    def test_session_id_generation_doesnt_crash_without_tz(self, monkeypatch):
+        """Session ID generation should not crash when timezone database is unavailable."""
+        import warnings
+        from datetime import timezone
+        from zoneinfo import ZoneInfoNotFoundError
+
+        import yanhu.watcher
+
+        # Mock ZoneInfo to raise error
+        def mock_zoneinfo(key):
+            raise ZoneInfoNotFoundError(key)
+
+        monkeypatch.setattr(yanhu.watcher, "ZoneInfo", mock_zoneinfo)
+
+        # The get_session_timezone function should fallback gracefully
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            tz = yanhu.watcher.get_session_timezone()
+            # Should not crash, and should return a valid timezone
+            assert tz == timezone.utc

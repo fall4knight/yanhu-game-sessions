@@ -8,13 +8,47 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import tempfile
+import warnings
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+logger = logging.getLogger(__name__)
+
+# Default timezone for session IDs (Pacific time for NA gaming sessions)
+DEFAULT_TIMEZONE = "America/Los_Angeles"
+
+
+def get_session_timezone() -> timezone | ZoneInfo:
+    """Get timezone for session IDs with graceful fallback.
+
+    Attempts to use America/Los_Angeles (Pacific time) for consistent
+    session ID generation. Falls back to UTC if timezone database is
+    unavailable (e.g., Windows packaged builds without tzdata).
+
+    Returns:
+        ZoneInfo for America/Los_Angeles if available, else timezone.utc
+    """
+    try:
+        return ZoneInfo(DEFAULT_TIMEZONE)
+    except ZoneInfoNotFoundError:
+        warnings.warn(
+            f"Timezone '{DEFAULT_TIMEZONE}' not found. Using UTC. "
+            "Install 'tzdata' package for proper timezone support on Windows.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        logger.warning(
+            "ZoneInfoNotFoundError: Falling back to UTC. "
+            "Install 'tzdata' package for proper timezone support."
+        )
+        return timezone.utc
+
 
 # Supported video extensions
 VIDEO_EXTENSIONS = frozenset({".mp4", ".mkv", ".mov"})
@@ -1219,16 +1253,16 @@ def process_job(
         game = job.get_game()
         tag = job.get_tag()
 
-        # Parse job.created_at and convert to America/Los_Angeles timezone
+        # Parse job.created_at and convert to session timezone (America/Los_Angeles or UTC fallback)
         job_timestamp = datetime.fromisoformat(job.created_at)
-        la_tz = ZoneInfo("America/Los_Angeles")
+        session_tz = get_session_timezone()
 
         if job_timestamp.tzinfo is None:
-            # Naive datetime - assume America/Los_Angeles
-            job_timestamp = job_timestamp.replace(tzinfo=la_tz)
+            # Naive datetime - assume session timezone
+            job_timestamp = job_timestamp.replace(tzinfo=session_tz)
         else:
-            # Aware datetime - convert to America/Los_Angeles
-            job_timestamp = job_timestamp.astimezone(la_tz)
+            # Aware datetime - convert to session timezone
+            job_timestamp = job_timestamp.astimezone(session_tz)
 
         session_id = generate_session_id(game, tag, timestamp=job_timestamp)
         # CRITICAL: create_session_directory args are (session_id, output_dir)
