@@ -1341,9 +1341,15 @@ SESSION_VIEW_TEMPLATE = BASE_TEMPLATE.replace(
     {% elif asr_error_summary.failed_segments > 0 %}
     <div class="warning-banner" style="background: #f39c12; color: white; padding: 15px; margin: 15px 0; border-radius: 4px;">
         <strong>⚠️ Partial ASR Failures:</strong> {{ asr_error_summary.failed_segments }}/{{ asr_error_summary.total_segments }} segments failed transcription.<br>
+        {% if asr_error_summary.partial_symlink_hint %}
+        <div style="margin-top: 10px; background: rgba(255,255,255,0.15); padding: 10px; border-radius: 4px;">
+            <strong>Windows symlink issue detected:</strong> {{ asr_error_summary.partial_symlink_hint }}
+        </div>
+        {% else %}
         <div style="margin-top: 5px; font-size: 0.9em;">
             Check the Transcripts tab for details. Timeline and highlights may be incomplete.
         </div>
+        {% endif %}
     </div>
     {% endif %}
     {% endif %}
@@ -1567,10 +1573,33 @@ SESSION_VIEW_TEMPLATE = BASE_TEMPLATE.replace(
         const content = document.getElementById('analysis-content');
         let html = '<div class="analysis-parts">';
 
+        // Check for OCR dependency errors (affects all parts)
+        const ocrErrorParts = parts.filter(p => p.ocr_error && p.ocr_error.includes('rapidocr'));
+        if (ocrErrorParts.length > 0) {
+            html += `<div class="ocr-dependency-banner" style="background: #fff3cd; color: #856404; padding: 15px; margin-bottom: 15px; border-radius: 4px; border: 1px solid #ffc107;">`;
+            html += `<strong>⚠️ OCR Dependency Missing:</strong> rapidocr-onnxruntime is not installed.<br>`;
+            html += `<div style="margin-top: 5px; font-size: 0.9em;">`;
+            html += `Install with: <code style="background: #e9ecef; padding: 2px 6px; border-radius: 3px;">pip install rapidocr-onnxruntime opencv-python-headless onnxruntime</code>`;
+            html += `</div></div>`;
+        }
+
         parts.forEach(part => {
             html += `<div class="analysis-part">`;
             html += `<h3>${part.part_id}</h3>`;
             html += `<div class="analysis-summary">`;
+
+            // Show OCR error if present (distinct from ASR errors)
+            if (part.ocr_error) {
+                html += `<p class="ocr-error-inline" style="color: #856404; background: #fff3cd; padding: 5px 10px; border-radius: 3px; font-size: 0.85em;">`;
+                html += `<strong>OCR Error:</strong> ${escapeHtml(part.ocr_error.substring(0, 100))}`;
+                html += `</p>`;
+            } else if (part.error) {
+                // Generic analysis error (not OCR-specific)
+                html += `<p class="error-inline" style="color: #721c24; background: #f8d7da; padding: 5px 10px; border-radius: 3px; font-size: 0.85em;">`;
+                html += `<strong>Error:</strong> ${escapeHtml(part.error.substring(0, 100))}`;
+                html += `</p>`;
+            }
+
             html += `<p><strong>Scene:</strong> ${escapeHtml(part.scene_label || 'N/A')}</p>`;
             if (part.what_changed) {
                 const truncated = part.what_changed.length > 100
@@ -1682,9 +1711,15 @@ JOB_DETAIL_TEMPLATE = BASE_TEMPLATE.replace(
     {% if asr_errors.failed_segments > 0 and not asr_errors.dependency_error %}
     <div class="warning-banner" style="background: #f39c12; color: white; padding: 15px; margin: 15px 0; border-radius: 4px;">
         <strong>⚠️ Partial ASR Failures:</strong> {{ asr_errors.failed_segments }}/{{ asr_errors.total_segments }} segments failed transcription.<br>
+        {% if asr_errors.partial_symlink_hint %}
+        <div style="margin-top: 10px; background: rgba(255,255,255,0.15); padding: 10px; border-radius: 4px;">
+            <strong>Windows symlink issue detected:</strong> {{ asr_errors.partial_symlink_hint }}
+        </div>
+        {% else %}
         <div style="margin-top: 5px; font-size: 0.9em;">
             Check the Transcripts tab for details. The session was still created successfully.
         </div>
+        {% endif %}
     </div>
     {% endif %}
     {% endif %}
@@ -2593,18 +2628,22 @@ def create_app(
                     data = json.load(f)
 
                 # Extract summary fields
-                parts_data.append(
-                    {
-                        "part_id": part_id,
-                        "scene_label": data.get("scene_label", ""),
-                        "what_changed": data.get("what_changed", ""),
-                        "ui_key_text": data.get("ui_key_text", []),
-                        "ocr_count": len(data.get("ocr_items", [])),
-                        "asr_count": len(data.get("asr_items", [])),
-                        "quotes_count": len(data.get("aligned_quotes", [])),
-                        "symbols_count": len(data.get("ui_symbol_items", [])),
-                    }
-                )
+                part_summary = {
+                    "part_id": part_id,
+                    "scene_label": data.get("scene_label", ""),
+                    "what_changed": data.get("what_changed", ""),
+                    "ui_key_text": data.get("ui_key_text", []),
+                    "ocr_count": len(data.get("ocr_items", [])),
+                    "asr_count": len(data.get("asr_items", [])),
+                    "quotes_count": len(data.get("aligned_quotes", [])),
+                    "symbols_count": len(data.get("ui_symbol_items", [])),
+                }
+                # Include error fields if present (separate OCR vs generic errors)
+                if data.get("ocr_error"):
+                    part_summary["ocr_error"] = data.get("ocr_error")
+                if data.get("error"):
+                    part_summary["error"] = data.get("error")
+                parts_data.append(part_summary)
             except (json.JSONDecodeError, OSError):
                 # Skip invalid files
                 continue

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -12,6 +14,40 @@ from typing import Callable, Protocol
 
 from yanhu.analyzer import OcrItem
 from yanhu.manifest import Manifest, SegmentInfo
+
+
+def _is_windows_symlink_error(exc: Exception) -> bool:
+    """Check if an exception is a Windows symlink privilege error (WinError 1314).
+
+    This error occurs when HuggingFace hub tries to create symlinks for its cache
+    on Windows without Developer Mode enabled or Administrator privileges.
+
+    Args:
+        exc: Exception to check
+
+    Returns:
+        True if this is WinError 1314 (privilege not held), False otherwise
+    """
+    if sys.platform != "win32":
+        return False
+
+    # Check for OSError with winerror 1314
+    if isinstance(exc, OSError):
+        # winerror attribute is Windows-specific
+        winerror = getattr(exc, "winerror", None)
+        if winerror == 1314:
+            return True
+
+        # Also check error message for common patterns
+        error_str = str(exc).lower()
+        if "1314" in error_str or "privilege" in error_str:
+            return True
+
+    # Check nested exceptions (e.g., wrapped in RuntimeError)
+    if exc.__cause__ is not None:
+        return _is_windows_symlink_error(exc.__cause__)
+
+    return False
 
 
 @dataclass
@@ -369,61 +405,97 @@ class WhisperLocalBackend:
         load_errors: list[str] = []
         has_non_import_error = False
 
-        try:
-            from faster_whisper import WhisperModel
+        # Track if we encountered a symlink error
+        symlink_error_detected = False
 
-            # If downloading, start a background thread to update progress
-            if progress_tracker:
-                stop_event = threading.Event()
+        def _attempt_faster_whisper_load() -> bool:
+            """Attempt to load faster-whisper model.
 
-                def update_download_progress():
-                    """Update progress message periodically during download."""
-                    elapsed = 0
-                    while not stop_event.is_set():
-                        time.sleep(2)
-                        elapsed += 2
-                        if not stop_event.is_set():
-                            progress_tracker.update(
-                                done=0,
-                                message=f"Downloading Whisper model '{self.model_size}'... "
-                                f"({elapsed}s elapsed)",
-                            )
+            Returns:
+                True if model loaded successfully, False otherwise
+            """
+            nonlocal has_non_import_error, symlink_error_detected
 
-                progress_thread = threading.Thread(target=update_download_progress, daemon=True)
-                progress_thread.start()
+            # Suppress HF Hub symlink warnings (the only valid symlink-related env var)
+            os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 
-                try:
+            try:
+                from faster_whisper import WhisperModel
+
+                # If downloading, start a background thread to update progress
+                if progress_tracker:
+                    stop_event = threading.Event()
+
+                    def update_download_progress():
+                        """Update progress message periodically during download."""
+                        elapsed = 0
+                        while not stop_event.is_set():
+                            time.sleep(2)
+                            elapsed += 2
+                            if not stop_event.is_set():
+                                msg = (
+                                    f"Downloading Whisper model '{self.model_size}'... "
+                                    f"({elapsed}s elapsed)"
+                                )
+                                progress_tracker.update(done=0, message=msg)
+
+                    progress_thread = threading.Thread(
+                        target=update_download_progress, daemon=True
+                    )
+                    progress_thread.start()
+
+                    try:
+                        self._model = WhisperModel(
+                            self.model_size,
+                            device=self.device,
+                            compute_type=self.compute_type,
+                        )
+                    finally:
+                        stop_event.set()
+                        progress_thread.join(timeout=1)
+                        # Mark download complete
+                        progress_tracker.update(
+                            done=1, message=f"Model '{self.model_size}' ready"
+                        )
+                else:
                     self._model = WhisperModel(
                         self.model_size,
                         device=self.device,
                         compute_type=self.compute_type,
                     )
-                finally:
-                    stop_event.set()
-                    progress_thread.join(timeout=1)
-                    # Mark download complete
-                    progress_tracker.update(
-                        done=1, message=f"Model '{self.model_size}' ready"
-                    )
-            else:
-                self._model = WhisperModel(
-                    self.model_size,
-                    device=self.device,
-                    compute_type=self.compute_type,
+
+                self._backend_type = "faster_whisper"
+                return True
+
+            except ImportError:
+                missing_backends.append("faster-whisper")
+                return False
+
+            except OSError as e:
+                # Check for Windows symlink privilege error (WinError 1314)
+                if _is_windows_symlink_error(e):
+                    symlink_error_detected = True
+                    return False
+                # Other OSError - record it
+                has_non_import_error = True
+                load_errors.append(
+                    f"backend=faster-whisper | exception={type(e).__name__} | message={e}"
                 )
+                return False
 
-            self._backend_type = "faster_whisper"
+            except Exception as e:
+                has_non_import_error = True
+                # Capture initialization errors (CUDA, DLL, model download, etc.)
+                load_errors.append(
+                    f"backend=faster-whisper | exception={type(e).__name__} | message={e}"
+                )
+                return False
+
+        # First attempt with faster-whisper
+        if _attempt_faster_whisper_load():
             return None
-        except ImportError:
-            missing_backends.append("faster-whisper")
-        except Exception as e:
-            has_non_import_error = True
-            # Capture initialization errors (CUDA, DLL, model download, etc.)
-            # Use structured format: backend=X | exception=Y | message=Z
-            load_errors.append(
-                f"backend=faster-whisper | exception={type(e).__name__} | message={e}"
-            )
 
+        # Try openai-whisper as fallback
         try:
             import whisper
 
@@ -445,6 +517,15 @@ class WhisperLocalBackend:
                 "ASR dependency missing: neither faster-whisper nor openai-whisper found. "
                 "This is a packaging error in desktop builds. "
                 "Download the latest release from the official website."
+            )
+
+        # Check for Windows symlink-specific error to provide friendly message
+        if symlink_error_detected:
+            return (
+                "Windows symlink privilege error (WinError 1314): "
+                "The HuggingFace cache requires symlink support. "
+                "Enable Developer Mode in Windows Settings > Update & Security > For developers, "
+                "or run the application as Administrator."
             )
 
         # Otherwise, surface detailed errors (including which backend is missing)
