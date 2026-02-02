@@ -2664,3 +2664,132 @@ class TestHealthStatusBar:
         assert "onclick=\"showTab('transcripts')\"" in html
         assert "onclick=\"showTab('analysis')\"" in html
         assert "onclick=\"showTab('highlights')\"" in html
+
+
+class TestTimelineFramesViewer:
+    """Test timeline frames viewer API and UI."""
+
+    def test_list_segment_frames_returns_frame_urls(self, tmp_path):
+        """Frames listing API returns URLs for segment frames."""
+        from yanhu.app import create_app
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+
+        session_id = "2024-01-01_12-00-00_test"
+        session_dir = sessions_dir / session_id
+        session_dir.mkdir()
+
+        # Create frames
+        frames_dir = session_dir / "frames" / "part_0001"
+        frames_dir.mkdir(parents=True)
+        for i in range(5):
+            (frames_dir / f"frame_{i:04d}.jpg").write_text("fake jpg")
+
+        app = create_app(sessions_dir)
+        client = app.test_client()
+
+        response = client.get(f"/s/{session_id}/frames/part_0001")
+        assert response.status_code == 200
+
+        data = response.get_json()
+        assert "frames" in data
+        assert len(data["frames"]) == 5
+        assert data["total"] == 5
+        assert data["showing"] == 5
+        assert all("/frames/part_0001/" in url for url in data["frames"])
+
+    def test_list_segment_frames_caps_at_max(self, tmp_path):
+        """Frames listing API caps results at MAX_FRAMES."""
+        from yanhu.app import create_app
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+
+        session_id = "2024-01-01_12-00-00_test"
+        session_dir = sessions_dir / session_id
+        session_dir.mkdir()
+
+        # Create more frames than the limit (10)
+        frames_dir = session_dir / "frames" / "part_0001"
+        frames_dir.mkdir(parents=True)
+        for i in range(20):
+            (frames_dir / f"frame_{i:04d}.jpg").write_text("fake jpg")
+
+        app = create_app(sessions_dir)
+        client = app.test_client()
+
+        response = client.get(f"/s/{session_id}/frames/part_0001")
+        data = response.get_json()
+
+        assert data["total"] == 20
+        assert data["showing"] == 10  # Capped at MAX_FRAMES
+        assert len(data["frames"]) == 10
+
+    def test_list_segment_frames_empty_dir(self, tmp_path):
+        """Frames listing API returns empty list for empty directory."""
+        from yanhu.app import create_app
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+
+        session_id = "2024-01-01_12-00-00_test"
+        session_dir = sessions_dir / session_id
+        session_dir.mkdir()
+
+        # Create empty frames directory
+        frames_dir = session_dir / "frames" / "part_0001"
+        frames_dir.mkdir(parents=True)
+
+        app = create_app(sessions_dir)
+        client = app.test_client()
+
+        response = client.get(f"/s/{session_id}/frames/part_0001")
+        data = response.get_json()
+
+        assert data["frames"] == []
+        assert data["total"] == 0
+
+    def test_list_segment_frames_invalid_part_id(self, tmp_path):
+        """Frames listing API rejects invalid part_id."""
+        from yanhu.app import create_app
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+
+        session_id = "2024-01-01_12-00-00_test"
+        session_dir = sessions_dir / session_id
+        session_dir.mkdir()
+
+        app = create_app(sessions_dir)
+        client = app.test_client()
+
+        # Invalid characters in part_id
+        response = client.get(f"/s/{session_id}/frames/part..0001")
+        assert response.status_code == 400
+
+    def test_timeline_includes_frames_viewer_js(self, tmp_path):
+        """Session view includes timeline frames viewer JavaScript."""
+        from yanhu.app import create_app
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+
+        session_id = "2024-01-01_12-00-00_test"
+        session_dir = sessions_dir / session_id
+        session_dir.mkdir()
+
+        (session_dir / "overview.md").write_text("# Overview")
+        (session_dir / "timeline.md").write_text("# Timeline")
+        (session_dir / "highlights.md").write_text("# Highlights")
+        (session_dir / "manifest.json").write_text(json.dumps({}))
+
+        app = create_app(sessions_dir)
+        client = app.test_client()
+
+        response = client.get(f"/s/{session_id}")
+        html = response.get_data(as_text=True)
+
+        # Should include timeline frames viewer initialization
+        assert "initTimelineFramesViewer" in html
+        assert "frames-toggle-btn" in html
