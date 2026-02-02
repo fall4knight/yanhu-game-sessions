@@ -2,7 +2,7 @@
 
 Provides secure storage for API keys with two backends:
 1. KeychainKeyStore: Uses OS keychain via keyring library (preferred)
-2. EnvFileKeyStore: Fallback to ~/.yanhu-sessions/.env file with chmod 600
+2. EnvFileKeyStore: Fallback to OS-appropriate config dir (via platformdirs)
 
 Security:
 - Keys are never exposed in full after saving (only masked)
@@ -152,16 +152,24 @@ class KeychainKeyStore:
 
 
 class EnvFileKeyStore:
-    """Store API keys in ~/.yanhu-sessions/.env file (fallback)."""
+    """Store API keys in OS-appropriate config directory (fallback).
+
+    Uses platformdirs to determine the correct location:
+    - Windows: %LOCALAPPDATA%/yanhu-sessions/.env
+    - macOS: ~/Library/Application Support/yanhu-sessions/.env
+    - Linux: ~/.config/yanhu-sessions/.env
+    """
 
     def __init__(self, env_file: Path | None = None):
         """Initialize env file key store.
 
         Args:
-            env_file: Path to .env file (default: ~/yanhu-sessions/.env)
+            env_file: Path to .env file (default: OS-appropriate config dir)
         """
         if env_file is None:
-            env_file = Path.home() / "yanhu-sessions" / ".env"
+            from yanhu.paths import get_env_file_path
+
+            env_file = get_env_file_path()
         self.env_file = env_file
 
     def _ensure_file_exists(self) -> None:

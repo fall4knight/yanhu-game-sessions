@@ -1959,7 +1959,7 @@ SETTINGS_TEMPLATE = BASE_TEMPLATE.replace(
             keysData = data.keys;
 
             // Update storage backend display
-            const backendName = data.backend === 'keychain' ? 'in OS keychain' : 'in ~/.yanhu-sessions/.env';
+            const backendName = data.backend === 'keychain' ? 'in OS keychain' : `in ${data.env_file_path}`;
             document.getElementById('storage-backend').textContent = backendName;
 
             // Render keys
@@ -3381,6 +3381,7 @@ def create_app(
         Never returns full key values.
         """
         from yanhu.keystore import SUPPORTED_KEYS, get_default_keystore, get_key_status
+        from yanhu.paths import get_display_path, get_env_file_path
 
         keystore = get_default_keystore()
         backend = keystore.get_backend_name()
@@ -3391,10 +3392,14 @@ def create_app(
             keys_status[key_name] = get_key_status(key_value)
             keys_status[key_name]["source"] = backend
 
+        # Include env file path for display when using envfile backend
+        env_file_display = get_display_path(get_env_file_path())
+
         return jsonify(
             {
                 "keys": keys_status,
                 "backend": backend,
+                "env_file_path": env_file_display,
             }
         )
 

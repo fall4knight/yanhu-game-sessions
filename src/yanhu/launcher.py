@@ -67,19 +67,19 @@ def check_ffmpeg_availability() -> tuple[bool, str | None]:
 def ensure_default_directories() -> tuple[Path, Path]:
     """Ensure default sessions and raw directories exist.
 
+    Uses platformdirs to determine OS-appropriate locations:
+    - Windows: %LOCALAPPDATA%/yanhu-sessions
+    - macOS: ~/Library/Application Support/yanhu-sessions
+    - Linux: ~/.local/share/yanhu-sessions
+
+    Also triggers one-time migration from legacy ~/yanhu-sessions path.
+
     Returns:
         Tuple of (sessions_dir, raw_dir).
     """
-    # Use ~/yanhu-sessions as default
-    base_dir = Path.home() / "yanhu-sessions"
-    sessions_dir = base_dir / "sessions"
-    raw_dir = base_dir / "raw"
+    from yanhu.paths import ensure_directories
 
-    # Create directories
-    sessions_dir.mkdir(parents=True, exist_ok=True)
-    raw_dir.mkdir(parents=True, exist_ok=True)
-
-    return sessions_dir, raw_dir
+    return ensure_directories()
 
 
 def selfcheck_asr() -> int:

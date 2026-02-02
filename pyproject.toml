@@ -19,6 +19,7 @@ dependencies = [
     "anthropic>=0.18",
     "emoji>=2.0",
     "tzdata>=2024.1",  # IANA tz database for Windows packaged builds
+    "platformdirs>=4.0",  # OS-appropriate config/data directories
 ]
 
 [project.optional-dependencies]
