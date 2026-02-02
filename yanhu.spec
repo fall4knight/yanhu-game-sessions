@@ -48,9 +48,23 @@ hiddenimports_asr = [
     'safetensors',
 ]
 
+# OCR dependencies (rapidocr-onnxruntime + opencv)
+# Note: pyclipper and shapely are required deps per rapidocr-onnxruntime v1.4.4
+hiddenimports_ocr = [
+    'rapidocr_onnxruntime',
+    'cv2',
+    'numpy',
+    'PIL',
+    'PIL.Image',
+    'onnxruntime',
+    'pyclipper',
+    'shapely',
+]
+
 # Collect submodules for packages that use dynamic imports
 hiddenimports_collected = []
-for pkg in ['faster_whisper', 'tokenizers', 'huggingface_hub', 'tiktoken', 'safetensors']:
+for pkg in ['faster_whisper', 'tokenizers', 'huggingface_hub', 'tiktoken', 'safetensors',
+            'rapidocr_onnxruntime', 'cv2', 'shapely']:
     try:
         hiddenimports_collected += collect_submodules(pkg)
     except Exception:
@@ -71,12 +85,20 @@ try:
 except Exception:
     pass  # If faster_whisper not installed, skip gracefully
 
+# Collect rapidocr-onnxruntime data files (includes ONNX models for OCR)
+try:
+    datas_collected += collect_data_files('rapidocr_onnxruntime', include_py_files=False)
+except Exception:
+    pass  # If rapidocr-onnxruntime not installed, skip gracefully
+
 a = Analysis(
     ['src/yanhu/launcher.py'],
     pathex=[],
     binaries=[],
     datas=datas_collected,
-    hiddenimports=hiddenimports_base + hiddenimports_asr + hiddenimports_collected,
+    hiddenimports=(
+        hiddenimports_base + hiddenimports_asr + hiddenimports_ocr + hiddenimports_collected
+    ),
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

@@ -202,6 +202,82 @@ def selfcheck_asr() -> int:
     return 0
 
 
+def selfcheck_ocr() -> int:
+    """Run OCR import selfcheck for packaged builds.
+
+    Verifies that all required OCR runtime modules can be imported.
+    This is used by CI to validate that PyInstaller bundled OCR dependencies correctly.
+
+    Returns:
+        Exit code: 0 if all imports succeed, 1 otherwise
+    """
+    # Attempt to set UTF-8 encoding for Windows compatibility
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
+
+    print("=" * 60)
+    print("Yanhu Desktop - OCR Import Selfcheck")
+    print("=" * 60)
+    print()
+
+    # List of required OCR runtime modules
+    required_modules = [
+        "rapidocr_onnxruntime",
+        "cv2",
+        "numpy",
+        "onnxruntime",
+    ]
+
+    successful = []
+    failed = []
+
+    for module_name in required_modules:
+        try:
+            __import__(module_name)
+            successful.append(module_name)
+            print(f"  [OK] {module_name}")
+        except ImportError as e:
+            failed.append(f"{module_name}: {e}")
+            print(f"  [FAIL] {module_name} - {e}")
+
+    print()
+    print(f"Successful: {len(successful)}/{len(required_modules)}")
+    print(f"Failed: {len(failed)}")
+    print()
+
+    # Try to instantiate RapidOCR to verify models are bundled
+    print("Checking RapidOCR initialization:")
+    try:
+        from rapidocr_onnxruntime import RapidOCR
+
+        ocr = RapidOCR()
+        print("  [OK] RapidOCR initialized successfully")
+        del ocr
+    except ImportError:
+        print("  [SKIP] rapidocr_onnxruntime not available")
+    except Exception as e:
+        print(f"  [FAIL] RapidOCR initialization failed: {e}")
+        failed.append(f"RapidOCR init: {e}")
+
+    print()
+
+    if failed:
+        print("=" * 60)
+        print("OCR SELFCHECK FAILED")
+        print("=" * 60)
+        print()
+        print("Missing OCR dependencies - packaging error.")
+        return 1
+
+    print("=" * 60)
+    print("OCR SELFCHECK PASSED")
+    print("=" * 60)
+    return 0
+
+
 def open_browser(url: str, delay: float = 1.5):
     """Open browser after a delay.
 
@@ -217,7 +293,7 @@ def run_launcher():
     """Run the desktop launcher.
 
     This is the main entrypoint for the packaged desktop app.
-    Supports --selfcheck-asr flag for CI verification.
+    Supports --selfcheck-asr and --selfcheck-ocr flags for CI verification.
     """
     # Parse arguments
     parser = argparse.ArgumentParser(
@@ -228,11 +304,18 @@ def run_launcher():
         action="store_true",
         help="Run ASR import selfcheck and exit (for CI verification)",
     )
+    parser.add_argument(
+        "--selfcheck-ocr",
+        action="store_true",
+        help="Run OCR import selfcheck and exit (for CI verification)",
+    )
     args, _ = parser.parse_known_args()
 
-    # Handle selfcheck mode
+    # Handle selfcheck modes
     if args.selfcheck_asr:
         sys.exit(selfcheck_asr())
+    if args.selfcheck_ocr:
+        sys.exit(selfcheck_ocr())
 
     print("=" * 60)
     print("Yanhu Game Sessions - Desktop Launcher")
