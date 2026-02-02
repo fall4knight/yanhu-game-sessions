@@ -16,6 +16,23 @@ class OpenOcrError(RuntimeError):
     pass
 
 
+def check_ocr_available() -> tuple[bool, str | None]:
+    """Check if OCR dependencies are available.
+
+    Returns:
+        Tuple of (is_available, error_message).
+        If available, error_message is None.
+    """
+    try:
+        from rapidocr_onnxruntime import RapidOCR  # noqa: F401
+
+        return True, None
+    except ImportError as e:
+        return False, f"rapidocr-onnxruntime not available: {e}"
+    except Exception as e:
+        return False, f"OCR check failed: {e}"
+
+
 @dataclass
 class OpenOcrLine:
     text: str

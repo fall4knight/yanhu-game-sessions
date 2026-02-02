@@ -6,12 +6,16 @@ A local web UI to browse session outputs and submit new jobs.
 from __future__ import annotations
 
 import json
+import sys
 import threading
 import time
 from datetime import datetime
 from pathlib import Path
 
 from flask import Flask, jsonify, redirect, render_template_string, request
+
+# Detect if running from PyInstaller packaged build
+PACKAGED_BUILD = getattr(sys, "frozen", False) or hasattr(sys, "_MEIPASS")
 
 # HTML templates (keeping existing templates, adding job form)
 BASE_TEMPLATE = """
@@ -390,9 +394,14 @@ BASE_TEMPLATE = """
             </span>
             <span style="float: right;">
                 <span id="mode-indicator"
-                      style="color: {% if 'no keys' in mode_label %}#95a5a6{% else %}#27ae60{% endif %}; font-size: 0.9em; margin-right: 15px;"
+                      style="color: {% if 'no keys' in mode_label and not ocr_available %}#95a5a6{% else %}#27ae60{% endif %}; font-size: 0.9em; margin-right: 15px;"
                       title="{{ mode_detail|join(', ') if mode_detail else '' }}">
                     Mode: {{ mode_label }}
+                </span>
+                <span id="ocr-indicator"
+                      style="color: {% if ocr_available %}#27ae60{% else %}#95a5a6{% endif %}; font-size: 0.9em; margin-right: 15px;"
+                      title="{% if ocr_available %}Local OCR (rapidocr) available{% else %}Local OCR not available{% endif %}">
+                    OCR: {% if ocr_available %}✓{% else %}✗{% endif %}
                 </span>
                 <span style="color: #7f8c8d; font-size: 0.9em; margin-right: 15px;">
                     🔒 Local processing only
@@ -1382,6 +1391,8 @@ SESSION_VIEW_TEMPLATE = BASE_TEMPLATE.replace(
     "{% block scripts %}{% endblock %}",
     """
     <script>
+    // Backend-provided flag for desktop vs CLI detection
+    const PACKAGED_BUILD = {{ packaged_build | tojson }};
     let transcriptsData = null;
     let currentModel = null;
 
@@ -1577,9 +1588,15 @@ SESSION_VIEW_TEMPLATE = BASE_TEMPLATE.replace(
         const ocrErrorParts = parts.filter(p => p.ocr_error && p.ocr_error.includes('rapidocr'));
         if (ocrErrorParts.length > 0) {
             html += `<div class="ocr-dependency-banner" style="background: #fff3cd; color: #856404; padding: 15px; margin-bottom: 15px; border-radius: 4px; border: 1px solid #ffc107;">`;
-            html += `<strong>⚠️ OCR Dependency Missing:</strong> rapidocr-onnxruntime is not installed.<br>`;
+            html += `<strong>⚠️ OCR Not Available:</strong> Local OCR (rapidocr-onnxruntime) is not installed.<br>`;
             html += `<div style="margin-top: 5px; font-size: 0.9em;">`;
-            html += `Install with: <code style="background: #e9ecef; padding: 2px 6px; border-radius: 3px;">pip install rapidocr-onnxruntime opencv-python-headless onnxruntime</code>`;
+            // Use backend-provided flag for desktop vs CLI detection
+            if (PACKAGED_BUILD) {
+                html += `<strong>Desktop users:</strong> OCR is included in desktop builds starting v0.1.28+. `;
+                html += `Download the latest release to enable local OCR.`;
+            } else {
+                html += `<strong>CLI users:</strong> Install with: <code style="background: #e9ecef; padding: 2px 6px; border-radius: 3px;">pip install rapidocr-onnxruntime opencv-python-headless onnxruntime</code>`;
+            }
             html += `</div></div>`;
         }
 
@@ -2184,12 +2201,14 @@ def create_app(
 
     # Mode status helpers
     def get_mode_status():
-        """Get current mode status based on configured API keys.
+        """Get current mode status based on configured API keys and OCR availability.
 
         Returns:
-            dict with keys: mode_label (str), mode_detail (list), keys_present (dict)
+            dict with keys: mode_label (str), mode_detail (list), keys_present (dict),
+                           ocr_available (bool), ocr_error (str|None)
         """
         from yanhu.keystore import SUPPORTED_KEYS, get_default_keystore
+        from yanhu.open_ocr import check_ocr_available
 
         keystore = get_default_keystore()
         keys_present = {}
@@ -2197,6 +2216,9 @@ def create_app(
         for key_name in SUPPORTED_KEYS:
             key_value = keystore.get_key(key_name)
             keys_present[key_name] = bool(key_value)
+
+        # Check OCR availability (local OCR without API keys)
+        ocr_available, ocr_error = check_ocr_available()
 
         # Build mode label
         set_keys = []
@@ -2208,19 +2230,29 @@ def create_app(
             set_keys.append("OpenAI")
 
         if not set_keys:
-            mode_label = "ASR-only (no keys)"
-            mode_detail = ["No API keys configured", "Vision/OCR disabled"]
+            if ocr_available:
+                mode_label = "Local OCR available"
+                mode_detail = ["No API keys configured", "Local OCR (open_ocr) ready"]
+            else:
+                mode_label = "ASR-only (no keys)"
+                mode_detail = ["No API keys configured", "Vision/OCR disabled"]
         elif len(set_keys) == 1:
             mode_label = f"{set_keys[0]} enabled"
             mode_detail = [f"{set_keys[0]} API key configured"]
+            if ocr_available:
+                mode_detail.append("Local OCR also available")
         else:
             mode_label = f"Keys set ({'/'.join(set_keys)})"
             mode_detail = [f"{key} API key configured" for key in set_keys]
+            if ocr_available:
+                mode_detail.append("Local OCR also available")
 
         return {
             "mode_label": mode_label,
             "mode_detail": mode_detail,
             "keys_present": keys_present,
+            "ocr_available": ocr_available,
+            "ocr_error": ocr_error,
         }
 
     def _find_job_by_session_id(session_id: str):
@@ -2372,6 +2404,8 @@ def create_app(
             available_asr_models=list_asr_models(),
             mode_label=mode_status["mode_label"],
             mode_detail=mode_status["mode_detail"],
+            ocr_available=mode_status.get("ocr_available", False),
+            packaged_build=PACKAGED_BUILD,
         )
 
     @app.route("/s/<session_id>")
@@ -2463,6 +2497,8 @@ def create_app(
             mode_label=mode_status["mode_label"],
             mode_detail=mode_status["mode_detail"],
             keys_present=mode_status["keys_present"],
+            ocr_available=mode_status.get("ocr_available", False),
+            packaged_build=PACKAGED_BUILD,
             session_incomplete_warning=session_incomplete_warning,
         )
 
@@ -2952,6 +2988,8 @@ def create_app(
             shutdown_token=app.config.get("shutdown_token", ""),
             mode_label=mode_status["mode_label"],
             mode_detail=mode_status["mode_detail"],
+            ocr_available=mode_status.get("ocr_available", False),
+            packaged_build=PACKAGED_BUILD,
         )
 
     @app.route("/api/jobs/<job_id>", methods=["GET"])
@@ -3416,6 +3454,8 @@ def create_app(
             shutdown_token=app.config.get("shutdown_token", ""),
             mode_label=mode_status["mode_label"],
             mode_detail=mode_status["mode_detail"],
+            ocr_available=mode_status.get("ocr_available", False),
+            packaged_build=PACKAGED_BUILD,
         )
 
     @app.route("/api/settings/keys", methods=["GET"])
