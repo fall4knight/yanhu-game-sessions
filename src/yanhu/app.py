@@ -1371,6 +1371,33 @@ SESSION_VIEW_TEMPLATE = BASE_TEMPLATE.replace(
     {% endif %}
     {% endif %}
 
+    <!-- Health Status Bar (fixed order: Frames → ASR → OCR → Highlights) -->
+    {% if health_status %}
+    <div class="health-status-bar" style="display: flex; gap: 15px; padding: 10px 15px; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 4px; margin: 15px 0; font-size: 0.85em;">
+        {% for component in ['frames', 'asr', 'ocr', 'highlights'] %}
+        {% set info = health_status.get(component, {}) %}
+        {% if info %}
+        <a href="#" onclick="showTab('{{ info.tab }}'); return false;"
+           style="text-decoration: none; display: flex; align-items: center; gap: 5px;"
+           title="{{ info.tooltip }}">
+            {% if info.status == 'ok' %}
+            <span style="color: #28a745;">●</span>
+            {% elif info.status == 'empty' %}
+            <span style="color: #6c757d;">○</span>
+            {% elif info.status == 'error' %}
+            <span style="color: #dc3545;">●</span>
+            {% else %}
+            <span style="color: #adb5bd;">○</span>
+            {% endif %}
+            <span style="color: {% if info.status == 'error' %}#dc3545{% elif info.status == 'ok' %}#28a745{% else %}#6c757d{% endif %};">
+                {{ component|upper if component == 'asr' or component == 'ocr' else component|title }}
+            </span>
+        </a>
+        {% endif %}
+        {% endfor %}
+    </div>
+    {% endif %}
+
     <div class="tabs">
         <button class="tab active" onclick="showTab('overview')">Overview</button>
         <button class="tab" onclick="showTab('highlights')">Highlights</button>
@@ -1766,6 +1793,31 @@ JOB_DETAIL_TEMPLATE = BASE_TEMPLATE.replace(
     <div id="job-session-link-container" class="session-meta" {% if not job.session_id %}style="display: none;"{% endif %}>
         <strong>Session:</strong> <a id="job-session-link" href="{{ '/s/' + job.session_id if job.session_id else '#' }}">{{ job.session_id or '' }}</a>
     </div>
+
+    <!-- Health Status Bar (fixed order: Frames → ASR → OCR → Highlights) -->
+    {% if health_status %}
+    <div class="health-status-bar" style="display: flex; gap: 15px; padding: 10px 15px; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 4px; margin: 15px 0; font-size: 0.85em;">
+        {% for component in ['frames', 'asr', 'ocr', 'highlights'] %}
+        {% set info = health_status.get(component, {}) %}
+        {% if info %}
+        <span style="display: flex; align-items: center; gap: 5px;" title="{{ info.tooltip }}">
+            {% if info.status == 'ok' %}
+            <span style="color: #28a745;">●</span>
+            {% elif info.status == 'empty' %}
+            <span style="color: #6c757d;">○</span>
+            {% elif info.status == 'error' %}
+            <span style="color: #dc3545;">●</span>
+            {% else %}
+            <span style="color: #adb5bd;">○</span>
+            {% endif %}
+            <span style="color: {% if info.status == 'error' %}#dc3545{% elif info.status == 'ok' %}#28a745{% else %}#6c757d{% endif %};">
+                {{ component|upper if component == 'asr' or component == 'ocr' else component|title }}
+            </span>
+        </span>
+        {% endif %}
+        {% endfor %}
+    </div>
+    {% endif %}
 
     {% if job.status == 'failed' and job.error %}
     <div class="error-banner" style="background: #e74c3c; color: white; padding: 15px; margin: 15px 0; border-radius: 4px;">
@@ -2401,6 +2453,154 @@ def create_app(
 
         return False
 
+    def compute_session_health(
+        session_dir: Path,
+        asr_error_summary,
+        session_has_vision: bool,
+        highlights_unavailable_reason: str | None,
+    ) -> dict:
+        """Compute health status for each pipeline component.
+
+        Returns dict with keys: frames, asr, ocr, highlights
+        Each value is a dict with: status, tooltip, tab (anchor)
+
+        Status values:
+        - ok: Completed successfully with content
+        - empty: Completed but no content (e.g., no speech detected)
+        - error: Failed with error
+        - missing: Not run / not present
+        """
+        health = {}
+
+        # Frames status (use next() to avoid expensive full glob count)
+        frames_dir = session_dir / "frames"
+        if frames_dir.exists():
+            has_frames = next(frames_dir.glob("part_*/*.jpg"), None) is not None
+            if has_frames:
+                health["frames"] = {
+                    "status": "ok",
+                    "tooltip": "Frames extracted",
+                    "tab": "manifest",
+                }
+            else:
+                health["frames"] = {
+                    "status": "missing",
+                    "tooltip": "Frames directory exists but empty",
+                    "tab": "manifest",
+                }
+        else:
+            health["frames"] = {
+                "status": "missing",
+                "tooltip": "Frames not extracted",
+                "tab": "manifest",
+            }
+
+        # ASR status
+        asr_dir = session_dir / "outputs" / "asr"
+        if asr_error_summary:
+            if asr_error_summary.dependency_error:
+                health["asr"] = {
+                    "status": "error",
+                    "tooltip": "ASR failed: " + asr_error_summary.dependency_error[:50],
+                    "tab": "transcripts",
+                }
+            elif asr_error_summary.all_empty:
+                health["asr"] = {
+                    "status": "empty",
+                    "tooltip": "No speech detected (VAD filtered)",
+                    "tab": "transcripts",
+                }
+            elif asr_error_summary.failed_segments > 0:
+                health["asr"] = {
+                    "status": "error",
+                    "tooltip": f"{asr_error_summary.failed_segments}/{asr_error_summary.total_segments} segments failed",
+                    "tab": "transcripts",
+                }
+            else:
+                # Has summary but no errors - successful with some content
+                health["asr"] = {
+                    "status": "ok",
+                    "tooltip": f"{asr_error_summary.total_segments} segments transcribed",
+                    "tab": "transcripts",
+                }
+        elif asr_dir.exists() and any(asr_dir.glob("*/transcript.json")):
+            # Transcript exists, no error summary = success
+            health["asr"] = {
+                "status": "ok",
+                "tooltip": "Transcription complete",
+                "tab": "transcripts",
+            }
+        else:
+            health["asr"] = {
+                "status": "missing",
+                "tooltip": "ASR not run",
+                "tab": "transcripts",
+            }
+
+        # OCR status (based on analysis)
+        analysis_dir = session_dir / "outputs" / "analysis"
+        if session_has_vision:
+            health["ocr"] = {
+                "status": "ok",
+                "tooltip": "Vision/OCR analysis complete",
+                "tab": "analysis",
+            }
+        elif analysis_dir.exists() and any(analysis_dir.glob("part_*.json")):
+            # Analysis ran but no vision content
+            health["ocr"] = {
+                "status": "empty",
+                "tooltip": "Analysis ran but no OCR content",
+                "tab": "analysis",
+            }
+        else:
+            health["ocr"] = {
+                "status": "missing",
+                "tooltip": "OCR/Vision analysis not run",
+                "tab": "analysis",
+            }
+
+        # Highlights status
+        highlights_md = session_dir / "highlights.md"
+        if highlights_md.exists() and not highlights_unavailable_reason:
+            health["highlights"] = {
+                "status": "ok",
+                "tooltip": "Highlights generated",
+                "tab": "highlights",
+            }
+        elif highlights_unavailable_reason == "asr_empty":
+            health["highlights"] = {
+                "status": "empty",
+                "tooltip": "No highlights (no speech detected)",
+                "tab": "highlights",
+            }
+        elif highlights_unavailable_reason in ("no_vision", "no_analysis"):
+            health["highlights"] = {
+                "status": "missing",
+                "tooltip": "Highlights require vision analysis",
+                "tab": "highlights",
+            }
+        elif highlights_unavailable_reason == "no_highlights_found":
+            health["highlights"] = {
+                "status": "empty",
+                "tooltip": "No significant highlights found",
+                "tab": "highlights",
+            }
+        elif highlights_md.exists():
+            # File exists but reason is "empty"
+            health["highlights"] = {
+                "status": "empty",
+                "tooltip": "Highlights file empty",
+                "tab": "highlights",
+            }
+        else:
+            health["highlights"] = {
+                "status": "missing",
+                "tooltip": "Highlights not generated",
+                "tab": "highlights",
+            }
+
+        return health
+
     @app.route("/")
     def index():
         """List all sessions and jobs, newest first."""
@@ -2581,6 +2781,11 @@ def create_app(
                 # Has vision but still empty - analysis ran but found no highlights
                 highlights_unavailable_reason = "no_highlights_found"
 
+        # Compute health status for status bar
+        health_status = compute_session_health(
+            session_dir, asr_error_summary, session_has_vision, highlights_unavailable_reason
+        )
+
         mode_status = get_mode_status()
         return render_template_string(
             SESSION_VIEW_TEMPLATE,
@@ -2595,6 +2800,7 @@ def create_app(
             shutdown_token=app.config.get("shutdown_token", ""),
             session_has_vision=session_has_vision,
             highlights_unavailable_reason=highlights_unavailable_reason,
+            health_status=health_status,
             mode_label=mode_status["mode_label"],
             mode_detail=mode_status["mode_detail"],
             keys_present=mode_status["keys_present"],
@@ -3078,6 +3284,43 @@ def create_app(
             else:
                 return f"{bytes_val / (1024 * 1024 * 1024):.2f} GB"
 
+        # Compute health status if job has a session
+        health_status = None
+        if job.session_id:
+            session_dir = Path(app.config["sessions_dir"]) / job.session_id
+            if session_dir.exists():
+                from yanhu.watcher import aggregate_asr_errors
+
+                # Get manifest for ASR models
+                manifest_file = session_dir / "manifest.json"
+                asr_models = None
+                if manifest_file.exists():
+                    try:
+                        manifest_data = json.loads(manifest_file.read_text(encoding="utf-8"))
+                        asr_models = manifest_data.get("asr_models")
+                    except (json.JSONDecodeError, OSError):
+                        pass
+
+                asr_error_summary = aggregate_asr_errors(session_dir, asr_models)
+                session_has_vision = detect_session_has_vision(session_dir)
+
+                # Check highlights status
+                highlights_md = session_dir / "highlights.md"
+                highlights_unavailable_reason = None
+                if highlights_md.exists():
+                    content = highlights_md.read_text(encoding="utf-8")
+                    lines = [ln.strip() for ln in content.split("\n") if ln.strip()]
+                    has_content = any(
+                        ln.startswith("## ") or ln.startswith("- ") or ln.startswith("> ")
+                        for ln in lines[1:] if ln
+                    )
+                    if not has_content or len(lines) <= 2:
+                        highlights_unavailable_reason = "empty"
+
+                health_status = compute_session_health(
+                    session_dir, asr_error_summary, session_has_vision, highlights_unavailable_reason
+                )
+
         mode_status = get_mode_status()
         return render_template_string(
             JOB_DETAIL_TEMPLATE,
@@ -3087,6 +3330,7 @@ def create_app(
             format_size=format_size,
             ffmpeg_warning=app.config.get("ffmpeg_error"),
             shutdown_token=app.config.get("shutdown_token", ""),
+            health_status=health_status,
             mode_label=mode_status["mode_label"],
             mode_detail=mode_status["mode_detail"],
             ocr_available=mode_status.get("ocr_available", False),
