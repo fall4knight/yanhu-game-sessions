@@ -2804,6 +2804,12 @@ def create_app(
 
         # Create job with generated job_id
         job_preset = app.config["preset"]
+
+        # P0-2: If user doesn't specify a game name, default to filename stem (not guessing).
+        # This avoids sessions being named 'unknown'.
+        if not game:
+            game = raw_path.stem
+
         job = QueueJob(
             job_id=generate_job_id(),
             created_at=datetime.now().isoformat(),
