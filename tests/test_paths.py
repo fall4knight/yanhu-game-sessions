@@ -173,6 +173,55 @@ class TestEnsureDirectories:
         assert sessions_dir.name == "sessions"
         assert raw_dir.name == "raw"
 
+    def test_falls_back_to_legacy_when_legacy_has_data_and_new_empty(self, tmp_path, monkeypatch):
+        """If legacy sessions/raw exist with data and new dirs are empty, use legacy."""
+        from yanhu import paths
+
+        legacy_dir = tmp_path / "legacy"
+        (legacy_dir / "sessions").mkdir(parents=True)
+        (legacy_dir / "raw").mkdir(parents=True)
+        # create a marker file to simulate existing history
+        (legacy_dir / "sessions" / "existing_session").mkdir()
+
+        monkeypatch.setattr(paths, "LEGACY_BASE_DIR", legacy_dir)
+        monkeypatch.setattr(paths, "get_config_dir", lambda: tmp_path / "config")
+
+        # New dirs exist but empty
+        new_data_dir = tmp_path / "new_data"
+        (new_data_dir / "sessions").mkdir(parents=True)
+        (new_data_dir / "raw").mkdir(parents=True)
+        monkeypatch.setattr(paths, "get_sessions_dir", lambda: new_data_dir / "sessions")
+        monkeypatch.setattr(paths, "get_raw_dir", lambda: new_data_dir / "raw")
+
+        sessions_dir, raw_dir = paths.ensure_directories()
+
+        assert sessions_dir == legacy_dir / "sessions"
+        assert raw_dir == legacy_dir / "raw"
+
+    def test_prefers_new_when_new_has_data(self, tmp_path, monkeypatch):
+        """If new dirs already have data, do not fall back to legacy."""
+        from yanhu import paths
+
+        legacy_dir = tmp_path / "legacy"
+        (legacy_dir / "sessions").mkdir(parents=True)
+        (legacy_dir / "raw").mkdir(parents=True)
+        (legacy_dir / "sessions" / "existing_session").mkdir()
+        monkeypatch.setattr(paths, "LEGACY_BASE_DIR", legacy_dir)
+        monkeypatch.setattr(paths, "get_config_dir", lambda: tmp_path / "config")
+
+        new_data_dir = tmp_path / "new_data"
+        (new_data_dir / "sessions").mkdir(parents=True)
+        (new_data_dir / "raw").mkdir(parents=True)
+        # simulate new install already used
+        (new_data_dir / "sessions" / "new_session").mkdir()
+        monkeypatch.setattr(paths, "get_sessions_dir", lambda: new_data_dir / "sessions")
+        monkeypatch.setattr(paths, "get_raw_dir", lambda: new_data_dir / "raw")
+
+        sessions_dir, raw_dir = paths.ensure_directories()
+
+        assert sessions_dir == new_data_dir / "sessions"
+        assert raw_dir == new_data_dir / "raw"
+
 
 class TestDisplayPath:
     """Test get_display_path function."""

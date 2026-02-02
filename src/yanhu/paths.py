@@ -117,25 +117,56 @@ def migrate_from_legacy_path() -> bool:
         return False
 
 
+def _dir_has_any_entries(path: Path) -> bool:
+    """Return True if directory exists and contains at least one entry."""
+    try:
+        return path.exists() and any(path.iterdir())
+    except OSError:
+        return False
+
+
 def ensure_directories() -> tuple[Path, Path]:
     """Ensure sessions and raw directories exist.
 
-    Also triggers migration from legacy path if needed.
+    Migration rules:
+    1) Always try to migrate legacy `.env` into the new OS-appropriate config dir.
+    2) For data dirs (sessions/raw), avoid regressing existing installs:
+       - If legacy sessions/raw directories exist and the new directories are empty
+         (or missing), fall back to legacy directories.
+       - This preserves existing history for users upgrading from pre-platformdirs.
 
     Returns:
         Tuple of (sessions_dir, raw_dir)
     """
-    # Try migration first
+    # Try env migration first
     migrate_from_legacy_path()
 
-    # Create directories
-    sessions_dir = get_sessions_dir()
-    raw_dir = get_raw_dir()
+    legacy_sessions_dir = LEGACY_BASE_DIR / "sessions"
+    legacy_raw_dir = LEGACY_BASE_DIR / "raw"
 
-    sessions_dir.mkdir(parents=True, exist_ok=True)
-    raw_dir.mkdir(parents=True, exist_ok=True)
+    new_sessions_dir = get_sessions_dir()
+    new_raw_dir = get_raw_dir()
 
-    return sessions_dir, raw_dir
+    legacy_has_data = _dir_has_any_entries(legacy_sessions_dir) or _dir_has_any_entries(
+        legacy_raw_dir
+    )
+    new_has_data = _dir_has_any_entries(new_sessions_dir) or _dir_has_any_entries(new_raw_dir)
+
+    # If upgrading from legacy layout, prefer legacy data dirs unless the new ones already
+    # contain data.
+    if legacy_has_data and not new_has_data:
+        legacy_sessions_dir.mkdir(parents=True, exist_ok=True)
+        legacy_raw_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(
+            "Using legacy sessions/raw directories for backward compatibility: "
+            f"sessions={legacy_sessions_dir}, raw={legacy_raw_dir}"
+        )
+        return legacy_sessions_dir, legacy_raw_dir
+
+    # Default: create new directories
+    new_sessions_dir.mkdir(parents=True, exist_ok=True)
+    new_raw_dir.mkdir(parents=True, exist_ok=True)
+    return new_sessions_dir, new_raw_dir
 
 
 def get_display_path(path: Path) -> str:
