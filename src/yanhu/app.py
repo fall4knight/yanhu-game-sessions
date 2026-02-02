@@ -1777,6 +1777,112 @@ SESSION_VIEW_TEMPLATE = BASE_TEMPLATE.replace(
 
     // Enable debug panel (comment out to hide)
     // document.getElementById('progress-debug').style.display = 'block';
+
+    // ========== Timeline Frames Viewer ==========
+    // Add collapsible frames section to each segment in timeline
+    function initTimelineFramesViewer() {
+        const timelineDiv = document.getElementById('timeline');
+        if (!timelineDiv) return;
+
+        // Find all segment headers (h3 with part_XXXX pattern)
+        const headers = timelineDiv.querySelectorAll('h3');
+        headers.forEach(header => {
+            const headerText = header.textContent || '';
+            const partMatch = headerText.match(/^(part_\\d+)/);
+            if (!partMatch) return;
+
+            const partId = partMatch[1];
+
+            // Create frames toggle button
+            const toggleBtn = document.createElement('button');
+            toggleBtn.className = 'frames-toggle-btn';
+            toggleBtn.textContent = '📷 Frames';
+            toggleBtn.style.cssText = 'margin-left: 10px; padding: 2px 8px; font-size: 0.75em; background: #333; color: #f1c40f; border: 1px solid #f1c40f; border-radius: 3px; cursor: pointer;';
+            toggleBtn.dataset.partId = partId;
+            toggleBtn.dataset.expanded = 'false';
+
+            // Create frames container (initially hidden)
+            const framesContainer = document.createElement('div');
+            framesContainer.className = 'frames-container';
+            framesContainer.id = `frames-${partId}`;
+            framesContainer.style.cssText = 'display: none; margin: 10px 0; padding: 10px; background: #1a1a1a; border: 1px solid #333; border-radius: 4px; overflow-x: auto; white-space: nowrap;';
+
+            // Insert button after header text
+            header.appendChild(toggleBtn);
+
+            // Insert container after the header
+            header.insertAdjacentElement('afterend', framesContainer);
+
+            // Toggle handler with lazy loading
+            toggleBtn.addEventListener('click', async (e) => {
+                e.preventDefault();
+                const isExpanded = toggleBtn.dataset.expanded === 'true';
+
+                if (isExpanded) {
+                    // Collapse
+                    framesContainer.style.display = 'none';
+                    toggleBtn.dataset.expanded = 'false';
+                    toggleBtn.textContent = '📷 Frames';
+                } else {
+                    // Expand - lazy load if not loaded yet
+                    framesContainer.style.display = 'block';
+                    toggleBtn.dataset.expanded = 'true';
+                    toggleBtn.textContent = '📷 Hide';
+
+                    if (!framesContainer.dataset.loaded) {
+                        framesContainer.innerHTML = '<span style="color: #888;">Loading frames...</span>';
+                        try {
+                            const response = await fetch(`/s/{{ session_id }}/frames/${partId}`);
+                            const data = await response.json();
+
+                            if (data.frames && data.frames.length > 0) {
+                                let html = '<div style="display: inline-flex; gap: 8px;">';
+                                data.frames.forEach(url => {
+                                    html += `<a href="${url}" target="_blank" title="Click to open full size">`;
+                                    html += `<img src="${url}" style="height: 80px; border: 1px solid #444; border-radius: 3px; cursor: pointer;" loading="lazy">`;
+                                    html += `</a>`;
+                                });
+                                html += '</div>';
+                                if (data.total > data.showing) {
+                                    html += `<div style="margin-top: 5px; color: #888; font-size: 0.8em;">Showing ${data.showing} of ${data.total} frames</div>`;
+                                }
+                                framesContainer.innerHTML = html;
+                            } else {
+                                framesContainer.innerHTML = '<span style="color: #888;">No frames available</span>';
+                            }
+                            framesContainer.dataset.loaded = 'true';
+                        } catch (err) {
+                            framesContainer.innerHTML = '<span style="color: #c0392b;">Failed to load frames</span>';
+                            console.error('Failed to load frames:', err);
+                        }
+                    }
+                }
+            });
+        });
+    }
+
+    // Initialize when timeline tab is shown (lazy init)
+    const origShowTab = window.showTab || showTab;
+    window.showTab = function(tabName, skipHashUpdate) {
+        origShowTab(tabName, skipHashUpdate);
+        if (tabName === 'timeline') {
+            // Initialize frames viewer if not already done
+            if (!window._timelineFramesInitialized) {
+                initTimelineFramesViewer();
+                window._timelineFramesInitialized = true;
+            }
+        }
+    };
+
+    // Also init if timeline is the default tab (from hash)
+    if (window.location.hash === '#timeline') {
+        setTimeout(() => {
+            if (!window._timelineFramesInitialized) {
+                initTimelineFramesViewer();
+                window._timelineFramesInitialized = true;
+            }
+        }, 100);
+    }
     </script>
     """,
 )
@@ -3097,6 +3203,57 @@ def create_app(
 
         # Serve the file
         return send_from_directory(frames_dir, filename)
+
+    @app.route("/s/<session_id>/frames/<part_id>")
+    def list_segment_frames(session_id: str, part_id: str):
+        """List frame files for a segment (for timeline frames viewer).
+
+        Args:
+            session_id: Session identifier
+            part_id: Segment/part identifier (e.g., "part_0001")
+
+        Returns:
+            JSON with list of frame URLs (limited to MAX_FRAMES)
+        """
+        import re
+
+        MAX_FRAMES = 10  # Cap thumbnails to avoid performance issues
+
+        # Validate session exists
+        sessions_dir = Path(app.config["sessions_dir"])
+        session_dir = sessions_dir / session_id
+
+        if not session_dir.exists() or not session_dir.is_dir():
+            return jsonify({"error": "Session not found", "frames": []}), 404
+
+        # Validate part_id for safety
+        if not re.match(r"^[\w\-]+$", part_id):
+            return jsonify({"error": "Invalid part_id", "frames": []}), 400
+
+        if ".." in part_id:
+            return jsonify({"error": "Invalid path", "frames": []}), 400
+
+        # List frames in directory
+        frames_dir = session_dir / "frames" / part_id
+
+        if not frames_dir.exists() or not frames_dir.is_dir():
+            return jsonify({"frames": [], "total": 0})
+
+        # Get sorted list of jpg files (limited)
+        all_frames = sorted(frames_dir.glob("*.jpg"))
+        total_count = len(all_frames)
+        limited_frames = all_frames[:MAX_FRAMES]
+
+        # Build URLs
+        frame_urls = [
+            f"/s/{session_id}/frames/{part_id}/{f.name}" for f in limited_frames
+        ]
+
+        return jsonify({
+            "frames": frame_urls,
+            "total": total_count,
+            "showing": len(frame_urls),
+        })
 
     @app.route("/api/jobs", methods=["POST"])
     def submit_job():
