@@ -237,3 +237,116 @@ class TestHfHubDisableSymlinks:
                     raise AssertionError(
                         f"Found non-existent env var HF_HUB_DISABLE_SYMLINKS in: {line}"
                     )
+
+
+class TestEmptyAsrDetection:
+    """Test detection of empty ASR transcripts (no speech detected)."""
+
+    def test_asr_error_summary_all_empty_property(self):
+        """Should correctly detect when all segments are empty."""
+        from yanhu.watcher import AsrErrorSummary
+
+        # All segments empty
+        summary = AsrErrorSummary(total_segments=3, failed_segments=0, empty_segments=3)
+        assert summary.all_empty is True
+        assert summary.has_any_transcription is False
+
+        # Some segments have content
+        summary = AsrErrorSummary(total_segments=3, failed_segments=0, empty_segments=1)
+        assert summary.all_empty is False
+        assert summary.has_any_transcription is True
+
+        # No segments
+        summary = AsrErrorSummary(total_segments=0, failed_segments=0, empty_segments=0)
+        assert summary.all_empty is False
+
+    def test_asr_error_summary_has_any_transcription(self):
+        """Should correctly detect when any segment has transcription."""
+        from yanhu.watcher import AsrErrorSummary
+
+        # All failed
+        summary = AsrErrorSummary(total_segments=3, failed_segments=3, empty_segments=0)
+        assert summary.has_any_transcription is False
+
+        # All empty
+        summary = AsrErrorSummary(total_segments=3, failed_segments=0, empty_segments=3)
+        assert summary.has_any_transcription is False
+
+        # Some success
+        summary = AsrErrorSummary(total_segments=3, failed_segments=1, empty_segments=1)
+        assert summary.has_any_transcription is True
+
+    def test_aggregate_asr_errors_detects_all_empty(self, tmp_path):
+        """Should return summary when all segments are empty (no speech)."""
+        from yanhu.watcher import aggregate_asr_errors
+
+        # Create mock transcript with all empty segments
+        asr_dir = tmp_path / "outputs" / "asr" / "whisper_local"
+        asr_dir.mkdir(parents=True)
+        transcript_path = asr_dir / "transcript.json"
+
+        # All segments have empty asr_items and no errors
+        transcript_data = [
+            {"segment_id": "part_0001", "asr_backend": "whisper_local", "asr_items": []},
+            {"segment_id": "part_0002", "asr_backend": "whisper_local", "asr_items": []},
+            {"segment_id": "part_0003", "asr_backend": "whisper_local", "asr_items": []},
+        ]
+        transcript_path.write_text(json.dumps(transcript_data))
+
+        result = aggregate_asr_errors(tmp_path, ["whisper_local"])
+
+        assert result is not None
+        assert result.total_segments == 3
+        assert result.empty_segments == 3
+        assert result.failed_segments == 0
+        assert result.all_empty is True
+        assert result.has_any_transcription is False
+
+    def test_aggregate_asr_errors_mixed_empty_and_content(self, tmp_path):
+        """Should not return all_empty when some segments have content."""
+        from yanhu.watcher import aggregate_asr_errors
+
+        asr_dir = tmp_path / "outputs" / "asr" / "whisper_local"
+        asr_dir.mkdir(parents=True)
+        transcript_path = asr_dir / "transcript.json"
+
+        # Mixed: one empty, two with content
+        transcript_data = [
+            {"segment_id": "part_0001", "asr_backend": "whisper_local", "asr_items": []},
+            {
+                "segment_id": "part_0002",
+                "asr_backend": "whisper_local",
+                "asr_items": [{"text": "Hello", "t_start": 0.0, "t_end": 1.0}],
+            },
+            {
+                "segment_id": "part_0003",
+                "asr_backend": "whisper_local",
+                "asr_items": [{"text": "World", "t_start": 1.0, "t_end": 2.0}],
+            },
+        ]
+        transcript_path.write_text(json.dumps(transcript_data))
+
+        result = aggregate_asr_errors(tmp_path, ["whisper_local"])
+
+        # No errors and not all empty, so should return None
+        assert result is None
+
+    def test_aggregate_asr_errors_none_when_no_issues(self, tmp_path):
+        """Should return None when all segments have content."""
+        from yanhu.watcher import aggregate_asr_errors
+
+        asr_dir = tmp_path / "outputs" / "asr" / "whisper_local"
+        asr_dir.mkdir(parents=True)
+        transcript_path = asr_dir / "transcript.json"
+
+        transcript_data = [
+            {
+                "segment_id": "part_0001",
+                "asr_backend": "whisper_local",
+                "asr_items": [{"text": "Hello", "t_start": 0.0, "t_end": 1.0}],
+            },
+        ]
+        transcript_path.write_text(json.dumps(transcript_data))
+
+        result = aggregate_asr_errors(tmp_path, ["whisper_local"])
+        assert result is None
