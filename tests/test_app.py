@@ -1219,8 +1219,8 @@ class TestFrameServing:
         data = response.get_json()
         assert "error" in data
 
-    def test_serve_frame_blocks_dotdot_in_part_id(self, tmp_path):
-        """Frames route validates part_id contains no '..'."""
+    def test_serve_frame_blocks_invalid_part_id(self, tmp_path):
+        """Frames route validates part_id strictly (^part_\\d+$ pattern)."""
         from yanhu.app import create_app
 
         sessions_dir = tmp_path / "sessions"
@@ -1233,13 +1233,20 @@ class TestFrameServing:
         app = create_app(sessions_dir)
         client = app.test_client()
 
-        # Try .. in part_id (Flask route still accepts it, but our code rejects)
-        response = client.get(f"/s/{session_id}/frames/part..001/frame_0001.jpg")
+        # Test various invalid patterns
+        invalid_patterns = [
+            "part..001",  # Double dots
+            "segment_0001",  # Wrong prefix
+            "part_abc",  # Non-numeric suffix
+            "part_",  # Missing digits
+        ]
 
-        assert response.status_code == 400
-        data = response.get_json()
-        assert "error" in data
-        assert "Invalid" in data["error"]
+        for invalid_id in invalid_patterns:
+            response = client.get(f"/s/{session_id}/frames/{invalid_id}/frame_0001.jpg")
+            assert response.status_code == 400, f"Expected 400 for {invalid_id}"
+            data = response.get_json()
+            assert "error" in data
+            assert "Invalid part_id" in data["error"]
 
     def test_serve_frame_blocks_dotdot_in_filename(self, tmp_path):
         """Frames route validates filename contains no '..'."""
@@ -2751,7 +2758,7 @@ class TestTimelineFramesViewer:
         assert data["total"] == 0
 
     def test_list_segment_frames_invalid_part_id(self, tmp_path):
-        """Frames listing API rejects invalid part_id."""
+        """Frames listing API rejects invalid part_id (strict ^part_\\d+$ validation)."""
         from yanhu.app import create_app
 
         sessions_dir = tmp_path / "sessions"
@@ -2764,9 +2771,22 @@ class TestTimelineFramesViewer:
         app = create_app(sessions_dir)
         client = app.test_client()
 
-        # Invalid characters in part_id
-        response = client.get(f"/s/{session_id}/frames/part..0001")
-        assert response.status_code == 400
+        # Test various invalid patterns
+        invalid_patterns = [
+            "part..0001",  # Double dots
+            "segment_0001",  # Wrong prefix
+            "part_abc",  # Non-numeric suffix
+            "part_",  # Missing digits
+            "0001",  # Missing prefix
+            "part_0001_extra",  # Extra suffix
+        ]
+
+        for invalid_id in invalid_patterns:
+            response = client.get(f"/s/{session_id}/frames/{invalid_id}")
+            assert response.status_code == 400, f"Expected 400 for {invalid_id}"
+            data = response.get_json()
+            assert "error" in data
+            assert "Invalid part_id" in data["error"]
 
     def test_timeline_includes_frames_viewer_js(self, tmp_path):
         """Session view includes timeline frames viewer JavaScript."""

@@ -3168,18 +3168,15 @@ def create_app(
         if not session_dir.exists() or not session_dir.is_dir():
             return jsonify({"error": "Session not found"}), 404
 
-        # Validate part_id and filename for safety (prevent path traversal)
-        # Only allow alphanumeric, underscore, hyphen, and dot
+        # Validate part_id strictly (must be part_NNNN format)
         import re
 
-        if not re.match(r"^[\w\-]+$", part_id):
-            return jsonify({"error": "Invalid part_id"}), 400
-        if not re.match(r"^[\w\-\.]+$", filename):
-            return jsonify({"error": "Invalid filename"}), 400
+        if not re.match(r"^part_\d+$", part_id):
+            return jsonify({"error": "Invalid part_id format"}), 400
 
-        # Check for path traversal attempts
-        if ".." in part_id or ".." in filename:
-            return jsonify({"error": "Invalid path"}), 400
+        # Validate filename for safety (prevent path traversal)
+        if not re.match(r"^[\w\-\.]+$", filename) or ".." in filename:
+            return jsonify({"error": "Invalid filename"}), 400
 
         # Construct safe path
         frames_dir = session_dir / "frames" / part_id
@@ -3226,12 +3223,9 @@ def create_app(
         if not session_dir.exists() or not session_dir.is_dir():
             return jsonify({"error": "Session not found", "frames": []}), 404
 
-        # Validate part_id for safety
-        if not re.match(r"^[\w\-]+$", part_id):
-            return jsonify({"error": "Invalid part_id", "frames": []}), 400
-
-        if ".." in part_id:
-            return jsonify({"error": "Invalid path", "frames": []}), 400
+        # Validate part_id strictly (must be part_NNNN format)
+        if not re.match(r"^part_\d+$", part_id):
+            return jsonify({"error": "Invalid part_id format", "frames": []}), 400
 
         # List frames in directory
         frames_dir = session_dir / "frames" / part_id
