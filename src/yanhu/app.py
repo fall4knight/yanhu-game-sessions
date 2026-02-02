@@ -1360,6 +1360,14 @@ SESSION_VIEW_TEMPLATE = BASE_TEMPLATE.replace(
         </div>
         {% endif %}
     </div>
+    {% elif asr_error_summary.all_empty %}
+    <div class="info-banner" style="background: #3498db; color: white; padding: 15px; margin: 15px 0; border-radius: 4px;">
+        <strong>ℹ️ No Speech Detected:</strong> All {{ asr_error_summary.total_segments }} segments returned empty transcripts.<br>
+        <div style="margin-top: 5px; font-size: 0.9em;">
+            This usually means the video has no spoken dialogue, or the audio was filtered by Voice Activity Detection (VAD).
+            If you expected speech, check that the video has audible dialogue and try re-processing.
+        </div>
+    </div>
     {% endif %}
     {% endif %}
 
@@ -1372,7 +1380,46 @@ SESSION_VIEW_TEMPLATE = BASE_TEMPLATE.replace(
         <button class="tab" onclick="showTab('manifest')">Manifest</button>
     </div>
     <div id="overview" class="tab-content active">{{ overview_html|safe }}</div>
-    <div id="highlights" class="tab-content">{{ highlights_html|safe }}</div>
+    <div id="highlights" class="tab-content">
+        {% if highlights_unavailable_reason %}
+        <div class="highlights-fallback-banner" style="background: #e9ecef; border: 1px solid #dee2e6; border-radius: 4px; padding: 15px; margin-bottom: 15px;">
+            {% if highlights_unavailable_reason == 'asr_empty' %}
+            <strong>ℹ️ No Highlights Available</strong>
+            <p style="margin: 10px 0 0 0; font-size: 0.9em; color: #6c757d;">
+                No speech was detected in this video, so dialogue-based highlights could not be generated.
+                The video may have no spoken content, or the audio was filtered by Voice Activity Detection (VAD).
+            </p>
+            {% elif highlights_unavailable_reason == 'no_vision' %}
+            <strong>ℹ️ No Highlights Available</strong>
+            <p style="margin: 10px 0 0 0; font-size: 0.9em; color: #6c757d;">
+                Vision/OCR analysis was not available for this session.
+                {% if not ocr_available %}
+                Local OCR (rapidocr) is not installed. Install it to enable text extraction from frames.
+                {% else %}
+                Check the Analysis tab to see if frame analysis completed successfully.
+                {% endif %}
+            </p>
+            {% elif highlights_unavailable_reason == 'no_analysis' %}
+            <strong>ℹ️ No Highlights Available</strong>
+            <p style="margin: 10px 0 0 0; font-size: 0.9em; color: #6c757d;">
+                Frame analysis has not been run for this session. Highlights require OCR/vision analysis of extracted frames.
+            </p>
+            {% elif highlights_unavailable_reason == 'no_highlights_found' %}
+            <strong>ℹ️ No Highlights Found</strong>
+            <p style="margin: 10px 0 0 0; font-size: 0.9em; color: #6c757d;">
+                Analysis completed but no significant highlights were identified.
+                This can happen if the video content didn't contain notable dialogue or key moments.
+            </p>
+            {% else %}
+            <strong>ℹ️ Highlights Unavailable</strong>
+            <p style="margin: 10px 0 0 0; font-size: 0.9em; color: #6c757d;">
+                Highlights could not be generated for this session.
+            </p>
+            {% endif %}
+        </div>
+        {% endif %}
+        {{ highlights_html|safe }}
+    </div>
     <div id="timeline" class="tab-content">{{ timeline_html|safe }}</div>
     <div id="transcripts" class="tab-content">
         <div id="transcripts-loading">Loading transcripts...</div>
@@ -1514,8 +1561,33 @@ SESSION_VIEW_TEMPLATE = BASE_TEMPLATE.replace(
             return;
         }
 
+        // Check if ALL segments are empty (no speech detected)
+        const totalSegments = transcript.length;
+        let emptyCount = 0;
+        let errorCount = 0;
+        transcript.forEach(seg => {
+            const items = seg.asr_items || [];
+            if (seg.asr_error) {
+                errorCount++;
+            } else if (items.length === 0) {
+                emptyCount++;
+            }
+        });
+        const allEmpty = totalSegments > 0 && emptyCount === totalSegments && errorCount === 0;
+
         // Group segments by segment_id
-        let html = '<div class="transcript-segments">';
+        let html = '';
+
+        // Show "No speech detected" banner if all segments are empty
+        if (allEmpty) {
+            html += `<div class="info-banner" style="background: #3498db; color: white; padding: 15px; margin-bottom: 15px; border-radius: 4px;">`;
+            html += `<strong>ℹ️ No Speech Detected</strong><br>`;
+            html += `<span style="font-size: 0.9em;">All ${totalSegments} segments returned empty transcripts. `;
+            html += `This usually means the video has no spoken dialogue, or the audio was filtered by Voice Activity Detection (VAD).</span>`;
+            html += `</div>`;
+        }
+
+        html += '<div class="transcript-segments">';
         transcript.forEach(seg => {
             const segId = seg.segment_id || 'unknown';
             const backend = seg.asr_backend || 'unknown';
@@ -1528,7 +1600,7 @@ SESSION_VIEW_TEMPLATE = BASE_TEMPLATE.replace(
             if (error) {
                 html += `<p class="error">Error: ${error}</p>`;
             } else if (items.length === 0) {
-                html += `<p><em>No transcription items</em></p>`;
+                html += `<p><em>No transcription items (VAD filtered / silent)</em></p>`;
             } else {
                 html += '<ul>';
                 items.forEach(item => {
@@ -2449,10 +2521,21 @@ def create_app(
         else:
             overview_html = "<p><em>Overview is being generated...</em></p>"
 
+        highlights_unavailable_reason = None
         if highlights_md.exists():
+            highlights_content = highlights_md.read_text(encoding="utf-8")
             highlights_html = markdown.markdown(
-                highlights_md.read_text(encoding="utf-8"), extensions=["tables", "fenced_code"]
+                highlights_content, extensions=["tables", "fenced_code"]
             )
+            # Check if highlights file is essentially empty (just header or placeholder)
+            # A valid highlights file should have at least one "## " section with content
+            lines = [ln.strip() for ln in highlights_content.split("\n") if ln.strip()]
+            has_content = any(
+                ln.startswith("## ") or ln.startswith("- ") or ln.startswith("> ")
+                for ln in lines[1:] if ln  # Skip first line (title)
+            )
+            if not has_content or len(lines) <= 2:
+                highlights_unavailable_reason = "empty"
         else:
             highlights_html = "<p><em>Highlights are being generated...</em></p>"
 
@@ -2481,6 +2564,23 @@ def create_app(
         # Detect if session has vision/OCR results
         session_has_vision = detect_session_has_vision(session_dir)
 
+        # Determine why highlights might be unavailable (for user-friendly messaging)
+        if highlights_unavailable_reason == "empty":
+            # Check specific reasons for empty highlights
+            if asr_error_summary and asr_error_summary.all_empty:
+                highlights_unavailable_reason = "asr_empty"
+            elif not session_has_vision:
+                # Check if OCR was attempted but unavailable
+                analysis_dir = session_dir / "outputs" / "analysis"
+                if analysis_dir.exists():
+                    # Analysis ran but no vision results - likely OCR/vision backend issue
+                    highlights_unavailable_reason = "no_vision"
+                else:
+                    highlights_unavailable_reason = "no_analysis"
+            else:
+                # Has vision but still empty - analysis ran but found no highlights
+                highlights_unavailable_reason = "no_highlights_found"
+
         mode_status = get_mode_status()
         return render_template_string(
             SESSION_VIEW_TEMPLATE,
@@ -2494,6 +2594,7 @@ def create_app(
             asr_error_summary=asr_error_summary,
             shutdown_token=app.config.get("shutdown_token", ""),
             session_has_vision=session_has_vision,
+            highlights_unavailable_reason=highlights_unavailable_reason,
             mode_label=mode_status["mode_label"],
             mode_detail=mode_status["mode_detail"],
             keys_present=mode_status["keys_present"],

@@ -1073,9 +1073,21 @@ class AsrErrorSummary:
 
     total_segments: int = 0
     failed_segments: int = 0
+    empty_segments: int = 0  # Segments with no ASR items and no errors (VAD filtered)
     dependency_error: str | None = None  # ffmpeg missing, etc. (ALL segments failed)
     partial_symlink_hint: str | None = None  # Windows symlink issue (SOME segments failed)
     error_samples: list[str] = field(default_factory=list)  # First few error messages
+
+    @property
+    def all_empty(self) -> bool:
+        """True if all segments returned empty (no speech detected)."""
+        return self.total_segments > 0 and self.empty_segments == self.total_segments
+
+    @property
+    def has_any_transcription(self) -> bool:
+        """True if at least one segment has transcription items."""
+        successful = self.total_segments - self.failed_segments - self.empty_segments
+        return successful > 0
 
 
 def aggregate_asr_errors(session_dir: Path, asr_models: list[str] | None) -> AsrErrorSummary | None:
@@ -1113,6 +1125,7 @@ def aggregate_asr_errors(session_dir: Path, asr_models: list[str] | None) -> Asr
         # Collect error information
         total = len(results)
         failed = 0
+        empty = 0  # Segments with no ASR items and no errors
         ffmpeg_missing_count = 0
         asr_dep_missing_count = 0
         symlink_error_count = 0
@@ -1122,6 +1135,8 @@ def aggregate_asr_errors(session_dir: Path, asr_models: list[str] | None) -> Asr
 
         for entry in results:
             error_msg = entry.get("asr_error")
+            asr_items = entry.get("asr_items", [])
+
             if error_msg:
                 failed += 1
                 error_lower = error_msg.lower()
@@ -1155,11 +1170,16 @@ def aggregate_asr_errors(session_dir: Path, asr_models: list[str] | None) -> Asr
                 # Collect first few error samples
                 if len(error_samples) < 3:
                     error_samples.append(error_msg[:200])  # Truncate long errors
+            elif not asr_items:
+                # No error but also no ASR items - VAD filtered / no speech detected
+                empty += 1
 
-        if failed > 0:
+        # Return summary if there are errors OR all segments are empty (no speech)
+        if failed > 0 or empty == total:
             summary = AsrErrorSummary(
                 total_segments=total,
                 failed_segments=failed,
+                empty_segments=empty,
                 error_samples=error_samples,
             )
 
