@@ -2509,3 +2509,158 @@ class TestSettingsRoutes:
         # Should show server-rendered mode (no keys in test environment)
         assert "Mode: ASR-only (no keys)" in html
         assert "updateModeIndicator" in html
+
+
+class TestHealthStatusBar:
+    """Test health status bar computation and rendering."""
+
+    def test_health_status_all_ok(self, tmp_path):
+        """Health status shows OK for all components when session is complete."""
+        from yanhu.app import create_app
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+
+        # Create a complete session
+        session_id = "2024-01-01_12-00-00_test_run"
+        session_dir = sessions_dir / session_id
+        session_dir.mkdir()
+
+        # Create frames
+        frames_dir = session_dir / "frames" / "part_0001"
+        frames_dir.mkdir(parents=True)
+        (frames_dir / "frame_0001.jpg").write_text("fake jpg")
+
+        # Create ASR output
+        asr_dir = session_dir / "outputs" / "asr" / "whisper_local"
+        asr_dir.mkdir(parents=True)
+        transcript_data = [
+            {
+                "segment_id": "part_0001",
+                "asr_backend": "whisper_local",
+                "asr_items": [{"text": "Hello world", "t_start": 0.0, "t_end": 1.0}],
+            }
+        ]
+        (asr_dir / "transcript.json").write_text(json.dumps(transcript_data))
+
+        # Create analysis output
+        analysis_dir = session_dir / "outputs" / "analysis"
+        analysis_dir.mkdir(parents=True)
+        analysis_data = {"model": "gemini", "ocr_items": [{"text": "Score: 100"}]}
+        (analysis_dir / "part_0001.json").write_text(json.dumps(analysis_data))
+
+        # Create highlights
+        (session_dir / "highlights.md").write_text("# Highlights\n\n## Part 1\n\n- summary: Test")
+
+        # Create required files for rendering
+        (session_dir / "overview.md").write_text("# Overview")
+        (session_dir / "timeline.md").write_text("# Timeline")
+        (session_dir / "manifest.json").write_text(
+            json.dumps({"asr_models": ["whisper_local"]})
+        )
+
+        app = create_app(sessions_dir)
+        client = app.test_client()
+
+        response = client.get(f"/s/{session_id}")
+        assert response.status_code == 200
+
+        html = response.get_data(as_text=True)
+        # Should have health status bar
+        assert "health-status-bar" in html
+        # All components should show OK (green dot)
+        assert 'color: #28a745;">●</span>' in html  # Green dot
+
+    def test_health_status_asr_empty(self, tmp_path):
+        """Health status shows empty for ASR when no speech detected."""
+        from yanhu.app import create_app
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+
+        session_id = "2024-01-01_12-00-00_silent"
+        session_dir = sessions_dir / session_id
+        session_dir.mkdir()
+
+        # Create ASR output with empty transcripts
+        asr_dir = session_dir / "outputs" / "asr" / "whisper_local"
+        asr_dir.mkdir(parents=True)
+        transcript_data = [
+            {"segment_id": "part_0001", "asr_backend": "whisper_local", "asr_items": []},
+            {"segment_id": "part_0002", "asr_backend": "whisper_local", "asr_items": []},
+        ]
+        (asr_dir / "transcript.json").write_text(json.dumps(transcript_data))
+
+        # Create required files
+        (session_dir / "overview.md").write_text("# Overview")
+        (session_dir / "timeline.md").write_text("# Timeline")
+        (session_dir / "highlights.md").write_text("# Highlights")
+        (session_dir / "manifest.json").write_text(
+            json.dumps({"asr_models": ["whisper_local"]})
+        )
+
+        app = create_app(sessions_dir)
+        client = app.test_client()
+
+        response = client.get(f"/s/{session_id}")
+        assert response.status_code == 200
+
+        html = response.get_data(as_text=True)
+        assert "health-status-bar" in html
+        # Should show "No speech detected" in tooltip
+        assert "No speech detected" in html
+
+    def test_health_status_missing_components(self, tmp_path):
+        """Health status shows missing for components that weren't run."""
+        from yanhu.app import create_app
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+
+        session_id = "2024-01-01_12-00-00_minimal"
+        session_dir = sessions_dir / session_id
+        session_dir.mkdir()
+
+        # Create only required files (no frames, no ASR, no analysis)
+        (session_dir / "overview.md").write_text("# Overview")
+        (session_dir / "timeline.md").write_text("# Timeline")
+        (session_dir / "highlights.md").write_text("# Highlights")
+        (session_dir / "manifest.json").write_text(json.dumps({}))
+
+        app = create_app(sessions_dir)
+        client = app.test_client()
+
+        response = client.get(f"/s/{session_id}")
+        assert response.status_code == 200
+
+        html = response.get_data(as_text=True)
+        assert "health-status-bar" in html
+        # Should have gray dots for missing components
+        assert 'color: #adb5bd;">○</span>' in html  # Gray hollow dot
+
+    def test_session_view_has_clickable_status_links(self, tmp_path):
+        """Health status items in session view link to relevant tabs."""
+        from yanhu.app import create_app
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+
+        session_id = "2024-01-01_12-00-00_test"
+        session_dir = sessions_dir / session_id
+        session_dir.mkdir()
+
+        (session_dir / "overview.md").write_text("# Overview")
+        (session_dir / "timeline.md").write_text("# Timeline")
+        (session_dir / "highlights.md").write_text("# Highlights")
+        (session_dir / "manifest.json").write_text(json.dumps({}))
+
+        app = create_app(sessions_dir)
+        client = app.test_client()
+
+        response = client.get(f"/s/{session_id}")
+        html = response.get_data(as_text=True)
+
+        # Session view should have clickable links to tabs
+        assert "onclick=\"showTab('transcripts')\"" in html
+        assert "onclick=\"showTab('analysis')\"" in html
+        assert "onclick=\"showTab('highlights')\"" in html
