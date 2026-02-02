@@ -11,6 +11,7 @@ from typing import Protocol
 import emoji
 
 from yanhu.manifest import Manifest, SegmentInfo
+from yanhu.open_ocr import OpenOcrError
 
 # OCR normalization patterns: (pattern, replacement)
 # NOTE: Normalization is DISABLED - OCR text must be kept verbatim.
@@ -139,7 +140,8 @@ class AnalysisResult:
     caption: str = ""
     confidence: str | None = None  # "low", "med", "high"
     model: str | None = None
-    error: str | None = None
+    error: str | None = None  # Generic analysis error (non-OCR)
+    ocr_error: str | None = None  # OCR-specific error (rapidocr missing, etc.)
     raw_text: str | None = None  # Raw API response when JSON parse fails
     # L1 fields (optional, for detail_level=L1)
     scene_label: str | None = None  # Loading|Menu|Cutscene|Combat|Dialogue|Error|TVTest|Unknown
@@ -168,6 +170,8 @@ class AnalysisResult:
             result["model"] = self.model
         if self.error:
             result["error"] = self.error
+        if self.ocr_error:
+            result["ocr_error"] = self.ocr_error
         if self.raw_text:
             result["raw_text"] = self.raw_text
         # L1 fields (only include if present)
@@ -200,6 +204,7 @@ class AnalysisResult:
             confidence=data.get("confidence"),
             model=data.get("model"),
             error=data.get("error"),
+            ocr_error=data.get("ocr_error"),
             raw_text=data.get("raw_text"),
             # L1 fields (backward compatible)
             scene_label=data.get("scene_label"),
@@ -1069,9 +1074,28 @@ def analyze_session(
             if on_progress:
                 on_progress(segment.id, "done", result)
 
+        except OpenOcrError as e:
+            # OCR-specific error (e.g., rapidocr-onnxruntime not installed)
+            # Store in ocr_error field to separate from ASR errors
+            stats.errors += 1
+            result = AnalysisResult(
+                segment_id=segment.id,
+                scene_type="unknown",
+                ocr_text=[],
+                caption="",
+                ocr_error=str(e),
+            )
+            relative_path = generate_analysis_path(segment.id)
+            output_path = session_dir / relative_path
+            result.save(output_path)
+            segment.analysis_path = relative_path
+
+            if on_progress:
+                on_progress(segment.id, "error", result)
+
         except Exception as e:
             stats.errors += 1
-            # Save error result
+            # Save error result (generic analysis error)
             result = AnalysisResult(
                 segment_id=segment.id,
                 scene_type="unknown",

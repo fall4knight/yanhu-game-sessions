@@ -1073,7 +1073,8 @@ class AsrErrorSummary:
 
     total_segments: int = 0
     failed_segments: int = 0
-    dependency_error: str | None = None  # ffmpeg missing, etc.
+    dependency_error: str | None = None  # ffmpeg missing, etc. (ALL segments failed)
+    partial_symlink_hint: str | None = None  # Windows symlink issue (SOME segments failed)
     error_samples: list[str] = field(default_factory=list)  # First few error messages
 
 
@@ -1114,7 +1115,9 @@ def aggregate_asr_errors(session_dir: Path, asr_models: list[str] | None) -> Asr
         failed = 0
         ffmpeg_missing_count = 0
         asr_dep_missing_count = 0
+        symlink_error_count = 0
         first_asr_dep_missing_msg: str | None = None
+        first_symlink_error_msg: str | None = None
         error_samples = []
 
         for entry in results:
@@ -1137,6 +1140,18 @@ def aggregate_asr_errors(session_dir: Path, asr_models: list[str] | None) -> Asr
                     if first_asr_dep_missing_msg is None:
                         first_asr_dep_missing_msg = error_msg
 
+                # Check for Windows symlink privilege error (WinError 1314)
+                is_symlink_error = (
+                    "1314" in error_lower
+                    or "symlink privilege" in error_lower
+                    or ("privilege" in error_lower and "symlink" in error_lower)
+                    or "winerror1314" in error_lower.replace(" ", "")
+                )
+                if is_symlink_error:
+                    symlink_error_count += 1
+                    if first_symlink_error_msg is None:
+                        first_symlink_error_msg = error_msg
+
                 # Collect first few error samples
                 if len(error_samples) < 3:
                     error_samples.append(error_msg[:200])  # Truncate long errors
@@ -1155,9 +1170,24 @@ def aggregate_asr_errors(session_dir: Path, asr_models: list[str] | None) -> Asr
                     "ffmpeg not found - whisper_local requires ffmpeg to extract audio. "
                     "Install ffmpeg and retry."
                 )
+            elif symlink_error_count == total:
+                # Windows symlink privilege error (ALL segments) - provide friendly guidance
+                summary.dependency_error = (
+                    "Windows symlink privilege error (WinError 1314): "
+                    "The HuggingFace model cache requires symlink support. "
+                    "To fix this, enable Developer Mode in Windows Settings > "
+                    "Update & Security > For developers, or run the application as Administrator."
+                )
             elif asr_dep_missing_count == total and first_asr_dep_missing_msg:
                 # Preserve existing UX-safe packaging guidance from _load_model
                 summary.dependency_error = first_asr_dep_missing_msg
+            elif symlink_error_count > 0:
+                # Partial symlink error - provide hint but don't fail the job
+                summary.partial_symlink_hint = (
+                    f"Windows symlink privilege error affected {symlink_error_count}/{total} "
+                    "segments. Enable Developer Mode in Windows Settings > "
+                    "Update & Security > For developers to fix this for future runs."
+                )
 
             return summary
 
@@ -1524,6 +1554,7 @@ def process_job(
                 "total_segments": asr_error_summary.total_segments,
                 "failed_segments": asr_error_summary.failed_segments,
                 "dependency_error": asr_error_summary.dependency_error,
+                "partial_symlink_hint": asr_error_summary.partial_symlink_hint,
                 "error_samples": asr_error_summary.error_samples,
             }
 
