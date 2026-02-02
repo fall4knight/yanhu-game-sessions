@@ -24,7 +24,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev,app]"
+          pip install -e ".[dev,app,ocr]"
 
       - name: Install Playwright browsers
         run: |
@@ -48,7 +48,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[app,build,asr]"
+          pip install -e ".[app,build,asr,ocr]"
 
       - name: Debug installed packages
         run: |
@@ -141,6 +141,33 @@ jobs:
           echo ""
           echo "✓ Packaged ASR import selfcheck passed"
 
+      - name: Verify OCR dependencies bundled in macOS app (packaged import selfcheck)
+        run: |
+          echo "=== Verifying OCR dependencies via packaged executable ==="
+
+          APP=$(find dist -maxdepth 2 -name "*.app" | head -1)
+          if [ -z "$APP" ]; then
+            echo "✗ ERROR: No .app bundle found in dist/"
+            exit 1
+          fi
+
+          EXEC_NAME=$(plutil -extract CFBundleExecutable raw -o - "$APP/Contents/Info.plist" 2>/dev/null || true)
+          if [ -z "$EXEC_NAME" ]; then
+            echo "Warning: plutil failed to extract CFBundleExecutable, using fallback"
+            EXEC_NAME=$(ls "$APP/Contents/MacOS" | head -1)
+          fi
+          EXEC="$APP/Contents/MacOS/$EXEC_NAME"
+
+          echo ""
+          "$EXEC" --selfcheck-ocr || {
+            echo ""
+            echo "✗ ERROR: OCR selfcheck failed - dependencies not bundled correctly"
+            exit 1
+          }
+
+          echo ""
+          echo "✓ Packaged OCR import selfcheck passed"
+
       - name: Debug dist directory
         run: |
           echo "=== Contents of dist/ directory ==="
@@ -211,7 +238,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[app,build,asr]"
+          pip install -e ".[app,build,asr,ocr]"
 
       - name: Debug installed packages
         run: |
@@ -257,6 +284,32 @@ jobs:
 
           echo ""
           echo "✓ Packaged ASR import selfcheck passed"
+
+      - name: Verify OCR dependencies bundled in Windows exe (packaged import selfcheck)
+        run: |
+          echo "=== Verifying OCR dependencies via packaged executable ==="
+
+          if (-not (Test-Path "dist/yanhu")) {
+            echo "✗ ERROR: dist/yanhu directory not found"
+            exit 1
+          }
+
+          $EXEC = "dist/yanhu/yanhu.exe"
+          if (-not (Test-Path $EXEC)) {
+            echo "✗ ERROR: Executable not found at: $EXEC"
+            exit 1
+          }
+
+          echo ""
+          & $EXEC --selfcheck-ocr
+          if ($LASTEXITCODE -ne 0) {
+            echo ""
+            echo "✗ ERROR: OCR selfcheck failed - dependencies not bundled correctly"
+            exit 1
+          }
+
+          echo ""
+          echo "✓ Packaged OCR import selfcheck passed"
 
       - name: Package Windows executable
         run: |
